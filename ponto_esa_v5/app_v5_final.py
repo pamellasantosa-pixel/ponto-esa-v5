@@ -2,6 +2,7 @@
 Ponto ExSA v5.0 - Sistema de Controle de Ponto
 Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias
 Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
+Última atualização: 24/10/2025 15:00 - Timezone Brasília, PostgreSQL/SQLite dinâmico
 """
 
 import streamlit as st
@@ -376,7 +377,7 @@ def verificar_login(usuario, senha):
 
     senha_hash = hashlib.sha256(senha.encode()).hexdigest()
     cursor.execute(
-        "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
+        f"SELECT tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER} AND senha = {SQL_PLACEHOLDER}", (usuario, senha_hash))
     result = cursor.fetchone()
     conn.close()
 
@@ -400,12 +401,12 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
 
     # Se não especificada, usar data/hora atual
     if data_registro:
-        agora = datetime.now()
+        agora = get_datetime_br()
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
         data_hora_registro = data_obj.replace(
             hour=agora.hour, minute=agora.minute, second=agora.second)
     else:
-        data_hora_registro = datetime.now()
+        data_hora_registro = get_datetime_br()
 
     # Formatar localização
     if latitude and longitude:
@@ -535,7 +536,7 @@ def tela_funcionario():
     st.markdown(f"""
     <div class="main-header">
         <div class="user-welcome">👋 Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Funcionário • {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-info">Funcionário • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -867,7 +868,7 @@ def horas_extras_interface(horas_extras_system):
         # Aplicar filtro de período
         if periodo != "Todos":
             dias = 7 if periodo == "Últimos 7 dias" else 30
-            data_limite = (datetime.now() - timedelta(days=dias)
+            data_limite = (get_datetime_br() - timedelta(days=dias)
                            ).strftime("%Y-%m-%d")
             solicitacoes = [
                 s for s in solicitacoes if s["data"] >= data_limite]
@@ -1634,7 +1635,7 @@ def tela_gestor():
     st.markdown(f"""
     <div class="main-header">
         <div class="user-welcome">👑 Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Gestor • {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-info">Gestor • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -2420,7 +2421,7 @@ def aprovar_atestados_interface(atestado_system):
             st.download_button(
                 label="📥 Exportar CSV",
                 data=csv,
-                file_name=f"atestados_{datetime.now().strftime('%Y%m%d')}.csv",
+                file_name=f"atestados_{get_datetime_br().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
         else:
@@ -2457,13 +2458,13 @@ def todos_registros_interface(calculo_horas_system):
         # Período padrão: últimos 30 dias
         data_inicio = st.date_input(
             "📅 Data Início:",
-            value=datetime.now().date() - timedelta(days=30)
+            value=get_datetime_br().date() - timedelta(days=30)
         )
 
     with col3:
         data_fim = st.date_input(
             "📅 Data Fim:",
-            value=datetime.now().date()
+            value=get_datetime_br().date()
         )
 
     with col4:
