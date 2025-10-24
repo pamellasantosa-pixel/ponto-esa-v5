@@ -15,6 +15,7 @@ import uuid
 from io import BytesIO
 import sys
 from dotenv import load_dotenv
+import pytz  # Para gerenciar fusos horários
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -25,13 +26,24 @@ USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 if USE_POSTGRESQL:
     import psycopg2
     from database_postgresql import get_connection, init_db
+    # PostgreSQL usa %s como placeholder
+    SQL_PLACEHOLDER = '%s'
 else:
     import sqlite3
     from database import init_db, get_connection
+    # SQLite usa ? como placeholder
+    SQL_PLACEHOLDER = '?'
 
 # Adicionar o diretório atual ao path para permitir importações
 if os.path.dirname(__file__) not in sys.path:
     sys.path.insert(0, os.path.dirname(__file__))
+
+# Configurar timezone do Brasil (Brasília)
+TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
+
+def get_datetime_br():
+    """Retorna datetime atual no fuso horário de Brasília"""
+    return datetime.now(TIMEZONE_BR)
 
 # Importar sistemas desenvolvidos
 from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
