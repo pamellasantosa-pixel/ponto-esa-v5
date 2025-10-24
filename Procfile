@@ -1,0 +1,1 @@
+web: streamlit run ponto_esa_v5/app_v5_final.py --server.port=$PORT --server.address=0.0.0.0
