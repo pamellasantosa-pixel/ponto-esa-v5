@@ -13,16 +13,82 @@ load_dotenv()
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
+def parse_database_url(database_url):
+    """Parse DATABASE_URL para extrair configurações de conexão"""
+    if not database_url:
+        return None
+    
+    # Remove 'postgresql://' do início
+    url = database_url.replace('postgresql://', '')
+    
+    # Divide usuário:senha@host:porta/database
+    try:
+        # Encontra a posição do @
+        at_index = url.find('@')
+        if at_index == -1:
+            return None
+            
+        # Parte do usuário e senha
+        user_pass = url[:at_index]
+        host_db = url[at_index + 1:]
+        
+        # Divide usuário:senha
+        user_pass_split = user_pass.split(':')
+        if len(user_pass_split) != 2:
+            return None
+        user = user_pass_split[0]
+        password = user_pass_split[1]
+        
+        # Divide host:porta/database
+        host_port_db = host_db.split('/')
+        if len(host_port_db) != 2:
+            return None
+        database = host_port_db[1]
+        
+        # Divide host:porta
+        host_port = host_port_db[0].split(':')
+        if len(host_port) != 2:
+            return None
+        host = host_port[0]
+        port = host_port[1]
+        
+        return {
+            'host': host,
+            'database': database,
+            'user': user,
+            'password': password,
+            'port': port
+        }
+    except:
+        return None
+
 if USE_POSTGRESQL:
     import psycopg2
     import psycopg2.extras
-    DB_CONFIG = {
-        'host': os.getenv('DB_HOST', 'localhost'),
-        'database': os.getenv('DB_NAME', 'ponto_esa'),
-        'user': os.getenv('DB_USER', 'postgres'),
-        'password': os.getenv('DB_PASSWORD', 'postgres'),
-        'port': os.getenv('DB_PORT', '5432')
-    }
+    
+    # Tenta usar DATABASE_URL primeiro (Render), depois variáveis separadas
+    database_url = os.getenv('DATABASE_URL')
+    if database_url:
+        parsed_config = parse_database_url(database_url)
+        if parsed_config:
+            DB_CONFIG = parsed_config
+        else:
+            print("❌ Erro ao fazer parse da DATABASE_URL")
+            DB_CONFIG = {
+                'host': os.getenv('DB_HOST', 'localhost'),
+                'database': os.getenv('DB_NAME', 'ponto_esa'),
+                'user': os.getenv('DB_USER', 'postgres'),
+                'password': os.getenv('DB_PASSWORD', 'postgres'),
+                'port': os.getenv('DB_PORT', '5432')
+            }
+    else:
+        DB_CONFIG = {
+            'host': os.getenv('DB_HOST', 'localhost'),
+            'database': os.getenv('DB_NAME', 'ponto_esa'),
+            'user': os.getenv('DB_USER', 'postgres'),
+            'password': os.getenv('DB_PASSWORD', 'postgres'),
+            'port': os.getenv('DB_PORT', '5432')
+        }
 else:
     import sqlite3
 
@@ -35,11 +101,10 @@ def get_connection():
         except psycopg2.OperationalError as e:
             print(f"❌ Erro ao conectar no PostgreSQL: {e}")
             print("\n📋 Certifique-se de:")
-            print("1. PostgreSQL está instalado e rodando")
-            print("2. Banco de dados 'ponto_esa' foi criado")
-            print("3. Variáveis de ambiente estão configuradas")
-            print("\n💡 Para criar o banco, execute:")
-            print("   psql -U postgres -c 'CREATE DATABASE ponto_esa;'")
+            print("1. Variável DATABASE_URL está configurada corretamente")
+            print("2. USE_POSTGRESQL=true está definido")
+            print("3. Banco PostgreSQL no Render está ativo")
+            print("\n💡 Verifique as variáveis de ambiente no dashboard do Render")
             raise
     else:
         os.makedirs('database', exist_ok=True)
