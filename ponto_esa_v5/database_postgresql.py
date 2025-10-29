@@ -5,6 +5,7 @@ Supports both SQLite and PostgreSQL based on environment variables
 
 import os
 import hashlib
+import sqlite3
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente
@@ -12,6 +13,11 @@ load_dotenv()
 
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+
+# Importar psycopg2 se necessário
+if USE_POSTGRESQL:
+    import psycopg2
+    import psycopg2.extras
 
 
 def get_connection():
