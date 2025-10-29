@@ -4,18 +4,18 @@ Gerencia solicitações e aprovações de horas extras
 """
 
 import sqlite3
+from database_postgresql import get_connection
 from datetime import datetime, timedelta, time
 import json
 from notifications import notification_manager
 
 
 class HorasExtrasSystem:
-    def __init__(self, db_path="database/ponto_esa.db"):
-        self.db_path = db_path
-
+    def __init__(self):
+        
     def verificar_fim_jornada(self, usuario):
         """Verifica se o usuário chegou no horário de fim da jornada prevista"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Buscar jornada prevista do usuário
@@ -48,7 +48,7 @@ class HorasExtrasSystem:
 
     def obter_aprovadores_disponiveis(self):
         """Obtém lista de usuários que podem aprovar horas extras (gestores e outros funcionários)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -64,7 +64,7 @@ class HorasExtrasSystem:
 
     def solicitar_horas_extras(self, usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado):
         """Registra uma nova solicitação de horas extras"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -128,7 +128,7 @@ class HorasExtrasSystem:
 
     def listar_solicitacoes_usuario(self, usuario, status=None):
         """Lista solicitações de horas extras de um usuário"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM solicitacoes_horas_extras WHERE usuario = ?"
@@ -152,7 +152,7 @@ class HorasExtrasSystem:
 
     def listar_solicitacoes_para_aprovacao(self, aprovador):
         """Lista solicitações pendentes para um aprovador específico"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -172,7 +172,7 @@ class HorasExtrasSystem:
 
     def aprovar_solicitacao(self, solicitacao_id, aprovador, observacoes=None):
         """Aprova uma solicitação de horas extras"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -222,7 +222,7 @@ class HorasExtrasSystem:
 
     def rejeitar_solicitacao(self, solicitacao_id, aprovador, observacoes):
         """Rejeita uma solicitação de horas extras"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -289,7 +289,7 @@ class HorasExtrasSystem:
 
     def contar_notificacoes_pendentes(self, aprovador):
         """Conta quantas solicitações estão pendentes para um aprovador"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""

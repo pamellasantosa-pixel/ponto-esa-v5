@@ -6,19 +6,19 @@ Permite registro de ausências parciais com controle de horas específicas
 
 import sqlite3
 import os
+from database_postgresql import get_connection
 from datetime import datetime, timedelta
 import uuid
 import json
 
 
 class AtestadoHorasSystem:
-    def __init__(self, db_path="database/ponto_esa.db"):
-        self.db_path = db_path
-        self.init_database()
+    def __init__(self):
+                self.init_database()
 
     def init_database(self):
         """Inicializa as tabelas necessárias para o sistema de atestado de horas"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Tabela para atestados de horas
@@ -85,7 +85,7 @@ class AtestadoHorasSystem:
         if total_horas <= 0:
             return {"success": False, "message": "Horários inválidos"}
 
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -112,7 +112,7 @@ class AtestadoHorasSystem:
 
     def listar_atestados_usuario(self, usuario, data_inicio=None, data_fim=None):
         """Lista atestados de horas de um usuário"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM atestado_horas WHERE usuario = ?"
@@ -137,7 +137,7 @@ class AtestadoHorasSystem:
 
     def listar_todos_atestados(self, status=None):
         """Lista todos os atestados (para gestores)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM atestado_horas"
@@ -161,7 +161,7 @@ class AtestadoHorasSystem:
 
     def aprovar_atestado(self, atestado_id, aprovado_por, observacoes=None):
         """Aprova um atestado de horas"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -180,7 +180,7 @@ class AtestadoHorasSystem:
 
     def rejeitar_atestado(self, atestado_id, rejeitado_por, observacoes):
         """Rejeita um atestado de horas"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -200,7 +200,7 @@ class AtestadoHorasSystem:
     def calcular_horas_trabalhadas_com_atestado(self, usuario, data):
         """Calcula horas trabalhadas descontando atestados de horas aprovados"""
         # Buscar registros de ponto do dia
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Registros de ponto
@@ -255,7 +255,7 @@ class AtestadoHorasSystem:
 
     def gerar_relatorio_atestados(self, data_inicio, data_fim, usuario=None):
         """Gera relatório de atestados de horas por período"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = """
@@ -313,7 +313,7 @@ class AtestadoHorasSystem:
 
     def validar_conflito_ponto(self, usuario, data, hora_inicio, hora_fim):
         """Verifica se há conflito com registros de ponto existentes"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""

@@ -4,17 +4,17 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 """
 
 import sqlite3
+from database_postgresql import get_connection
 from datetime import datetime, timedelta, date
 import calendar
 
 
 class CalculoHorasSystem:
-    def __init__(self, db_path="database/ponto_esa.db"):
-        self.db_path = db_path
-
+    def __init__(self):
+        
     def calcular_horas_dia(self, usuario, data):
         """Calcula as horas trabalhadas em um dia específico com todas as regras"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         try:
             cursor = conn.cursor()
 
@@ -146,7 +146,7 @@ class CalculoHorasSystem:
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -192,7 +192,7 @@ class CalculoHorasSystem:
 
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("""
@@ -213,7 +213,7 @@ class CalculoHorasSystem:
 
     def obter_feriados_periodo(self, data_inicio, data_fim):
         """Obtém lista de feriados em um período"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -229,7 +229,7 @@ class CalculoHorasSystem:
 
     def gerar_relatorio_horas_extras(self, usuario, data_inicio, data_fim):
         """Gera relatório de horas extras não aprovadas"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Buscar jornada prevista

@@ -4,16 +4,16 @@ Gerencia o saldo de horas dos funcionários
 """
 
 import sqlite3
+from database_postgresql import get_connection
 from datetime import datetime, timedelta, date
 import calendar
 
 class BancoHorasSystem:
-    def __init__(self, db_path="database/ponto_esa.db"):
-        self.db_path = db_path
-    
+    def __init__(self):
+            
     def calcular_banco_horas(self, usuario, data_inicio, data_fim):
         """Calcula o saldo do banco de horas para um usuário em um período"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
         
         # Buscar jornada prevista do usuário
@@ -243,7 +243,7 @@ class BancoHorasSystem:
     
     def obter_saldos_todos_usuarios(self):
         """Obtém o saldo de banco de horas de todos os usuários ativos"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
@@ -268,7 +268,7 @@ class BancoHorasSystem:
     
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
         
         cursor.execute("""
