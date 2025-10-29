@@ -13,45 +13,46 @@ load_dotenv()
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
+
 def parse_database_url(database_url):
     """Parse DATABASE_URL para extrair configurações de conexão"""
     if not database_url:
         return None
-    
+
     # Remove 'postgresql://' do início
     url = database_url.replace('postgresql://', '')
-    
+
     # Divide usuário:senha@host:porta/database
     try:
         # Encontra a posição do @
         at_index = url.find('@')
         if at_index == -1:
             return None
-            
+
         # Parte do usuário e senha
         user_pass = url[:at_index]
         host_db = url[at_index + 1:]
-        
+
         # Divide usuário:senha
         user_pass_split = user_pass.split(':')
         if len(user_pass_split) != 2:
             return None
         user = user_pass_split[0]
         password = user_pass_split[1]
-        
+
         # Divide host:porta/database
         host_port_db = host_db.split('/')
         if len(host_port_db) != 2:
             return None
         database = host_port_db[1]
-        
+
         # Divide host:porta
         host_port = host_port_db[0].split(':')
         if len(host_port) != 2:
             return None
         host = host_port[0]
         port = host_port[1]
-        
+
         return {
             'host': host,
             'database': database,
@@ -62,10 +63,11 @@ def parse_database_url(database_url):
     except:
         return None
 
+
 if USE_POSTGRESQL:
     import psycopg2
     import psycopg2.extras
-    
+
     # Tenta usar DATABASE_URL primeiro (Render), depois variáveis separadas
     database_url = os.getenv('DATABASE_URL')
     if database_url:
@@ -342,5 +344,6 @@ def init_db():
 if __name__ == '__main__':
     print(f"🔧 Modo: {'PostgreSQL' if USE_POSTGRESQL else 'SQLite'}")
     if USE_POSTGRESQL:
-        print(f"📊 Conectando em: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
+        print(
+            f"📊 Conectando em: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
     init_db()
