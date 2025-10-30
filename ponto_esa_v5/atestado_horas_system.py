@@ -93,7 +93,7 @@ class AtestadoHorasSystem:
             cursor.execute("""
                 INSERT INTO atestado_horas 
                 (usuario, data, hora_inicio, hora_fim, total_horas, motivo, arquivo_comprovante, nao_possui_comprovante)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
             """, (usuario, data, hora_inicio, hora_fim, total_horas, motivo, arquivo_comprovante, 1 if nao_possui_comprovante else 0))
 
             atestado_id = cursor.lastrowid
@@ -115,11 +115,11 @@ class AtestadoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM atestado_horas WHERE usuario = ?"
+        query = "SELECT * FROM atestado_horas WHERE usuario = %s"
         params = [usuario]
 
         if data_inicio and data_fim:
-            query += " AND data BETWEEN ? AND ?"
+            query += " AND data BETWEEN %s AND %s"
             params.extend([data_inicio, data_fim])
 
         query += " ORDER BY data DESC, hora_inicio ASC"
@@ -144,7 +144,7 @@ class AtestadoHorasSystem:
         params = []
 
         if status:
-            query += " WHERE status = ?"
+            query += " WHERE status = %s"
             params.append(status)
 
         query += " ORDER BY data_registro DESC"
@@ -167,8 +167,8 @@ class AtestadoHorasSystem:
         try:
             cursor.execute("""
                 UPDATE atestado_horas 
-                SET status = 'aprovado', aprovado_por = ?, data_aprovacao = ?, observacoes = ?
-                WHERE id = ?
+                SET status = 'aprovado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
+                WHERE id = %s
             """, (aprovado_por, datetime.now().isoformat(), observacoes, atestado_id))
 
             conn.commit()
@@ -186,8 +186,8 @@ class AtestadoHorasSystem:
         try:
             cursor.execute("""
                 UPDATE atestado_horas 
-                SET status = 'rejeitado', aprovado_por = ?, data_aprovacao = ?, observacoes = ?
-                WHERE id = ?
+                SET status = 'rejeitado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
+                WHERE id = %s
             """, (rejeitado_por, datetime.now().isoformat(), observacoes, atestado_id))
 
             conn.commit()
@@ -206,7 +206,7 @@ class AtestadoHorasSystem:
         # Registros de ponto
         cursor.execute("""
             SELECT data_hora, tipo FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) = ? 
+            WHERE usuario = %s AND DATE(data_hora) = %s 
             ORDER BY data_hora
         """, (usuario, data))
         registros_ponto = cursor.fetchall()
@@ -214,7 +214,7 @@ class AtestadoHorasSystem:
         # Atestados de horas aprovados
         cursor.execute("""
             SELECT total_horas FROM atestado_horas 
-            WHERE usuario = ? AND data = ? AND status = 'aprovado'
+            WHERE usuario = %s AND data = %s AND status = 'aprovado'
         """, (usuario, data))
         atestados = cursor.fetchall()
 
@@ -261,12 +261,12 @@ class AtestadoHorasSystem:
         query = """
             SELECT usuario, data, hora_inicio, hora_fim, total_horas, motivo, status
             FROM atestado_horas 
-            WHERE data BETWEEN ? AND ?
+            WHERE data BETWEEN %s AND %s
         """
         params = [data_inicio, data_fim]
 
         if usuario:
-            query += " AND usuario = ?"
+            query += " AND usuario = %s"
             params.append(usuario)
 
         query += " ORDER BY data DESC, usuario ASC"
@@ -318,7 +318,7 @@ class AtestadoHorasSystem:
 
         cursor.execute("""
             SELECT data_hora FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) = ? 
+            WHERE usuario = %s AND DATE(data_hora) = %s 
             ORDER BY data_hora
         """, (usuario, data))
         registros = cursor.fetchall()

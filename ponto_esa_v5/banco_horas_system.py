@@ -21,7 +21,7 @@ class BancoHorasSystem:
         # Buscar jornada prevista do usuário
         cursor.execute("""
             SELECT jornada_inicio_previsto, jornada_fim_previsto 
-            FROM usuarios WHERE usuario = ?
+            FROM usuarios WHERE usuario = %s
         """, (usuario,))
         
         jornada = cursor.fetchone()
@@ -44,7 +44,7 @@ class BancoHorasSystem:
             SELECT DATE(data_hora) as data, MIN(data_hora) as primeiro, MAX(data_hora) as ultimo,
                    COUNT(*) as total_registros
             FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) BETWEEN ? AND ?
+            WHERE usuario = %s AND DATE(data_hora) BETWEEN %s AND %s
             GROUP BY DATE(data_hora)
             ORDER BY data
         """, (usuario, data_inicio, data_fim))
@@ -54,7 +54,7 @@ class BancoHorasSystem:
         # Buscar horas extras aprovadas
         cursor.execute("""
             SELECT data, hora_inicio, hora_fim FROM solicitacoes_horas_extras 
-            WHERE usuario = ? AND status = 'aprovado' AND data BETWEEN ? AND ?
+            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
         """, (usuario, data_inicio, data_fim))
         
         horas_extras_aprovadas = cursor.fetchall()
@@ -62,8 +62,8 @@ class BancoHorasSystem:
         # Buscar ausências sem comprovante
         cursor.execute("""
             SELECT data_inicio, data_fim FROM ausencias 
-            WHERE usuario = ? AND nao_possui_comprovante = 1 
-            AND data_inicio <= ? AND data_fim >= ?
+            WHERE usuario = %s AND nao_possui_comprovante = 1 
+            AND data_inicio <= %s AND data_fim >= %s
         """, (usuario, data_fim, data_inicio))
         
         ausencias_sem_comprovante = cursor.fetchall()
@@ -71,7 +71,7 @@ class BancoHorasSystem:
         # Buscar atestados de horas aprovados
         cursor.execute("""
             SELECT data, total_horas FROM atestado_horas 
-            WHERE usuario = ? AND status = 'aprovado' AND data BETWEEN ? AND ?
+            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
         """, (usuario, data_inicio, data_fim))
         
         atestados_aprovados = cursor.fetchall()
@@ -275,7 +275,7 @@ class BancoHorasSystem:
         
         cursor.execute("""
             SELECT COUNT(*) FROM feriados 
-            WHERE data = ? AND ativo = 1
+            WHERE data = %s AND ativo = 1
         """, (data.strftime("%Y-%m-%d"),))
         
         eh_feriado = cursor.fetchone()[0] > 0

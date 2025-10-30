@@ -104,7 +104,7 @@ class UploadSystem:
             errors.append("Nome do arquivo inválido")
 
         # Verificar caracteres perigosos
-        dangerous_chars = ['<', '>', ':', '"', '|', '?', '*', '\\', '/']
+        dangerous_chars = ['<', '>', ':', '"', '|', '%s', '*', '\\', '/']
         if any(char in filename for char in dangerous_chars):
             errors.append("Nome do arquivo contém caracteres não permitidos")
 
@@ -214,7 +214,7 @@ class UploadSystem:
             cursor.execute('''
                 INSERT INTO uploads 
                 (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             ''', (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
 
             upload_id = cursor.lastrowid
@@ -233,7 +233,7 @@ class UploadSystem:
 
         cursor.execute('''
             SELECT id, nome_original, caminho FROM uploads 
-            WHERE hash_arquivo = ? AND usuario = ? AND status = 'ativo'
+            WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
         ''', (file_hash, usuario))
 
         result = cursor.fetchone()
@@ -252,21 +252,21 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM uploads WHERE usuario = ? AND status = 'ativo'"
+        query = "SELECT * FROM uploads WHERE usuario = %s AND status = 'ativo'"
         params = [usuario]
 
         if categoria:
             # Mapear categoria para relacionado_a
             if categoria in ['ausencia', 'atestado_horas', 'documento']:
-                query += " AND relacionado_a = ?"
+                query += " AND relacionado_a = %s"
                 params.append(categoria)
 
         if relacionado_a:
-            query += " AND relacionado_a = ?"
+            query += " AND relacionado_a = %s"
             params.append(relacionado_a)
 
         if relacionado_id:
-            query += " AND relacionado_id = ?"
+            query += " AND relacionado_id = %s"
             params.append(relacionado_id)
 
         query += " ORDER BY data_upload DESC"
@@ -287,11 +287,11 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM uploads WHERE id = ?"
+        query = "SELECT * FROM uploads WHERE id = %s"
         params = [upload_id]
 
         if usuario:
-            query += " AND usuario = ?"
+            query += " AND usuario = %s"
             params.append(usuario)
 
         cursor.execute(query, params)
@@ -314,7 +314,7 @@ class UploadSystem:
         try:
             # Verificar se arquivo pertence ao usuário
             cursor.execute(
-                "SELECT caminho FROM uploads WHERE id = ? AND usuario = ?", (upload_id, usuario))
+                "SELECT caminho FROM uploads WHERE id = %s AND usuario = %s", (upload_id, usuario))
             result = cursor.fetchone()
 
             if not result:
@@ -324,7 +324,7 @@ class UploadSystem:
 
             # Marcar como inativo no banco
             cursor.execute(
-                "UPDATE uploads SET status = 'removido' WHERE id = ?", (upload_id,))
+                "UPDATE uploads SET status = 'removido' WHERE id = %s", (upload_id,))
 
             # Remover arquivo físico
             try:

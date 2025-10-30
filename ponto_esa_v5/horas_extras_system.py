@@ -22,7 +22,7 @@ class HorasExtrasSystem:
         # Buscar jornada prevista do usuário
         cursor.execute("""
             SELECT jornada_fim_previsto FROM usuarios 
-            WHERE usuario = ? AND ativo = 1
+            WHERE usuario = %s AND ativo = 1
         """, (usuario,))
 
         result = cursor.fetchone()
@@ -41,7 +41,7 @@ class HorasExtrasSystem:
         if agora >= jornada_fim_time:
             return {
                 "deve_notificar": True,
-                "message": f"Seu horário de fim da jornada ({jornada_fim}) foi atingido. Deseja solicitar horas extras?",
+                "message": f"Seu horário de fim da jornada ({jornada_fim}) foi atingido. Deseja solicitar horas extras%s",
                 "jornada_fim": jornada_fim
             }
 
@@ -72,7 +72,7 @@ class HorasExtrasSystem:
             # Verificar se já existe solicitação para o mesmo período
             cursor.execute("""
                 SELECT id FROM solicitacoes_horas_extras 
-                WHERE usuario = ? AND data = ? AND status = 'pendente'
+                WHERE usuario = %s AND data = %s AND status = 'pendente'
             """, (usuario, data))
 
             if cursor.fetchone():
@@ -92,7 +92,7 @@ class HorasExtrasSystem:
             cursor.execute("""
                 INSERT INTO solicitacoes_horas_extras 
                 (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado)
-                VALUES (?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s)
             """, (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado))
 
             solicitacao_id = cursor.lastrowid
@@ -132,11 +132,11 @@ class HorasExtrasSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM solicitacoes_horas_extras WHERE usuario = ?"
+        query = "SELECT * FROM solicitacoes_horas_extras WHERE usuario = %s"
         params = [usuario]
 
         if status:
-            query += " AND status = ?"
+            query += " AND status = %s"
             params.append(status)
 
         query += " ORDER BY data_solicitacao DESC"
@@ -158,7 +158,7 @@ class HorasExtrasSystem:
 
         cursor.execute("""
             SELECT * FROM solicitacoes_horas_extras 
-            WHERE aprovador_solicitado = ? AND status = 'pendente'
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
             ORDER BY data_solicitacao ASC
         """, (aprovador,))
 
@@ -181,7 +181,7 @@ class HorasExtrasSystem:
             cursor.execute("""
                 SELECT usuario, data, hora_inicio, hora_fim, aprovador_solicitado 
                 FROM solicitacoes_horas_extras 
-                WHERE id = ? AND status = 'pendente'
+                WHERE id = %s AND status = 'pendente'
             """, (solicitacao_id,))
 
             solicitacao = cursor.fetchone()
@@ -195,8 +195,8 @@ class HorasExtrasSystem:
             # Aprovar solicitação
             cursor.execute("""
                 UPDATE solicitacoes_horas_extras 
-                SET status = 'aprovado', aprovado_por = ?, data_aprovacao = ?, observacoes = ?
-                WHERE id = ?
+                SET status = 'aprovado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
+                WHERE id = %s
             """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
 
             # Registrar no banco de horas
@@ -230,7 +230,7 @@ class HorasExtrasSystem:
             # Verificar se a solicitação existe e está pendente
             cursor.execute("""
                 SELECT aprovador_solicitado FROM solicitacoes_horas_extras 
-                WHERE id = ? AND status = 'pendente'
+                WHERE id = %s AND status = 'pendente'
             """, (solicitacao_id,))
 
             result = cursor.fetchone()
@@ -244,8 +244,8 @@ class HorasExtrasSystem:
             # Rejeitar solicitação
             cursor.execute("""
                 UPDATE solicitacoes_horas_extras 
-                SET status = 'rejeitado', aprovado_por = ?, data_aprovacao = ?, observacoes = ?
-                WHERE id = ?
+                SET status = 'rejeitado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
+                WHERE id = %s
             """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
 
             conn.commit()
@@ -272,7 +272,7 @@ class HorasExtrasSystem:
         # Buscar saldo anterior
         cursor.execute("""
             SELECT saldo_atual FROM banco_horas 
-            WHERE usuario = ? 
+            WHERE usuario = %s 
             ORDER BY data_registro DESC 
             LIMIT 1
         """, (usuario,))
@@ -285,7 +285,7 @@ class HorasExtrasSystem:
         cursor.execute("""
             INSERT INTO banco_horas 
             (usuario, data, tipo, descricao, credito, debito, saldo_anterior, saldo_atual, relacionado_id, relacionado_tabela)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (usuario, data, tipo, descricao, credito, debito, saldo_anterior, saldo_atual, relacionado_id, relacionado_tabela))
 
     def contar_notificacoes_pendentes(self, aprovador):
@@ -295,7 +295,7 @@ class HorasExtrasSystem:
 
         cursor.execute("""
             SELECT COUNT(*) FROM solicitacoes_horas_extras 
-            WHERE aprovador_solicitado = ? AND status = 'pendente'
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
         """, (aprovador,))
 
         count = cursor.fetchone()[0]

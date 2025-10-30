@@ -23,7 +23,7 @@ class CalculoHorasSystem:
             # Buscar registros do dia
             cursor.execute("""
                 SELECT data_hora, tipo FROM registros_ponto 
-                WHERE usuario = ? AND DATE(data_hora) = ? 
+                WHERE usuario = %s AND DATE(data_hora) = %s 
                 ORDER BY data_hora ASC
             """, (usuario, data))
 
@@ -68,7 +68,7 @@ class CalculoHorasSystem:
             # Buscar atestados de horas aprovados para desconto
             cursor.execute("""
                 SELECT total_horas FROM atestado_horas 
-                WHERE usuario = ? AND data = ? AND status = 'aprovado'
+                WHERE usuario = %s AND data = %s AND status = 'aprovado'
             """, (usuario, data))
 
             atestados = cursor.fetchall()
@@ -153,7 +153,7 @@ class CalculoHorasSystem:
 
         cursor.execute("""
             SELECT tipo, COUNT(*) FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) = ? 
+            WHERE usuario = %s AND DATE(data_hora) = %s 
             GROUP BY tipo
         """, (usuario, data))
 
@@ -199,7 +199,7 @@ class CalculoHorasSystem:
         try:
             cursor.execute("""
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = ? AND ativo = 1
+                WHERE data = %s AND ativo = 1
             """, (data.strftime("%Y-%m-%d"),))
 
             eh_feriado = cursor.fetchone()[0] > 0
@@ -220,7 +220,7 @@ class CalculoHorasSystem:
 
         cursor.execute("""
             SELECT data, nome, tipo FROM feriados 
-            WHERE data BETWEEN ? AND ? AND ativo = 1
+            WHERE data BETWEEN %s AND %s AND ativo = 1
             ORDER BY data
         """, (data_inicio, data_fim))
 
@@ -237,7 +237,7 @@ class CalculoHorasSystem:
         # Buscar jornada prevista
         cursor.execute("""
             SELECT jornada_inicio_previsto, jornada_fim_previsto 
-            FROM usuarios WHERE usuario = ?
+            FROM usuarios WHERE usuario = %s
         """, (usuario,))
 
         jornada = cursor.fetchone()
@@ -274,7 +274,7 @@ class CalculoHorasSystem:
                 # Verificar se já foi aprovada formalmente
                 cursor.execute("""
                     SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                    WHERE usuario = ? AND data = ? AND status = 'aprovado'
+                    WHERE usuario = %s AND data = %s AND status = 'aprovado'
                 """, (usuario, data_atual.strftime("%Y-%m-%d")))
 
                 ja_aprovada = cursor.fetchone()[0] > 0
