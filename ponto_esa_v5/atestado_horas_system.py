@@ -14,7 +14,7 @@ import json
 
 class AtestadoHorasSystem:
     def __init__(self):
-                self.init_database()
+        self.init_database()
 
     def init_database(self):
         """Inicializa as tabelas necessárias para o sistema de atestado de horas"""

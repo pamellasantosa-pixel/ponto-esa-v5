@@ -10,6 +10,8 @@ import calendar
 
 class BancoHorasSystem:
     def __init__(self):
+        pass
+
             
     def calcular_banco_horas(self, usuario, data_inicio, data_fim):
         """Calcula o saldo do banco de horas para um usuário em um período"""

@@ -12,6 +12,7 @@ from notifications import notification_manager
 
 class HorasExtrasSystem:
     def __init__(self):
+        pass
         
     def verificar_fim_jornada(self, usuario):
         """Verifica se o usuário chegou no horário de fim da jornada prevista"""

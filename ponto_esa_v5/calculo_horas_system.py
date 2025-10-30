@@ -11,6 +11,8 @@ import calendar
 
 class CalculoHorasSystem:
     def __init__(self):
+        pass
+
         
     def calcular_horas_dia(self, usuario, data):
         """Calcula as horas trabalhadas em um dia específico com todas as regras"""
