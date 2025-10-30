@@ -1,8 +1,9 @@
-﻿"""
+"""
 Ponto ExSA v5.0 - Sistema de Controle de Ponto
-Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias
+Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias  
 Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
-Última atualização: 24/10/2025 15:00 - Timezone Brasília, PostgreSQL/SQLite dinâmico
+Última atualização: 24/10/2025 16:45 - TIMEZONE BRASÍLIA CORRIGIDO (get_datetime_br)
+Deploy: Render.com | Banco: PostgreSQL
 """
 
 import streamlit as st
@@ -32,7 +33,7 @@ if USE_POSTGRESQL:
 else:
     import sqlite3
     from database import init_db, get_connection
-    # SQLite usa %s como placeholder
+    # SQLite usa ? como placeholder
     SQL_PLACEHOLDER = '?'
 
 # Adicionar o diretório atual ao path para permitir importações
@@ -57,7 +58,7 @@ from notifications import notification_manager
 # Configuração da página
 st.set_page_config(
     page_title="Ponto ExSA v5.0",
-    page_icon="?",
+    page_icon="⏰",
     layout="wide",
     initial_sidebar_state="expanded"
 )
@@ -66,7 +67,7 @@ st.set_page_config(
 st.markdown("""
 <style>
     /* Importar fonte */
-    @import url('https://fonts.googleapis.com/css2%sfamily=Inter:wght@300;400;500;600;700&display=swap');
+    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
     
     /* Reset e configurações gerais */
     .stApp {
@@ -258,10 +259,10 @@ function updateClock() {
     const timeStr = now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
     const elements = document.querySelectorAll('.user-info');
     elements.forEach(el => {
-        if (el.textContent.includes('')) {
-            const parts = el.textContent.split('  ');
+        if (el.textContent.includes('•')) {
+            const parts = el.textContent.split(' • ');
             if (parts.length === 2) {
-                el.textContent = parts[0] + '  ' + dateStr + ' ' + timeStr;
+                el.textContent = parts[0] + ' • ' + dateStr + ' ' + timeStr;
             }
         }
     });
@@ -295,7 +296,7 @@ function getLocation() {
                 if (gpsDiv) {
                     gpsDiv.innerHTML = `
                         <div class="gps-status gps-success">
-                            %s%s GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)} (±${Math.round(accuracy)}m)
+                            📍 GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)} (±${Math.round(accuracy)}m)
                         </div>
                     `;
                 }
@@ -306,7 +307,7 @@ function getLocation() {
                 if (gpsDiv) {
                     gpsDiv.innerHTML = `
                         <div class="gps-status gps-error">
-                            %s Erro ao obter localização: ${error.message}
+                            ❌ Erro ao obter localização: ${error.message}
                         </div>
                     `;
                 }
@@ -322,7 +323,7 @@ function getLocation() {
         if (gpsDiv) {
             gpsDiv.innerHTML = `
                 <div class="gps-status gps-error">
-                    %s GPS não suportado pelo navegador
+                    ❌ GPS não suportado pelo navegador
                 </div>
             `;
         }
@@ -377,7 +378,7 @@ def verificar_login(usuario, senha):
 
     senha_hash = hashlib.sha256(senha.encode()).hexdigest()
     cursor.execute(
-        f"SELECT tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER} AND senha = {SQL_PLACEHOLDER}", (usuario, senha_hash))
+        "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
     result = cursor.fetchone()
     conn.close()
 
@@ -399,12 +400,12 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
     conn = get_connection()
     cursor = conn.cursor()
 
-    # Se não especificada, usar data/hora atual
+    # Se não especificada, usar data/hora atual no fuso horário de Brasília
     if data_registro:
         agora = get_datetime_br()
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
-        data_hora_registro = data_obj.replace(
-            hour=agora.hour, minute=agora.minute, second=agora.second)
+        data_hora_registro = TIMEZONE_BR.localize(data_obj.replace(
+            hour=agora.hour, minute=agora.minute, second=agora.second))
     else:
         data_hora_registro = get_datetime_br()
 
@@ -414,9 +415,11 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
     else:
         localizacao = "GPS não disponível"
 
-    cursor.execute('''
+    # Usar placeholder correto baseado no tipo de banco
+    placeholders = ', '.join([SQL_PLACEHOLDER] * 9)
+    cursor.execute(f'''
         INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+        VALUES ({placeholders})
     ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
 
     conn.commit()
@@ -430,11 +433,11 @@ def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = "SELECT * FROM registros_ponto WHERE usuario = %s"
+    query = f"SELECT * FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER}"
     params = [usuario]
 
     if data_inicio and data_fim:
-        query += " AND DATE(data_hora) BETWEEN %s AND %s"
+        query += f" AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}"
         params.extend([data_inicio, data_fim])
 
     query += " ORDER BY data_hora DESC"
@@ -455,6 +458,17 @@ def obter_usuarios_para_aprovacao():
     usuarios = cursor.fetchall()
     conn.close()
     return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
+
+
+def obter_usuarios_ativos():
+    """Obtém lista de usuários ativos (retorna dicionários com 'usuario' e 'nome_completo')."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
+    rows = cursor.fetchall()
+    conn.close()
+    return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows]
 
 # Interface de login
 
@@ -504,8 +518,8 @@ def tela_login():
 
         with st.form("login_form"):
             usuario = st.text_input(
-                "?%s Usuário", placeholder="Digite seu usuário")
-            senha = st.text_input("?%s Senha", type="password",
+                "👤 Usuário", placeholder="Digite seu usuário")
+            senha = st.text_input("🔒 Senha", type="password",
                                   placeholder="Digite sua senha")
 
             submitted = st.form_submit_button(
@@ -519,12 +533,12 @@ def tela_login():
                         st.session_state.tipo_usuario = resultado[0]
                         st.session_state.nome_completo = resultado[1]
                         st.session_state.logged_in = True
-                        st.success("%s Login realizado com sucesso!")
+                        st.success("✅ Login realizado com sucesso!")
                         st.rerun()
                     else:
-                        st.error("%s Usuário ou senha incorretos")
+                        st.error("❌ Usuário ou senha incorretos")
                 else:
-                    st.warning("?%s Preencha todos os campos")
+                    st.warning("⚠️ Preencha todos os campos")
 
 
 # Interface principal do funcionário
@@ -535,8 +549,8 @@ def tela_funcionario():
     # Header
     st.markdown(f"""
     <div class="main-header">
-        <div class="user-welcome">?%s Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Funcionário  {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-welcome">👋 Olá, {st.session_state.nome_completo}</div>
+        <div class="user-info">Funcionário • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -544,52 +558,52 @@ def tela_funcionario():
     verificacao_jornada = horas_extras_system.verificar_fim_jornada(
         st.session_state.usuario)
     if verificacao_jornada["deve_notificar"]:
-        st.warning(f"%s {verificacao_jornada['message']}")
-        if st.button("?%s Solicitar Horas Extras"):
+        st.warning(f"⏰ {verificacao_jornada['message']}")
+        if st.button("🕐 Solicitar Horas Extras"):
             st.session_state.solicitar_horas_extras = True
 
     # Menu lateral
     with st.sidebar:
-        st.markdown("### %s%s Menu Principal")
+        st.markdown("### 📋 Menu Principal")
 
         # Contar notificações pendentes
         notificacoes_horas_extras = horas_extras_system.contar_notificacoes_pendentes(
             st.session_state.usuario)
 
         opcoes_menu = [
-            "?%s Registrar Ponto",
-            "?%s Meus Registros",
-            "?%s Registrar Ausência",
-            "%s Atestado de Horas",
-            f"?%s Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
-            "?%s Meu Banco de Horas",
-            "?%s Meus Arquivos",
-            "?%s Notificações"
+            "🕐 Registrar Ponto",
+            "📋 Meus Registros",
+            "🏥 Registrar Ausência",
+            "⏰ Atestado de Horas",
+            f"🕐 Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
+            "🏦 Meu Banco de Horas",
+            "📁 Meus Arquivos",
+            "🔔 Notificações"
         ]
 
         opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
 
-        if st.button("?%s Sair", use_container_width=True):
+        if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
 
     # Conteúdo principal baseado na opção selecionada
-    if opcao == "?%s Registrar Ponto":
+    if opcao == "🕐 Registrar Ponto":
         registrar_ponto_interface(calculo_horas_system, horas_extras_system)
-    elif opcao == "?%s Meus Registros":
+    elif opcao == "📋 Meus Registros":
         meus_registros_interface(calculo_horas_system)
-    elif opcao == "?%s Registrar Ausência":
+    elif opcao == "🏥 Registrar Ausência":
         registrar_ausencia_interface(upload_system)
-    elif opcao == "%s Atestado de Horas":
+    elif opcao == "⏰ Atestado de Horas":
         atestado_horas_interface(atestado_system, upload_system)
-    elif opcao.startswith("?%s Horas Extras"):
+    elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
-    elif opcao == "?%s Meu Banco de Horas":
+    elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
-    elif opcao == "?%s Meus Arquivos":
+    elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
-    elif opcao == "?%s Notificações":
+    elif opcao == "🔔 Notificações":
         notificacoes_interface(horas_extras_system)
 
 
@@ -602,9 +616,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     """
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Registrar Ponto</h3>
+        <h3>🕐 Registrar Ponto</h3>
         <p>Registre sua entrada, atividades intermediárias e saída</p>
-        <p><small>?%s <strong>Registro Retroativo:</strong> Você pode registrar ponto para qualquer um dos últimos 3 dias.</small></p>
+        <p><small>💡 <strong>Registro Retroativo:</strong> Você pode registrar ponto para qualquer um dos últimos 3 dias.</small></p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -612,17 +626,17 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     st.components.v1.html(GPS_SCRIPT, height=0)
 
     # Status do GPS
-    st.markdown('<div id="gps-status">?%s Obtendo localização...</div>',
+    st.markdown('<div id="gps-status">📍 Obtendo localização...</div>',
                 unsafe_allow_html=True)
 
-    st.subheader("%s Novo Registro")
+    st.subheader("➕ Novo Registro")
 
     with st.form("registro_ponto"):
         col1, col2 = st.columns(2)
 
         with col1:
             data_registro = st.date_input(
-                "?%s Data do Registro",
+                "📅 Data do Registro",
                 value=date.today(),
                 min_value=date.today() - timedelta(days=3),
                 max_value=date.today(),
@@ -630,20 +644,20 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             )
 
             modalidade = st.selectbox(
-                "?%s Modalidade de Trabalho",
+                "🏢 Modalidade de Trabalho",
                 ["Presencial", "Home Office", "Trabalho em Campo"]
             )
 
         with col2:
             tipo_registro = st.selectbox(
-                "%s Tipo de Registro",
+                "⏰ Tipo de Registro",
                 ["Início", "Intermediário", "Fim"]
             )
 
-            projeto = st.selectbox("?%s Projeto", obter_projetos_ativos())
+            projeto = st.selectbox("📊 Projeto", obter_projetos_ativos())
 
         atividade = st.text_area(
-            "?%s Descrição da Atividade",
+            "📝 Descrição da Atividade",
             placeholder="Descreva brevemente a atividade realizada..."
         )
 
@@ -654,14 +668,14 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
         if not pode_registrar and tipo_registro in ["Início", "Fim"]:
             st.warning(
-                f"?%s Você já possui um registro de '{tipo_registro}' para este dia.")
+                f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
         submitted = st.form_submit_button(
-            "%s Registrar Ponto", use_container_width=True, disabled=not pode_registrar)
+            "✅ Registrar Ponto", use_container_width=True, disabled=not pode_registrar)
 
         if submitted and pode_registrar:
             if not atividade.strip():
-                st.error("%s A descrição da atividade é obrigatória")
+                st.error("❌ A descrição da atividade é obrigatória")
             else:
                 # Tentar obter coordenadas GPS via JavaScript
                 gps_coords = st.components.v1.html("""
@@ -690,9 +704,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     longitude
                 )
 
-                st.success(f"%s Ponto registrado com sucesso!")
+                st.success(f"✅ Ponto registrado com sucesso!")
                 st.info(
-                    f"?%s {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
+                    f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
 
                 # Verificar se é fim de jornada para notificar horas extras (se disponível)
                 if tipo_registro == "Fim" and horas_extras_system is not None:
@@ -700,17 +714,17 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                         verificacao = horas_extras_system.verificar_fim_jornada(
                             st.session_state.usuario)
                         if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
-                            st.info(f"?%s {verificacao.get('message')}")
+                            st.info(f"💡 {verificacao.get('message')}")
                     except Exception:
                         # Não bloquear o registro por erro em sistema de horas extras
                         st.info(
-                            "?%s Não foi possível verificar horas extras no momento.")
+                            "💡 Não foi possível verificar horas extras no momento.")
 
                 st.rerun()
 
     # Mostrar registros do dia selecionado
     data_selecionada = st.date_input(
-        "?%s Ver registros do dia:",
+        "📅 Ver registros do dia:",
         value=date.today(),
         key="ver_registros_data"
     )
@@ -722,7 +736,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     )
 
     if registros_dia:
-        st.subheader(f"?%s Registros de {data_selecionada.strftime('%d/%m/%Y')}")
+        st.subheader(f"📋 Registros de {data_selecionada.strftime('%d/%m/%Y')}")
 
         # Calcular horas do dia
         calculo_dia = calculo_horas_system.calcular_horas_dia(
@@ -733,15 +747,15 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         if calculo_dia["horas_finais"] > 0:
             col1, col2, col3 = st.columns(3)
             with col1:
-                st.metric("?%s Horas Trabalhadas", format_time_duration(
+                st.metric("⏱️ Horas Trabalhadas", format_time_duration(
                     calculo_dia["horas_trabalhadas"]))
             with col2:
-                st.metric("??%s Desconto Almoço",
+                st.metric("🍽️ Desconto Almoço",
                           f"{calculo_dia['desconto_almoco']}h" if calculo_dia['desconto_almoco'] > 0 else "Não aplicado")
             with col3:
                 multiplicador_text = f"x{calculo_dia['multiplicador']}" if calculo_dia['multiplicador'] > 1 else ""
                 st.metric(
-                    "%s Horas Finais", f"{format_time_duration(calculo_dia['horas_finais'])} {multiplicador_text}")
+                    "✅ Horas Finais", f"{format_time_duration(calculo_dia['horas_finais'])} {multiplicador_text}")
 
         df_dia = pd.DataFrame(registros_dia, columns=[
             'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Registro'
@@ -755,37 +769,37 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         )
     else:
         st.info(
-            f"?%s Nenhum registro encontrado para {data_selecionada.strftime('%d/%m/%Y')}")
+            f"📋 Nenhum registro encontrado para {data_selecionada.strftime('%d/%m/%Y')}")
 
 
 def horas_extras_interface(horas_extras_system):
     """Interface para solicitação e acompanhamento de horas extras"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Horas Extras</h3>
+        <h3>🕐 Horas Extras</h3>
         <p>Solicite aprovação para horas extras trabalhadas</p>
     </div>
     """, unsafe_allow_html=True)
 
-    tab1, tab2 = st.tabs(["?%s Nova Solicitação", "?%s Minhas Solicitações"])
+    tab1, tab2 = st.tabs(["📝 Nova Solicitação", "📋 Minhas Solicitações"])
 
     with tab1:
-        st.subheader("?%s Solicitar Horas Extras")
+        st.subheader("📝 Solicitar Horas Extras")
 
         with st.form("solicitar_horas_extras"):
             col1, col2 = st.columns(2)
 
             with col1:
                 data_horas_extras = st.date_input(
-                    "?%s Data das Horas Extras",
+                    "📅 Data das Horas Extras",
                     value=date.today(),
                     max_value=date.today()
                 )
 
-                hora_inicio = st.time_input("?%s Horário de Início")
+                hora_inicio = st.time_input("🕐 Horário de Início")
 
             with col2:
-                hora_fim = st.time_input("?%s Horário de Fim")
+                hora_fim = st.time_input("🕕 Horário de Fim")
 
                 # Calcular horas automaticamente
                 if hora_inicio and hora_fim:
@@ -796,10 +810,10 @@ def horas_extras_interface(horas_extras_system):
 
                     total_horas = (fim_dt - inicio_dt).total_seconds() / 3600
                     st.info(
-                        f"?%s Total de horas: {format_time_duration(total_horas)}")
+                        f"⏱️ Total de horas: {format_time_duration(total_horas)}")
 
             justificativa = st.text_area(
-                "?%s Justificativa",
+                "📝 Justificativa",
                 placeholder="Explique o motivo das horas extras..."
             )
 
@@ -809,22 +823,22 @@ def horas_extras_interface(horas_extras_system):
                 f"{a['nome']} ({a['usuario']})" for a in aprovadores if a['usuario'] != st.session_state.usuario]
 
             aprovador_selecionado = st.selectbox(
-                "?%s Selecionar Aprovador",
+                "👤 Selecionar Aprovador",
                 aprovadores_opcoes,
                 help="Escolha quem deve aprovar suas horas extras"
             )
 
             submitted = st.form_submit_button(
-                "%s Enviar Solicitação", use_container_width=True)
+                "✅ Enviar Solicitação", use_container_width=True)
 
             if submitted:
                 if not justificativa.strip():
-                    st.error("%s A justificativa é obrigatória")
+                    st.error("❌ A justificativa é obrigatória")
                 elif hora_inicio >= hora_fim:
                     st.error(
-                        "%s Horário de início deve ser anterior ao horário de fim")
+                        "❌ Horário de início deve ser anterior ao horário de fim")
                 elif not aprovador_selecionado:
-                    st.error("%s Selecione um aprovador")
+                    st.error("❌ Selecione um aprovador")
                 else:
                     # Extrair usuário do aprovador selecionado
                     aprovador_usuario = aprovador_selecionado.split(
@@ -840,15 +854,15 @@ def horas_extras_interface(horas_extras_system):
                     )
 
                     if resultado["success"]:
-                        st.success(f"%s {resultado['message']}")
+                        st.success(f"✅ {resultado['message']}")
                         st.info(
-                            f"?%s Total de horas solicitadas: {format_time_duration(resultado['total_horas'])}")
+                            f"⏱️ Total de horas solicitadas: {format_time_duration(resultado['total_horas'])}")
                         st.rerun()
                     else:
-                        st.error(f"%s {resultado['message']}")
+                        st.error(f"❌ {resultado['message']}")
 
     with tab2:
-        st.subheader("?%s Minhas Solicitações de Horas Extras")
+        st.subheader("📋 Minhas Solicitações de Horas Extras")
 
         # Filtros
         col1, col2 = st.columns(2)
@@ -902,14 +916,14 @@ def horas_extras_interface(horas_extras_system):
                         st.write(
                             f"**Observações:** {solicitacao['observacoes']}")
         else:
-            st.info("?%s Nenhuma solicitação de horas extras encontrada")
+            st.info("📋 Nenhuma solicitação de horas extras encontrada")
 
 
 def banco_horas_funcionario_interface(banco_horas_system):
     """Interface do banco de horas para funcionários"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Meu Banco de Horas</h3>
+        <h3>🏦 Meu Banco de Horas</h3>
         <p>Acompanhe seu saldo de horas trabalhadas</p>
     </div>
     """, unsafe_allow_html=True)
@@ -920,19 +934,19 @@ def banco_horas_funcionario_interface(banco_horas_system):
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("?%s Saldo Atual", format_saldo_display(saldo_atual))
+        st.metric("💰 Saldo Atual", format_saldo_display(saldo_atual))
     with col2:
-        st.metric("?%s Período", "Ano Atual")
+        st.metric("📅 Período", "Ano Atual")
     with col3:
         if saldo_atual > 0:
-            st.success("%s Saldo Positivo")
+            st.success("✅ Saldo Positivo")
         elif saldo_atual < 0:
-            st.error("%s Saldo Negativo")
+            st.error("❌ Saldo Negativo")
         else:
-            st.info("?%s Saldo Zerado")
+            st.info("⚖️ Saldo Zerado")
 
     # Filtros para extrato
-    st.subheader("?%s Extrato Detalhado")
+    st.subheader("📊 Extrato Detalhado")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -957,11 +971,11 @@ def banco_horas_funcionario_interface(banco_horas_system):
 
         col1, col2, col3 = st.columns(3)
         with col1:
-            st.metric("%s Créditos", format_time_duration(total_creditos))
+            st.metric("➕ Créditos", format_time_duration(total_creditos))
         with col2:
-            st.metric("%s Débitos", format_time_duration(total_debitos))
+            st.metric("➖ Débitos", format_time_duration(total_debitos))
         with col3:
-            st.metric("?%s Saldo Período", format_saldo_display(saldo_periodo))
+            st.metric("💰 Saldo Período", format_saldo_display(saldo_periodo))
 
         # Tabela do extrato
         df_extrato = pd.DataFrame(resultado["extrato"])
@@ -981,27 +995,27 @@ def banco_horas_funcionario_interface(banco_horas_system):
         )
 
         # Botão de exportação
-        if st.button("?%s Exportar Extrato"):
+        if st.button("📊 Exportar Extrato"):
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df_extrato.to_excel(
                     writer, sheet_name='Banco_Horas', index=False)
 
             st.download_button(
-                label="?%s Download Excel",
+                label="💾 Download Excel",
                 data=output.getvalue(),
                 file_name=f"banco_horas_{st.session_state.usuario}_{data_inicio}_{data_fim}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
     else:
-        st.info("?%s Nenhuma movimentação encontrada no período selecionado")
+        st.info("📋 Nenhuma movimentação encontrada no período selecionado")
 
 
 def notificacoes_interface(horas_extras_system):
     """Interface de notificações para aprovações pendentes"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Notificações</h3>
+        <h3>🔔 Notificações</h3>
         <p>Solicitações de horas extras aguardando sua aprovação</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1012,10 +1026,10 @@ def notificacoes_interface(horas_extras_system):
 
     if solicitacoes_pendentes:
         st.warning(
-            f"?%s Você tem {len(solicitacoes_pendentes)} solicitação(ões) de horas extras aguardando aprovação!")
+            f"⚠️ Você tem {len(solicitacoes_pendentes)} solicitação(ões) de horas extras aguardando aprovação!")
 
         for solicitacao in solicitacoes_pendentes:
-            with st.expander(f"%s {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
+            with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
                 col1, col2 = st.columns([2, 1])
 
                 with col1:
@@ -1034,20 +1048,20 @@ def notificacoes_interface(horas_extras_system):
 
                     col_aprovar, col_rejeitar = st.columns(2)
                     with col_aprovar:
-                        if st.button("%s Aprovar", key=f"aprovar_notif_{solicitacao['id']}"):
+                        if st.button("✅ Aprovar", key=f"aprovar_notif_{solicitacao['id']}"):
                             resultado = horas_extras_system.aprovar_solicitacao(
                                 solicitacao['id'],
                                 st.session_state.usuario,
                                 observacoes
                             )
                             if resultado["success"]:
-                                st.success("%s Solicitação aprovada!")
+                                st.success("✅ Solicitação aprovada!")
                                 st.rerun()
                             else:
-                                st.error(f"%s {resultado['message']}")
+                                st.error(f"❌ {resultado['message']}")
 
                     with col_rejeitar:
-                        if st.button("%s Rejeitar", key=f"rejeitar_notif_{solicitacao['id']}", type="secondary"):
+                        if st.button("❌ Rejeitar", key=f"rejeitar_notif_{solicitacao['id']}", type="secondary"):
                             if observacoes.strip():
                                 resultado = horas_extras_system.rejeitar_solicitacao(
                                     solicitacao['id'],
@@ -1055,15 +1069,15 @@ def notificacoes_interface(horas_extras_system):
                                     observacoes
                                 )
                                 if resultado["success"]:
-                                    st.success("%s Solicitação rejeitada!")
+                                    st.success("❌ Solicitação rejeitada!")
                                     st.rerun()
                                 else:
-                                    st.error(f"%s {resultado['message']}")
+                                    st.error(f"❌ {resultado['message']}")
                             else:
                                 st.warning(
-                                    "?%s Observações são obrigatórias para rejeição")
+                                    "⚠️ Observações são obrigatórias para rejeição")
     else:
-        st.info("?%s Nenhuma solicitação de horas extras aguardando sua aprovação")
+        st.info("📋 Nenhuma solicitação de horas extras aguardando sua aprovação")
 
 # Continuar com as outras interfaces...
 
@@ -1072,7 +1086,7 @@ def registrar_ausencia_interface(upload_system):
     """Interface para registrar ausências com opção 'não tenho comprovante'"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Registrar Ausência</h3>
+        <h3>🏥 Registrar Ausência</h3>
         <p>Registre faltas, férias, atestados e outras ausências</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1081,31 +1095,31 @@ def registrar_ausencia_interface(upload_system):
         col1, col2 = st.columns(2)
 
         with col1:
-            data_inicio = st.date_input("?%s Data de Início")
+            data_inicio = st.date_input("📅 Data de Início")
             tipo_ausencia = st.selectbox(
-                "?%s Tipo de Ausência",
+                "📋 Tipo de Ausência",
                 ["Atestado Médico", "Falta Justificada",
                     "Férias", "Licença", "Outros"]
             )
 
         with col2:
-            data_fim = st.date_input("?%s Data de Fim", value=data_inicio)
+            data_fim = st.date_input("📅 Data de Fim", value=data_inicio)
 
-        motivo = st.text_area("?%s Motivo da Ausência",
+        motivo = st.text_area("📝 Motivo da Ausência",
                               placeholder="Descreva o motivo da ausência...")
 
         # Removido: opção de não possuir comprovante e upload (será tratado via Atestado)
         uploaded_file = None
 
         submitted = st.form_submit_button(
-            "%s Registrar Ausência", use_container_width=True)
+            "✅ Registrar Ausência", use_container_width=True)
 
         if submitted:
             if not motivo.strip():
-                st.error("%s O motivo é obrigatório")
+                st.error("❌ O motivo é obrigatório")
             elif data_inicio > data_fim:
                 st.error(
-                    "%s Data de início deve ser anterior ou igual à data de fim")
+                    "❌ Data de início deve ser anterior ou igual à data de fim")
             else:
                 arquivo_comprovante = None
 
@@ -1135,16 +1149,16 @@ def registrar_ausencia_interface(upload_system):
                     ))
 
                     conn.commit()
-                    st.success("%s Ausência registrada com sucesso!")
+                    st.success("✅ Ausência registrada com sucesso!")
 
                     if nao_possui_comprovante:
                         st.info(
-                            "?%s Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
+                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
 
                     st.rerun()
 
                 except Exception as e:
-                    st.error(f"%s Erro ao registrar ausência: {str(e)}")
+                    st.error(f"❌ Erro ao registrar ausência: {str(e)}")
                 finally:
                     conn.close()
 
@@ -1154,30 +1168,30 @@ def atestado_horas_interface(atestado_system, upload_system):
     try:
         st.markdown("""
         <div class="feature-card">
-            <h3>%s Atestado de Horas</h3>
+            <h3>⏰ Atestado de Horas</h3>
             <p>Registre ausências parciais com horários específicos</p>
         </div>
         """, unsafe_allow_html=True)
 
-        tab1, tab2 = st.tabs(["?%s Novo Atestado", "?%s Meus Atestados"])
+        tab1, tab2 = st.tabs(["📝 Novo Atestado", "📋 Meus Atestados"])
 
         with tab1:
-            st.subheader("?%s Registrar Novo Atestado de Horas")
+            st.subheader("📝 Registrar Novo Atestado de Horas")
 
             with st.form("atestado_horas_form"):
                 col1, col2 = st.columns(2)
 
                 with col1:
                     data_atestado = st.date_input(
-                        "?%s Data da Ausência",
+                        "📅 Data da Ausência",
                         value=date.today(),
                         max_value=date.today() + timedelta(days=3)
                     )
 
-                    hora_inicio = st.time_input("?%s Horário de Início da Ausência")
+                    hora_inicio = st.time_input("🕐 Horário de Início da Ausência")
 
                 with col2:
-                    hora_fim = st.time_input("?%s Horário de Fim da Ausência")
+                    hora_fim = st.time_input("🕕 Horário de Fim da Ausência")
 
                     # Calcular horas automaticamente
                     if hora_inicio and hora_fim:
@@ -1186,13 +1200,13 @@ def atestado_horas_interface(atestado_system, upload_system):
                             hora_fim.strftime("%H:%M")
                         )
                         st.info(
-                            f"?%s Total de horas: {format_time_duration(total_horas)}")
+                            f"⏱️ Total de horas: {format_time_duration(total_horas)}")
 
-                    motivo = st.text_area("?%s Motivo da Ausência",
+                    motivo = st.text_area("📝 Motivo da Ausência",
                                           placeholder="Descreva o motivo da ausência...")
 
                     # Upload de comprovante (opcional)
-                    st.markdown("?%s **Comprovante (Opcional)**")
+                    st.markdown("📎 **Comprovante (Opcional)**")
                     uploaded_file = st.file_uploader(
                         "Anexe um comprovante (atestado médico, declaração, etc.)",
                         type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
@@ -1200,20 +1214,20 @@ def atestado_horas_interface(atestado_system, upload_system):
                     )
 
                     submitted = st.form_submit_button(
-                        "%s Registrar Atestado", use_container_width=True)
+                        "✅ Registrar Atestado", use_container_width=True)
 
                 if submitted:
                     if not motivo.strip():
-                        st.error("%s O motivo é obrigatório")
+                        st.error("❌ O motivo é obrigatório")
                     elif hora_inicio >= hora_fim:
                         st.error(
-                            "%s Horário de início deve ser anterior ao horário de fim")
+                            "❌ Horário de início deve ser anterior ao horário de fim")
                     else:
                         arquivo_comprovante = None
 
                         # Checkbox para indicar que não possui atestado físico
                         nao_possui_comprovante = st.checkbox(
-                            "%s Não possuo atestado físico",
+                            "❌ Não possuo atestado físico",
                             help="Marque se não houver documento a anexar"
                         )
 
@@ -1226,7 +1240,7 @@ def atestado_horas_interface(atestado_system, upload_system):
                         if nao_possui_comprovante:
                             # Aviso visível ao usuário quando opta por não anexar o atestado físico.
                             st.warning(
-                                "?%s Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
+                                "⚠️ Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
                             uploaded_file = None
 
                         # Processar upload se houver e se não marcou nao_possui_comprovante
@@ -1241,10 +1255,10 @@ def atestado_horas_interface(atestado_system, upload_system):
                             if upload_result["success"]:
                                 arquivo_comprovante = upload_result["filename"]
                                 st.success(
-                                    f"?%s Arquivo enviado: {uploaded_file.name}")
+                                    f"📎 Arquivo enviado: {uploaded_file.name}")
                             else:
                                 st.error(
-                                    f"%s Erro no upload: {upload_result['message']}")
+                                    f"❌ Erro no upload: {upload_result['message']}")
 
                         # Registrar atestado
                         resultado = atestado_system.registrar_atestado_horas(
@@ -1259,15 +1273,15 @@ def atestado_horas_interface(atestado_system, upload_system):
                         )
 
                         if resultado["success"]:
-                            st.success(f"%s {resultado['message']}")
+                            st.success(f"✅ {resultado['message']}")
                             st.info(
-                                f"?%s Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                                f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
                             st.rerun()
                         else:
-                            st.error(f"%s {resultado['message']}")
+                            st.error(f"❌ {resultado['message']}")
 
         with tab2:
-            st.subheader("?%s Meus Atestados de Horas")
+            st.subheader("📋 Meus Atestados de Horas")
 
             # Filtros
             col1, col2, col3 = st.columns(3)
@@ -1319,11 +1333,11 @@ def atestado_horas_interface(atestado_system, upload_system):
 
                         if atestado['arquivo_comprovante']:
                             st.write(
-                                f"?%s **Comprovante:** {atestado['arquivo_comprovante']}")
+                                f"📎 **Comprovante:** {atestado['arquivo_comprovante']}")
             else:
-                st.info("?%s Nenhum atestado de horas encontrado no período selecionado")
+                st.info("📋 Nenhum atestado de horas encontrado no período selecionado")
     except Exception as e:
-        st.error(f"%s Erro na página de atestado de horas: {str(e)}")
+        st.error(f"❌ Erro na página de atestado de horas: {str(e)}")
         st.code(str(e))
 
 
@@ -1331,7 +1345,7 @@ def corrigir_registros_interface():
     """Interface para gestores corrigirem registros de ponto dos funcionários"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Corrigir Registros de Ponto</h3>
+        <h3>🔧 Corrigir Registros de Ponto</h3>
         <p>Edite registros de ponto dos funcionários quando necessário</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1339,7 +1353,7 @@ def corrigir_registros_interface():
     # Selecionar funcionário
     usuarios = obter_usuarios_ativos()
     usuario_selecionado = st.selectbox(
-        "?%s Selecione o Funcionário",
+        "👤 Selecione o Funcionário",
         [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios]
     )
 
@@ -1348,7 +1362,7 @@ def corrigir_registros_interface():
 
         # Selecionar data
         data_corrigir = st.date_input(
-            "?%s Data do Registro",
+            "📅 Data do Registro",
             value=date.today(),
             max_value=date.today()
         )
@@ -1357,10 +1371,10 @@ def corrigir_registros_interface():
         registros = buscar_registros_dia(usuario, data_corrigir.strftime("%Y-%m-%d"))
 
         if registros:
-            st.subheader(f"?%s Registros de {data_corrigir.strftime('%d/%m/%Y')}")
+            st.subheader(f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
             for registro in registros:
-                with st.expander(f"%s {registro['data_hora']} - {registro['tipo']}"):
+                with st.expander(f"⏰ {registro['data_hora']} - {registro['tipo']}"):
                     col1, col2 = st.columns(2)
 
                     with col1:
@@ -1400,11 +1414,11 @@ def corrigir_registros_interface():
                                 placeholder="Explique o motivo da correção..."
                             )
 
-                            submitted = st.form_submit_button("?%s Salvar Correção")
+                            submitted = st.form_submit_button("💾 Salvar Correção")
 
                             if submitted:
                                 if not justificativa_edicao.strip():
-                                    st.error("%s Justificativa obrigatória para correções")
+                                    st.error("❌ Justificativa obrigatória para correções")
                                 else:
                                     resultado = corrigir_registro_ponto(
                                         registro['id'],
@@ -1417,19 +1431,19 @@ def corrigir_registros_interface():
                                     )
 
                                     if resultado["success"]:
-                                        st.success(f"%s {resultado['message']}")
+                                        st.success(f"✅ {resultado['message']}")
                                         st.rerun()
                                     else:
-                                        st.error(f"%s {resultado['message']}")
+                                        st.error(f"❌ {resultado['message']}")
         else:
-            st.info(f"?%s Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
+            st.info(f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
 
 
 def meus_registros_interface(calculo_horas_system):
     """Interface para visualizar registros com cálculos"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Meus Registros</h3>
+        <h3>📋 Meus Registros</h3>
         <p>Visualize seu histórico de registros de ponto com cálculos de horas</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1455,15 +1469,15 @@ def meus_registros_interface(calculo_horas_system):
     # Métricas do período
     col1, col2, col3, col4 = st.columns(4)
     with col1:
-        st.metric("?%s Total de Horas", format_time_duration(
+        st.metric("⏱️ Total de Horas", format_time_duration(
             calculo_periodo["total_horas"]))
     with col2:
-        st.metric("?%s Dias Trabalhados", calculo_periodo["dias_trabalhados"])
+        st.metric("📅 Dias Trabalhados", calculo_periodo["dias_trabalhados"])
     with col3:
-        st.metric("?%s Horas Normais", format_time_duration(
+        st.metric("🌞 Horas Normais", format_time_duration(
             calculo_periodo["total_horas_normais"]))
     with col4:
-        st.metric("?%s Dom/Feriados",
+        st.metric("🎯 Dom/Feriados",
                   format_time_duration(calculo_periodo["total_domingos_feriados"]))
 
     # Buscar registros
@@ -1494,26 +1508,26 @@ def meus_registros_interface(calculo_horas_system):
         )
 
         # Botão de exportação
-        if st.button("?%s Exportar para Excel"):
+        if st.button("📊 Exportar para Excel"):
             output = BytesIO()
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='Registros', index=False)
 
             st.download_button(
-                label="?%s Download Excel",
+                label="💾 Download Excel",
                 data=output.getvalue(),
                 file_name=f"registros_{st.session_state.usuario}_{data_inicio}_{data_fim}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
     else:
-        st.info("?%s Nenhum registro encontrado no período selecionado")
+        st.info("📋 Nenhum registro encontrado no período selecionado")
 
 
 def meus_arquivos_interface(upload_system):
     """Interface para gerenciar arquivos do usuário"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Meus Arquivos</h3>
+        <h3>📁 Meus Arquivos</h3>
         <p>Gerencie seus documentos e comprovantes</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1525,11 +1539,11 @@ def meus_arquivos_interface(upload_system):
 
     col1, col2, col3 = st.columns(3)
     with col1:
-        st.metric("?%s Total de Arquivos", total_files)
+        st.metric("📄 Total de Arquivos", total_files)
     with col2:
-        st.metric("?%s Espaço Usado", format_file_size(total_size))
+        st.metric("💾 Espaço Usado", format_file_size(total_size))
     with col3:
-        st.metric("?%s Limite", "10MB por arquivo")
+        st.metric("📊 Limite", "10MB por arquivo")
 
     # Filtros
     col1, col2 = st.columns(2)
@@ -1570,28 +1584,28 @@ def meus_arquivos_interface(upload_system):
                     st.write(f"**Tipo:** {upload['tipo_arquivo']}")
 
                 with col2:
-                    if st.button(f"?%s Download", key=f"download_{upload['id']}"):
+                    if st.button(f"📥 Download", key=f"download_{upload['id']}"):
                         content, file_info = upload_system.get_file_content(
                             upload['id'], st.session_state.usuario)
                         if content:
                             st.download_button(
-                                label="?%s Baixar Arquivo",
+                                label="💾 Baixar Arquivo",
                                 data=content,
                                 file_name=file_info['nome_original'],
                                 mime=file_info['tipo_arquivo']
                             )
                         else:
-                            st.error("%s Erro ao baixar arquivo")
+                            st.error("❌ Erro ao baixar arquivo")
 
                 with col3:
-                    if st.button(f"??%s Excluir", key=f"delete_{upload['id']}"):
+                    if st.button(f"🗑️ Excluir", key=f"delete_{upload['id']}"):
                         resultado = upload_system.delete_file(
                             upload['id'], st.session_state.usuario)
                         if resultado["success"]:
-                            st.success("%s Arquivo excluído")
+                            st.success("✅ Arquivo excluído")
                             st.rerun()
                         else:
-                            st.error(f"%s {resultado['message']}")
+                            st.error(f"❌ {resultado['message']}")
 
                 # Preview para imagens
                 if is_image_file(upload['tipo_arquivo']):
@@ -1601,7 +1615,7 @@ def meus_arquivos_interface(upload_system):
                         st.image(
                             content, caption=upload['nome_original'], width=300)
     else:
-        st.info("?%s Nenhum arquivo encontrado")
+        st.info("📁 Nenhum arquivo encontrado")
 
 # Interface do gestor (simplificada - pode ser expandida)
 
@@ -1617,72 +1631,72 @@ def tela_gestor():
     if notificacoes_pendentes:
         for notificacao in notificacoes_pendentes:
             with st.container():
-                st.warning(f"?%s {notificacao['title']}: {notificacao['message']}")
+                st.warning(f"🔔 {notificacao['title']}: {notificacao['message']}")
                 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("%s Responder", key=f"responder_{notificacao['solicitacao_id']}"):
+                    if st.button("✅ Responder", key=f"responder_{notificacao['solicitacao_id']}"):
                         # Redirecionar para a tela de aprovação
-                        st.session_state.pagina_atual = "?%s Aprovar Horas Extras"
+                        st.session_state.pagina_atual = "🕐 Aprovar Horas Extras"
                         st.rerun()
                 
                 with col2:
-                    if st.button("%s Lembrar Depois", key=f"lembrar_{notificacao['solicitacao_id']}"):
+                    if st.button("⏰ Lembrar Depois", key=f"lembrar_{notificacao['solicitacao_id']}"):
                         # Manter notificação ativa
                         pass
 
     # Header
     st.markdown(f"""
     <div class="main-header">
-        <div class="user-welcome">?%s Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Gestor  {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-welcome">👑 Olá, {st.session_state.nome_completo}</div>
+        <div class="user-info">Gestor • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
     # Menu lateral
     with st.sidebar:
-        st.markdown("### %s?%s Menu do Gestor")
+        st.markdown("### 🎛️ Menu do Gestor")
         opcao = st.selectbox(
             "Escolha uma opção:",
             [
-                "?%s Dashboard",
-                "?%s Todos os Registros",
-                "%s Aprovar Atestados",
-                "?%s Aprovar Horas Extras",
-                "?%s Banco de Horas Geral",
-                "?%s Gerenciar Arquivos",
-                "?%s Gerenciar Projetos",
-                "?%s Gerenciar Usuários",
-                "?%s Corrigir Registros",
-                "?%s Sistema"
+                "📊 Dashboard",
+                "👥 Todos os Registros",
+                "✅ Aprovar Atestados",
+                "🕐 Aprovar Horas Extras",
+                "🏦 Banco de Horas Geral",
+                "📁 Gerenciar Arquivos",
+                "🏢 Gerenciar Projetos",
+                "👤 Gerenciar Usuários",
+                "🔧 Corrigir Registros",
+                "⚙️ Sistema"
             ]
         )
 
-        if st.button("?%s Sair", use_container_width=True):
+        if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
 
     # Conteúdo baseado na opção
-    if opcao == "?%s Dashboard":
+    if opcao == "📊 Dashboard":
         dashboard_gestor(banco_horas_system, calculo_horas_system)
-    elif opcao == "?%s Todos os Registros":
+    elif opcao == "👥 Todos os Registros":
         todos_registros_interface(calculo_horas_system)
-    elif opcao == "%s Aprovar Atestados":
+    elif opcao == "✅ Aprovar Atestados":
         aprovar_atestados_interface(atestado_system)
-    elif opcao == "?%s Aprovar Horas Extras":
+    elif opcao == "🕐 Aprovar Horas Extras":
         aprovar_horas_extras_interface(horas_extras_system)
-    elif opcao == "?%s Banco de Horas Geral":
+    elif opcao == "🏦 Banco de Horas Geral":
         banco_horas_gestor_interface(banco_horas_system)
-    elif opcao == "%s Corrigir Registros":
+    elif opcao == "� Corrigir Registros":
         corrigir_registros_interface()
-    elif opcao == "??%s Gerenciar Arquivos":
+    elif opcao == "�📁 Gerenciar Arquivos":
         gerenciar_arquivos_interface(upload_system)
-    elif opcao == "?%s Gerenciar Projetos":
+    elif opcao == "🏢 Gerenciar Projetos":
         gerenciar_projetos_interface()
-    elif opcao == "?%s Gerenciar Usuários":
+    elif opcao == "👤 Gerenciar Usuários":
         gerenciar_usuarios_interface()
-    elif opcao == "?%s Sistema":
+    elif opcao == "⚙️ Sistema":
         sistema_interface()
 
 
@@ -1690,59 +1704,89 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     """Dashboard principal do gestor com destaque para discrepâncias"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Dashboard Executivo</h3>
+        <h3>📊 Dashboard Executivo</h3>
         <p>Visão geral do sistema de ponto com alertas</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Métricas gerais
+    # Métricas gerais com tratamento robusto de erros
     conn = get_connection()
     cursor = conn.cursor()
 
     # Total de usuários ativos
-    cursor.execute(
-        "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
-    total_usuarios = cursor.fetchone()[0]
+    total_usuarios = 0
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
+        resultado = cursor.fetchone()
+        if resultado:
+            total_usuarios = resultado[0]
+    except Exception as e:
+        st.error(f"Erro ao buscar total de usuários: {e}")
 
     # Registros hoje
-    hoje = date.today().strftime("%Y-%m-%d")
-    cursor.execute(
-        "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s", (hoje,))
-    registros_hoje = cursor.fetchone()[0]
+    registros_hoje = 0
+    try:
+        hoje = date.today().strftime("%Y-%m-%d")
+        cursor.execute(
+            "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s", (hoje,))
+        resultado = cursor.fetchone()
+        if resultado:
+            registros_hoje = resultado[0]
+    except Exception as e:
+        st.error(f"Erro ao buscar registros de hoje: {e}")
 
     # Ausências pendentes
-    cursor.execute("SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
-    ausencias_pendentes = cursor.fetchone()[0]
+    ausencias_pendentes = 0
+    try:
+        cursor.execute("SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
+        resultado = cursor.fetchone()
+        if resultado:
+            ausencias_pendentes = resultado[0]
+    except Exception as e:
+        st.error(f"Erro ao buscar ausências pendentes: {e}")
 
-    # Horas extras pendentes
-    cursor.execute(
-        "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
-    resultado = cursor.fetchone()`n        if resultado:`n            horas_extras_pendentes = resultado[0]
+    # Horas extras pendentes - corrigido
+    horas_extras_pendentes = 0
+    try:
+        cursor.execute(
+            "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
+        resultado = cursor.fetchone()
+        if resultado:
+            horas_extras_pendentes = resultado[0]
+    except Exception as e:
+        st.error(f"Erro ao buscar horas extras pendentes: {e}")
 
     # Atestados do mês
-    primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
-    cursor.execute("""
-        SELECT COUNT(*) FROM ausencias 
-        WHERE data_inicio >= %s AND tipo LIKE '%Atestado%'
-    """, (primeiro_dia_mes,))
-    resultado = cursor.fetchone()`n    if resultado:`n        atestados_mes = resultado[0]
+    atestados_mes = 0
+    try:
+        primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+        cursor.execute("""
+            SELECT COUNT(*) FROM ausencias 
+            WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
+        """, (primeiro_dia_mes,))
+        resultado = cursor.fetchone()
+        if resultado:
+            atestados_mes = resultado[0]
+    except Exception as e:
+        st.error(f"Erro ao buscar atestados do mês: {e}")
 
     conn.close()
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
-        st.metric("?%s Funcionários", total_usuarios)
+        st.metric("👥 Funcionários", total_usuarios)
     with col2:
-        st.metric("?%s Registros Hoje", registros_hoje)
+        st.metric("📊 Registros Hoje", registros_hoje)
     with col3:
-        st.metric("%s Ausências Pendentes", ausencias_pendentes)
+        st.metric("⏳ Ausências Pendentes", ausencias_pendentes)
     with col4:
-        st.metric("?%s Horas Extras Pendentes", horas_extras_pendentes)
+        st.metric("🕐 Horas Extras Pendentes", horas_extras_pendentes)
     with col5:
-        st.metric("?%s Atestados do Mês", atestados_mes)
+        st.metric("🏥 Atestados do Mês", atestados_mes)
 
     # Destaque para horários discrepantes
-    st.subheader("?%s Alertas de Discrepâncias (>15 min)")
+    st.subheader("⚠️ Alertas de Discrepâncias (>15 min)")
 
     # Buscar registros de hoje com possíveis discrepâncias
     registros_hoje_detalhados = obter_registros_usuario(
@@ -1806,22 +1850,22 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
             with st.container():
                 st.markdown(f"""
                 <div class="discrepancia-alta">
-                    <strong>?%s {disc['usuario']}</strong><br>
-                    %s%s Entrada: {disc['inicio_real']} (previsto: {disc['inicio_previsto']}) - 
+                    <strong>👤 {disc['usuario']}</strong><br>
+                    🕐 Entrada: {disc['inicio_real']} (previsto: {disc['inicio_previsto']}) - 
                     Diferença: {abs(disc['diff_inicio']):.0f} min {'(atraso)' if disc['diff_inicio'] > 0 else '(antecipado)'}<br>
-                    %s%s Saída: {disc['fim_real']} (previsto: {disc['fim_previsto']}) - 
+                    🕕 Saída: {disc['fim_real']} (previsto: {disc['fim_previsto']}) - 
                     Diferença: {abs(disc['diff_fim']):.0f} min {'(antecipado)' if disc['diff_fim'] > 0 else '(tardio)'}
                 </div>
                 """, unsafe_allow_html=True)
     else:
-        st.success("%s Nenhuma discrepância significativa detectada hoje!")
+        st.success("✅ Nenhuma discrepância significativa detectada hoje!")
 
 
 def banco_horas_gestor_interface(banco_horas_system):
     """Interface do banco de horas para gestores"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Banco de Horas Geral</h3>
+        <h3>🏦 Banco de Horas Geral</h3>
         <p>Visão geral do saldo de horas de todos os funcionários</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1842,18 +1886,18 @@ def banco_horas_gestor_interface(banco_horas_system):
 
         col1, col2, col3, col4 = st.columns(4)
         with col1:
-            st.metric("%s Saldo Positivo Total",
+            st.metric("➕ Saldo Positivo Total",
                       format_time_duration(total_positivo))
         with col2:
-            st.metric("%s Saldo Negativo Total",
+            st.metric("➖ Saldo Negativo Total",
                       format_time_duration(abs(total_negativo)))
         with col3:
-            st.metric("%s Usuários com Saldo +", usuarios_positivos)
+            st.metric("✅ Usuários com Saldo +", usuarios_positivos)
         with col4:
-            st.metric("%s Usuários com Saldo -", usuarios_negativos)
+            st.metric("❌ Usuários com Saldo -", usuarios_negativos)
 
         # Tabela de saldos
-        st.subheader("?%s Saldos por Funcionário")
+        st.subheader("📊 Saldos por Funcionário")
 
         df_saldos = pd.DataFrame(saldos_usuarios)
         df_saldos["Saldo Formatado"] = df_saldos["saldo"].apply(
@@ -1872,7 +1916,7 @@ def banco_horas_gestor_interface(banco_horas_system):
         )
 
         # Filtros para extrato detalhado
-        st.subheader("?%s Extrato Detalhado por Funcionário")
+        st.subheader("🔍 Extrato Detalhado por Funcionário")
 
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -1906,12 +1950,12 @@ def banco_horas_gestor_interface(banco_horas_system):
 
                 col1, col2, col3 = st.columns(3)
                 with col1:
-                    st.metric("%s Créditos",
+                    st.metric("➕ Créditos",
                               format_time_duration(total_creditos))
                 with col2:
-                    st.metric("%s Débitos", format_time_duration(total_debitos))
+                    st.metric("➖ Débitos", format_time_duration(total_debitos))
                 with col3:
-                    st.metric("?%s Saldo Período",
+                    st.metric("💰 Saldo Período",
                               format_saldo_display(saldo_periodo))
 
                 # Tabela do extrato
@@ -1931,16 +1975,16 @@ def banco_horas_gestor_interface(banco_horas_system):
                     use_container_width=True
                 )
             else:
-                st.info("?%s Nenhuma movimentação encontrada no período selecionado")
+                st.info("📋 Nenhuma movimentação encontrada no período selecionado")
     else:
-        st.info("?%s Nenhum funcionário encontrado")
+        st.info("👥 Nenhum funcionário encontrado")
 
 
 def aprovar_horas_extras_interface(horas_extras_system):
     """Interface para aprovar horas extras (para gestores)"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Aprovar Horas Extras</h3>
+        <h3>🕐 Aprovar Horas Extras</h3>
         <p>Gerencie aprovações de solicitações de horas extras</p>
     </div>
     """, unsafe_allow_html=True)
@@ -1958,7 +2002,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
 
     if solicitacoes:
         st.warning(
-            f"?%s {len(solicitacoes)} solicitação(ões) de horas extras aguardando aprovação!")
+            f"⚠️ {len(solicitacoes)} solicitação(ões) de horas extras aguardando aprovação!")
 
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'justificativa',
                    'aprovador_solicitado', 'status', 'data_solicitacao', 'aprovado_por',
@@ -1967,7 +2011,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
         for solicitacao_raw in solicitacoes:
             solicitacao = dict(zip(colunas, solicitacao_raw))
 
-            with st.expander(f"%s {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
+            with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
                 col1, col2 = st.columns([2, 1])
 
                 with col1:
@@ -1988,20 +2032,20 @@ def aprovar_horas_extras_interface(horas_extras_system):
 
                     col_aprovar, col_rejeitar = st.columns(2)
                     with col_aprovar:
-                        if st.button("%s Aprovar", key=f"aprovar_gestor_{solicitacao['id']}"):
+                        if st.button("✅ Aprovar", key=f"aprovar_gestor_{solicitacao['id']}"):
                             resultado = horas_extras_system.aprovar_solicitacao(
                                 solicitacao['id'],
                                 st.session_state.usuario,
                                 observacoes
                             )
                             if resultado["success"]:
-                                st.success("%s Solicitação aprovada!")
+                                st.success("✅ Solicitação aprovada!")
                                 st.rerun()
                             else:
-                                st.error(f"%s {resultado['message']}")
+                                st.error(f"❌ {resultado['message']}")
 
                     with col_rejeitar:
-                        if st.button("%s Rejeitar", key=f"rejeitar_gestor_{solicitacao['id']}", type="secondary"):
+                        if st.button("❌ Rejeitar", key=f"rejeitar_gestor_{solicitacao['id']}", type="secondary"):
                             if observacoes.strip():
                                 resultado = horas_extras_system.rejeitar_solicitacao(
                                     solicitacao['id'],
@@ -2009,15 +2053,15 @@ def aprovar_horas_extras_interface(horas_extras_system):
                                     observacoes
                                 )
                                 if resultado["success"]:
-                                    st.success("%s Solicitação rejeitada!")
+                                    st.success("❌ Solicitação rejeitada!")
                                     st.rerun()
                                 else:
-                                    st.error(f"%s {resultado['message']}")
+                                    st.error(f"❌ {resultado['message']}")
                             else:
                                 st.warning(
-                                    "?%s Observações são obrigatórias para rejeição")
+                                    "⚠️ Observações são obrigatórias para rejeição")
     else:
-        st.info("?%s Nenhuma solicitação de horas extras aguardando aprovação")
+        st.info("📋 Nenhuma solicitação de horas extras aguardando aprovação")
 
 # Outras interfaces do gestor (simplificadas)
 
@@ -2026,21 +2070,21 @@ def aprovar_atestados_interface(atestado_system):
     """Interface para aprovar atestados de horas"""
     st.markdown("""
     <div class="feature-card">
-        <h3>%s Aprovar Atestados de Horas</h3>
+        <h3>✅ Aprovar Atestados de Horas</h3>
         <p>Gerencie solicitações de atestados de horas dos funcionários</p>
     </div>
     """, unsafe_allow_html=True)
 
     # Abas para diferentes status
     tab1, tab2, tab3, tab4 = st.tabs([
-        "%s Pendentes",
-        "%s Aprovados",
-        "%s Rejeitados",
-        "?%s Todos"
+        "⏳ Pendentes",
+        "✅ Aprovados",
+        "❌ Rejeitados",
+        "📊 Todos"
     ])
 
     with tab1:
-        st.markdown("### %s Solicitações Pendentes de Aprovação")
+        st.markdown("### ⏳ Solicitações Pendentes de Aprovação")
 
         # Buscar atestados pendentes
         conn = get_connection()
@@ -2059,12 +2103,12 @@ def aprovar_atestados_interface(atestado_system):
         conn.close()
 
         if pendentes:
-            st.info(f"?%s {len(pendentes)} solicitação(ões) aguardando aprovação")
+            st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
 
             for atestado in pendentes:
                 atestado_id, usuario, data, horas, justificativa, data_solicitacao, arquivo_id, nome_completo = atestado
 
-                with st.expander(f"%s {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     col1, col2 = st.columns([2, 1])
 
                     with col1:
@@ -2084,7 +2128,7 @@ def aprovar_atestados_interface(atestado_system):
                         # Arquivo anexo
                         if arquivo_id:
                             st.markdown("---")
-                            st.markdown("**?%s Documento Anexado:**")
+                            st.markdown("**📎 Documento Anexado:**")
 
                             # Buscar informações do arquivo
                             conn = get_connection()
@@ -2108,7 +2152,7 @@ def aprovar_atestados_interface(atestado_system):
                                     arquivo_id, usuario)
                                 if content:
                                     st.download_button(
-                                        label="?%s Baixar Documento",
+                                        label="⬇️ Baixar Documento",
                                         data=content,
                                         file_name=nome_arq,
                                         mime=tipo_mime,
@@ -2121,7 +2165,7 @@ def aprovar_atestados_interface(atestado_system):
                                             content, caption=nome_arq, width=400)
 
                     with col2:
-                        st.markdown("### %s%s Ações")
+                        st.markdown("### 🎯 Ações")
 
                         # Observações do gestor
                         observacoes = st.text_area(
@@ -2137,7 +2181,7 @@ def aprovar_atestados_interface(atestado_system):
                         col_a, col_b = st.columns(2)
 
                         with col_a:
-                            if st.button("%s Aprovar", key=f"aprovar_{atestado_id}", use_container_width=True, type="primary"):
+                            if st.button("✅ Aprovar", key=f"aprovar_{atestado_id}", use_container_width=True, type="primary"):
                                 resultado = atestado_system.aprovar_atestado(
                                     atestado_id,
                                     st.session_state.usuario,
@@ -2146,18 +2190,18 @@ def aprovar_atestados_interface(atestado_system):
 
                                 if resultado['success']:
                                     st.success(
-                                        "%s Atestado aprovado com sucesso!")
+                                        "✅ Atestado aprovado com sucesso!")
                                     st.rerun()
                                 else:
-                                    st.error(f"%s Erro: {resultado['message']}")
+                                    st.error(f"❌ Erro: {resultado['message']}")
 
                         with col_b:
-                            if st.button("%s Rejeitar", key=f"rejeitar_{atestado_id}", use_container_width=True):
+                            if st.button("❌ Rejeitar", key=f"rejeitar_{atestado_id}", use_container_width=True):
                                 st.session_state[f'confirm_reject_{atestado_id}'] = True
 
                         # Confirmação de rejeição
                         if st.session_state.get(f'confirm_reject_{atestado_id}'):
-                            st.warning("?%s Confirmar rejeição%s")
+                            st.warning("⚠️ Confirmar rejeição?")
                             motivo = st.text_area(
                                 "Motivo da rejeição:",
                                 key=f"motivo_{atestado_id}",
@@ -2168,7 +2212,7 @@ def aprovar_atestados_interface(atestado_system):
                             with col_c:
                                 if st.button("Sim, rejeitar", key=f"confirm_yes_{atestado_id}"):
                                     if not motivo:
-                                        st.error("%s Motivo é obrigatório!")
+                                        st.error("❌ Motivo é obrigatório!")
                                     else:
                                         resultado = atestado_system.rejeitar_atestado(
                                             atestado_id,
@@ -2177,22 +2221,22 @@ def aprovar_atestados_interface(atestado_system):
                                         )
 
                                         if resultado['success']:
-                                            st.success("%s Atestado rejeitado")
+                                            st.success("❌ Atestado rejeitado")
                                             del st.session_state[f'confirm_reject_{atestado_id}']
                                             st.rerun()
                                         else:
                                             st.error(
-                                                f"%s Erro: {resultado['message']}")
+                                                f"❌ Erro: {resultado['message']}")
 
                             with col_d:
                                 if st.button("Cancelar", key=f"confirm_no_{atestado_id}"):
                                     del st.session_state[f'confirm_reject_{atestado_id}']
                                     st.rerun()
         else:
-            st.success("%s Nenhuma solicitação aguardando aprovação!")
+            st.success("✅ Nenhuma solicitação aguardando aprovação!")
 
     with tab2:
-        st.markdown("### %s Atestados Aprovados")
+        st.markdown("### ✅ Atestados Aprovados")
 
         # Filtros
         col1, col2 = st.columns(2)
@@ -2201,7 +2245,7 @@ def aprovar_atestados_interface(atestado_system):
                                        "Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias", "Todos"], key="filtro_aprovados")
         with col2:
             busca_usuario = st.text_input(
-                "?%s Buscar funcionário:", key="busca_aprovados")
+                "🔍 Buscar funcionário:", key="busca_aprovados")
 
         # Determinar período
         if dias_filtro == "Últimos 7 dias":
@@ -2218,10 +2262,10 @@ def aprovar_atestados_interface(atestado_system):
         cursor = conn.cursor()
 
         query = """
-            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
-                   a.justificativa, a.data_aprovacao, a.aprovado_por,
+            SELECT a.id, a.usuario, a.data, a.total_horas, 
+                   a.motivo, a.data_aprovacao, a.aprovado_por,
                    a.observacoes, u.nome_completo, u2.nome_completo as aprovador_nome
-            FROM atestados_horas a
+            FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
             LEFT JOIN usuarios u2 ON a.aprovado_por = u2.usuario
             WHERE a.status = 'aprovado'
@@ -2243,12 +2287,12 @@ def aprovar_atestados_interface(atestado_system):
         conn.close()
 
         if aprovados:
-            st.info(f"%s {len(aprovados)} atestado(s) aprovado(s)")
+            st.info(f"✅ {len(aprovados)} atestado(s) aprovado(s)")
 
             for atestado in aprovados:
                 atestado_id, usuario, data, horas, justificativa, data_aprovacao, aprovado_por, observacoes, nome_completo, aprovador_nome = atestado
 
-                with st.expander(f"%s {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                with st.expander(f"✅ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     col1, col2 = st.columns([3, 1])
 
                     with col1:
@@ -2263,18 +2307,18 @@ def aprovar_atestados_interface(atestado_system):
 
                         st.markdown("---")
                         st.success(
-                            f"%s Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
 
                         if observacoes:
-                            st.info(f"?%s **Observações:** {observacoes}")
+                            st.info(f"💬 **Observações:** {observacoes}")
 
                     with col2:
                         # Opção de reverter aprovação
-                        if st.button("?%s Reverter", key=f"reverter_{atestado_id}", use_container_width=True):
+                        if st.button("🔄 Reverter", key=f"reverter_{atestado_id}", use_container_width=True):
                             st.session_state[f'confirm_reverter_{atestado_id}'] = True
 
                         if st.session_state.get(f'confirm_reverter_{atestado_id}'):
-                            st.warning("?%s Reverter aprovação%s")
+                            st.warning("⚠️ Reverter aprovação?")
                             motivo_rev = st.text_input(
                                 "Motivo:", key=f"motivo_rev_{atestado_id}")
 
@@ -2293,16 +2337,16 @@ def aprovar_atestados_interface(atestado_system):
                                     conn.commit()
                                     conn.close()
 
-                                    st.success("?%s Aprovação revertida!")
+                                    st.success("🔄 Aprovação revertida!")
                                     del st.session_state[f'confirm_reverter_{atestado_id}']
                                     st.rerun()
                                 else:
                                     st.error("Motivo obrigatório!")
         else:
-            st.info("?%s Nenhum atestado aprovado encontrado")
+            st.info("📁 Nenhum atestado aprovado encontrado")
 
     with tab3:
-        st.markdown("### %s Atestados Rejeitados")
+        st.markdown("### ❌ Atestados Rejeitados")
 
         # Buscar rejeitados
         conn = get_connection()
@@ -2323,12 +2367,12 @@ def aprovar_atestados_interface(atestado_system):
         conn.close()
 
         if rejeitados:
-            st.warning(f"%s {len(rejeitados)} atestado(s) rejeitado(s)")
+            st.warning(f"❌ {len(rejeitados)} atestado(s) rejeitado(s)")
 
             for atestado in rejeitados:
                 atestado_id, usuario, data, horas, justificativa, data_rejeicao, rejeitado_por, motivo_rejeicao, nome_completo, rejeitador_nome = atestado
 
-                with st.expander(f"%s {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(
                         f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
@@ -2337,16 +2381,16 @@ def aprovar_atestados_interface(atestado_system):
 
                     st.markdown("---")
                     st.error(
-                        f"%s Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
 
                     if motivo_rejeicao:
                         st.warning(
-                            f"?%s **Motivo da Rejeição:** {motivo_rejeicao}")
+                            f"📝 **Motivo da Rejeição:** {motivo_rejeicao}")
         else:
-            st.info("?%s Nenhum atestado rejeitado")
+            st.info("📁 Nenhum atestado rejeitado")
 
     with tab4:
-        st.markdown("### %s%s Todos os Atestados")
+        st.markdown("### 📊 Todos os Atestados")
 
         # Estatísticas gerais
         conn = get_connection()
@@ -2398,9 +2442,9 @@ def aprovar_atestados_interface(atestado_system):
             ])
 
             df['Status'] = df['Status'].map({
-                'pendente': '%s Pendente',
-                'aprovado': '%s Aprovado',
-                'rejeitado': '%s Rejeitado'
+                'pendente': '⏳ Pendente',
+                'aprovado': '✅ Aprovado',
+                'rejeitado': '❌ Rejeitado'
             })
 
             df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y')
@@ -2419,26 +2463,26 @@ def aprovar_atestados_interface(atestado_system):
             # Exportar
             csv = df.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="?%s Exportar CSV",
+                label="📥 Exportar CSV",
                 data=csv,
-                file_name=f"atestados_{get_datetime_br().strftime('%Y%m%d')}.csv",
+                file_name=f"atestados_{datetime.now().strftime('%Y%m%d')}.csv",
                 mime="text/csv"
             )
         else:
-            st.info("?%s Nenhum atestado registrado")
+            st.info("📁 Nenhum atestado registrado")
 
 
 def todos_registros_interface(calculo_horas_system):
     """Interface para visualizar todos os registros"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Todos os Registros de Ponto</h3>
+        <h3>👥 Todos os Registros de Ponto</h3>
         <p>Visualize e analise os registros de ponto de todos os funcionários</p>
     </div>
     """, unsafe_allow_html=True)
 
     # Filtros
-    st.markdown("### %s%s Filtros")
+    st.markdown("### 🔍 Filtros")
     col1, col2, col3, col4 = st.columns(4)
 
     with col1:
@@ -2452,24 +2496,24 @@ def todos_registros_interface(calculo_horas_system):
 
         usuario_options = ["Todos"] + \
             [f"{u[1] or u[0]} ({u[0]})" for u in usuarios_list]
-        usuario_filter = st.selectbox("?%s Funcionário:", usuario_options)
+        usuario_filter = st.selectbox("👤 Funcionário:", usuario_options)
 
     with col2:
         # Período padrão: últimos 30 dias
         data_inicio = st.date_input(
-            "?%s Data Início:",
-            value=get_datetime_br().date() - timedelta(days=30)
+            "📅 Data Início:",
+            value=datetime.now().date() - timedelta(days=30)
         )
 
     with col3:
         data_fim = st.date_input(
-            "?%s Data Fim:",
-            value=get_datetime_br().date()
+            "📅 Data Fim:",
+            value=datetime.now().date()
         )
 
     with col4:
         tipo_registro = st.selectbox(
-            "?%s Tipo:",
+            "🕐 Tipo:",
             ["Todos", "Início", "Fim", "Intervalo"]
         )
 
@@ -2505,7 +2549,7 @@ def todos_registros_interface(calculo_horas_system):
     conn.close()
 
     # Estatísticas gerais
-    st.markdown("### %s%s Estatísticas do Período")
+    st.markdown("### 📊 Estatísticas do Período")
     col1, col2, col3, col4, col5 = st.columns(5)
 
     with col1:
@@ -2536,7 +2580,7 @@ def todos_registros_interface(calculo_horas_system):
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
             st.markdown(
-                f"### %s%s Listagem de Registros ({len(registros)} encontrados)")
+                f"### 📋 Listagem de Registros ({len(registros)} encontrados)")
         with col2:
             # Preparar dados para exportação
             df_export = pd.DataFrame(registros, columns=[
@@ -2545,7 +2589,7 @@ def todos_registros_interface(calculo_horas_system):
             ])
             csv = df_export.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
-                label="?%s Exportar CSV",
+                label="📥 Exportar CSV",
                 data=csv,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.csv",
                 mime="text/csv",
@@ -2557,7 +2601,7 @@ def todos_registros_interface(calculo_horas_system):
             df_export.to_excel(buffer, index=False, engine='openpyxl')
             buffer.seek(0)
             st.download_button(
-                label="?%s Exportar Excel",
+                label="📥 Exportar Excel",
                 data=buffer,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -2618,7 +2662,7 @@ def todos_registros_interface(calculo_horas_system):
                 horas_trabalhadas = f"{int(horas)}h {int((horas % 1) * 60)}min"
 
             # Exibir card do dia
-            with st.expander(f"?%s {data.strftime('%d/%m/%Y')} - %s%s {nome_completo} - %s%s {horas_trabalhadas} - {len(regs)} registro(s)"):
+            with st.expander(f"📅 {data.strftime('%d/%m/%Y')} - 👤 {nome_completo} - ⏱️ {horas_trabalhadas} - {len(regs)} registro(s)"):
                 # Informações do usuário
                 st.markdown(f"**Funcionário:** {nome_completo} ({usuario})")
                 st.markdown(f"**Data:** {data.strftime('%d/%m/%Y (%A)')}")
@@ -2635,7 +2679,7 @@ def todos_registros_interface(calculo_horas_system):
 
                     with col1:
                         # Ícone baseado no tipo
-                        icon = "??" if reg['tipo'] == "Início" else "??" if reg['tipo'] == "Fim" else "??"
+                        icon = "🟢" if reg['tipo'] == "Início" else "🔴" if reg['tipo'] == "Fim" else "⏸️"
                         st.markdown(f"**{icon} {reg['tipo']}**")
                         st.caption(reg['data_hora'].strftime('%H:%M:%S'))
 
@@ -2649,12 +2693,12 @@ def todos_registros_interface(calculo_horas_system):
                     with col3:
                         if reg['latitude'] and reg['longitude']:
                             st.markdown(
-                                f"?%s **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                                f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
                             # Link para Google Maps
-                            maps_url = f"https://www.google.com/maps%sq={reg['latitude']},{reg['longitude']}"
-                            st.markdown(f"[??%s Ver no Mapa]({maps_url})")
+                            maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
+                            st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
                         else:
-                            st.markdown("?%s **GPS:** Não disponível")
+                            st.markdown("📍 **GPS:** Não disponível")
 
                     if i < len(regs):
                         st.markdown("---")
@@ -2690,7 +2734,7 @@ def todos_registros_interface(calculo_horas_system):
                         horas_reais = (fim - inicio).total_seconds() / 3600
                         diferenca = horas_reais - horas_previstas
 
-                        st.markdown("### %s%s Análise da Jornada")
+                        st.markdown("### 📊 Análise da Jornada")
                         col1, col2, col3 = st.columns(3)
 
                         with col1:
@@ -2711,17 +2755,17 @@ def todos_registros_interface(calculo_horas_system):
                         # Alertas
                         if diferenca > 1:
                             st.success(
-                                f"%s Horas extras potenciais: {diferenca:.2f}h")
+                                f"✅ Horas extras potenciais: {diferenca:.2f}h")
                         elif diferenca < -1:
                             st.warning(
-                                f"?%s Jornada incompleta: {abs(diferenca):.2f}h a menos")
+                                f"⚠️ Jornada incompleta: {abs(diferenca):.2f}h a menos")
     else:
-        st.info("?%s Nenhum registro encontrado com os filtros aplicados")
+        st.info("📁 Nenhum registro encontrado com os filtros aplicados")
 
     # Análise por funcionário (resumo)
     if registros and usuario_filter == "Todos":
         st.markdown("---")
-        st.markdown("### %s%s Resumo por Funcionário")
+        st.markdown("### 📈 Resumo por Funcionário")
 
         # Agrupar por usuário
         usuarios_stats = {}
@@ -2762,7 +2806,7 @@ def gerenciar_arquivos_interface(upload_system):
     """Interface para gerenciar todos os arquivos"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Gerenciamento de Arquivos</h3>
+        <h3>📁 Gerenciamento de Arquivos</h3>
         <p>Visualize e gerencie todos os arquivos enviados pelos funcionários</p>
     </div>
     """, unsafe_allow_html=True)
@@ -2777,10 +2821,10 @@ def gerenciar_arquivos_interface(upload_system):
         )
 
     with col2:
-        usuario_filter = st.text_input("%s Buscar por usuário:")
+        usuario_filter = st.text_input("� Buscar por usuário:")
 
     with col3:
-        data_filter = st.date_input("?%s Data específica:", value=None)
+        data_filter = st.date_input("📅 Data específica:", value=None)
 
     # Buscar arquivos
     conn = get_connection()
@@ -2807,11 +2851,11 @@ def gerenciar_arquivos_interface(upload_system):
         params.append(categoria_map[categoria_filter])
 
     if usuario_filter:
-        query += " AND (u.usuario LIKE %s OR us.nome_completo LIKE %s)"
+        query += " AND (u.usuario LIKE ? OR us.nome_completo LIKE ?)"
         params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
 
     if data_filter:
-        query += " AND DATE(u.data_upload) = %s"
+        query += " AND DATE(u.data_upload) = ?"
         params.append(data_filter.strftime("%Y-%m-%d"))
 
     query += " ORDER BY u.data_upload DESC LIMIT 100"
@@ -2821,7 +2865,7 @@ def gerenciar_arquivos_interface(upload_system):
     conn.close()
 
     # Estatísticas
-    st.markdown("### %s%s Estatísticas")
+    st.markdown("### 📊 Estatísticas")
     col1, col2, col3, col4 = st.columns(4)
 
     conn = get_connection()
@@ -2851,7 +2895,7 @@ def gerenciar_arquivos_interface(upload_system):
     conn.close()
 
     # Listagem de arquivos
-    st.markdown("### %s%s Arquivos")
+    st.markdown("### 📋 Arquivos")
 
     if arquivos:
         st.info(f"Exibindo {len(arquivos)} arquivo(s)")
@@ -2876,7 +2920,7 @@ def gerenciar_arquivos_interface(upload_system):
                         arquivo_id, usuario)
                     if content:
                         st.download_button(
-                            label="?%s Baixar",
+                            label="⬇️ Baixar",
                             data=content,
                             file_name=nome,
                             mime=tipo_mime,
@@ -2884,20 +2928,20 @@ def gerenciar_arquivos_interface(upload_system):
                         )
 
                     # Botão de exclusão (com confirmação)
-                    if st.button(f"??%s Excluir", key=f"del_{arquivo_id}", use_container_width=True):
+                    if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", use_container_width=True):
                         st.session_state[f"confirm_delete_{arquivo_id}"] = True
 
                     if st.session_state.get(f"confirm_delete_{arquivo_id}"):
-                        st.warning("Confirmar exclusão%s")
+                        st.warning("Confirmar exclusão?")
                         col_a, col_b = st.columns(2)
                         with col_a:
-                            if st.button("%s Sim", key=f"yes_{arquivo_id}"):
+                            if st.button("✅ Sim", key=f"yes_{arquivo_id}"):
                                 if upload_system.delete_file(arquivo_id, usuario):
                                     st.success("Arquivo excluído!")
                                     del st.session_state[f"confirm_delete_{arquivo_id}"]
                                     st.rerun()
                         with col_b:
-                            if st.button("%s Não", key=f"no_{arquivo_id}"):
+                            if st.button("❌ Não", key=f"no_{arquivo_id}"):
                                 del st.session_state[f"confirm_delete_{arquivo_id}"]
                                 st.rerun()
 
@@ -2908,23 +2952,23 @@ def gerenciar_arquivos_interface(upload_system):
                     if content:
                         st.image(content, caption=nome, width=400)
     else:
-        st.info("?%s Nenhum arquivo encontrado com os filtros aplicados")
+        st.info("📁 Nenhum arquivo encontrado com os filtros aplicados")
 
 
 def gerenciar_projetos_interface():
     """Interface para gerenciar projetos"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Gerenciamento de Projetos</h3>
+        <h3>🏢 Gerenciamento de Projetos</h3>
         <p>Cadastre e gerencie os projetos da empresa</p>
     </div>
     """, unsafe_allow_html=True)
 
     # Abas
-    tab1, tab2 = st.tabs(["?%s Lista de Projetos", "%s Novo Projeto"])
+    tab1, tab2 = st.tabs(["📋 Lista de Projetos", "➕ Novo Projeto"])
 
     with tab1:
-        st.markdown("### %s%s Projetos Cadastrados")
+        st.markdown("### 📋 Projetos Cadastrados")
 
         # Filtro
         col1, col2 = st.columns(2)
@@ -2932,7 +2976,7 @@ def gerenciar_projetos_interface():
             status_filter = st.selectbox(
                 "Status:", ["Todos", "Ativos", "Inativos"])
         with col2:
-            busca = st.text_input("?%s Buscar projeto:")
+            busca = st.text_input("🔍 Buscar projeto:")
 
         # Buscar projetos
         conn = get_connection()
@@ -2947,7 +2991,7 @@ def gerenciar_projetos_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND nome LIKE %s"
+            query += " AND nome LIKE ?"
             params.append(f"%{busca}%")
 
         query += " ORDER BY nome"
@@ -2972,7 +3016,7 @@ def gerenciar_projetos_interface():
         # Listagem
         if projetos:
             for projeto_id, nome, descricao, ativo in projetos:
-                with st.expander(f"{'?' if ativo else '?'} {nome}"):
+                with st.expander(f"{'✅' if ativo else '❌'} {nome}"):
                     col1, col2 = st.columns([3, 1])
 
                     with col1:
@@ -2998,44 +3042,44 @@ def gerenciar_projetos_interface():
                         st.write("")
 
                         # Botão de salvar
-                        if st.button("?%s Salvar", key=f"save_{projeto_id}", use_container_width=True):
+                        if st.button("💾 Salvar", key=f"save_{projeto_id}", use_container_width=True):
                             conn = get_connection()
                             cursor = conn.cursor()
 
                             cursor.execute("""
                                 UPDATE projetos 
-                                SET nome = %s, descricao = %s, ativo = %s
-                                WHERE id = %s
+                                SET nome = ?, descricao = ?, ativo = ?
+                                WHERE id = ?
                             """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
 
                             conn.commit()
                             conn.close()
 
-                            st.success("%s Projeto atualizado!")
+                            st.success("✅ Projeto atualizado!")
                             st.rerun()
 
                         # Botão de excluir
-                        if st.button("??%s Excluir", key=f"del_{projeto_id}", use_container_width=True):
+                        if st.button("🗑️ Excluir", key=f"del_{projeto_id}", use_container_width=True):
                             st.session_state[f"confirm_del_proj_{projeto_id}"] = True
 
                         if st.session_state.get(f"confirm_del_proj_{projeto_id}"):
-                            st.warning("?%s Confirmar%s")
+                            st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{projeto_id}"):
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM projetos WHERE id = %s", (projeto_id,))
+                                    "DELETE FROM projetos WHERE id = ?", (projeto_id,))
                                 conn.commit()
                                 conn.close()
 
                                 del st.session_state[f"confirm_del_proj_{projeto_id}"]
-                                st.success("%s Projeto excluído!")
+                                st.success("✅ Projeto excluído!")
                                 st.rerun()
         else:
-            st.info("?%s Nenhum projeto encontrado")
+            st.info("📁 Nenhum projeto encontrado")
 
     with tab2:
-        st.markdown("### %s Cadastrar Novo Projeto")
+        st.markdown("### ➕ Cadastrar Novo Projeto")
 
         with st.form("novo_projeto"):
             nome_novo = st.text_input(
@@ -3045,11 +3089,11 @@ def gerenciar_projetos_interface():
             ativo_novo = st.checkbox("Projeto Ativo", value=True)
 
             submitted = st.form_submit_button(
-                "%s Cadastrar Projeto", use_container_width=True)
+                "➕ Cadastrar Projeto", use_container_width=True)
 
             if submitted:
                 if not nome_novo:
-                    st.error("%s O nome do projeto é obrigatório!")
+                    st.error("❌ O nome do projeto é obrigatório!")
                 else:
                     try:
                         conn = get_connection()
@@ -3057,33 +3101,33 @@ def gerenciar_projetos_interface():
 
                         cursor.execute("""
                             INSERT INTO projetos (nome, descricao, ativo)
-                            VALUES (%s, %s, %s)
+                            VALUES (?, ?, ?)
                         """, (nome_novo, descricao_nova, int(ativo_novo)))
 
                         conn.commit()
                         conn.close()
 
                         st.success(
-                            f"%s Projeto '{nome_novo}' cadastrado com sucesso!")
+                            f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
                         st.rerun()
                     except sqlite3.IntegrityError:
-                        st.error("%s Já existe um projeto com este nome!")
+                        st.error("❌ Já existe um projeto com este nome!")
 
 
 def gerenciar_usuarios_interface():
     """Interface para gerenciar usuários"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Gerenciamento de Usuários</h3>
+        <h3>👤 Gerenciamento de Usuários</h3>
         <p>Cadastre e gerencie funcionários e gestores do sistema</p>
     </div>
     """, unsafe_allow_html=True)
 
     # Abas
-    tab1, tab2 = st.tabs(["?%s Lista de Usuários", "%s Novo Usuário"])
+    tab1, tab2 = st.tabs(["👥 Lista de Usuários", "➕ Novo Usuário"])
 
     with tab1:
-        st.markdown("### %s Usuários Cadastrados")
+        st.markdown("### � Usuários Cadastrados")
 
         # Filtros
         col1, col2, col3 = st.columns(3)
@@ -3094,7 +3138,7 @@ def gerenciar_usuarios_interface():
             status_filter = st.selectbox(
                 "Status:", ["Todos", "Ativos", "Inativos"])
         with col3:
-            busca = st.text_input("?%s Buscar:")
+            busca = st.text_input("🔍 Buscar:")
 
         # Buscar usuários
         conn = get_connection()
@@ -3118,7 +3162,7 @@ def gerenciar_usuarios_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND (usuario LIKE %s OR nome_completo LIKE %s)"
+            query += " AND (usuario LIKE ? OR nome_completo LIKE ?)"
             params.extend([f"%{busca}%", f"%{busca}%"])
 
         query += " ORDER BY nome_completo"
@@ -3146,8 +3190,8 @@ def gerenciar_usuarios_interface():
         # Listagem
         if usuarios:
             for usuario_id, usuario, nome_completo, tipo, ativo, jornada_inicio, jornada_fim in usuarios:
-                status_emoji = "?" if ativo else "?"
-                tipo_emoji = "??" if tipo == 'funcionario' else "??"
+                status_emoji = "✅" if ativo else "❌"
+                tipo_emoji = "👤" if tipo == 'funcionario' else "👑"
 
                 with st.expander(f"{status_emoji} {tipo_emoji} {nome_completo or usuario}"):
                     col1, col2 = st.columns([3, 1])
@@ -3199,54 +3243,54 @@ def gerenciar_usuarios_interface():
                                 key=f"fim_{usuario_id}"
                             )
 
-                        # Alteração de senha
-                        with st.expander("?%s Alterar Senha"):
-                            nova_senha = st.text_input(
-                                "Nova Senha:",
-                                type="password",
-                                key=f"senha_{usuario_id}"
-                            )
-                            confirmar_senha = st.text_input(
-                                "Confirmar Senha:",
-                                type="password",
-                                key=f"conf_senha_{usuario_id}"
-                            )
+                        # Alteração de senha - Corrigido: removido expander aninhado
+                        st.markdown("**🔑 Alterar Senha:**")
+                        nova_senha = st.text_input(
+                            "Nova Senha:",
+                            type="password",
+                            key=f"senha_{usuario_id}"
+                        )
+                        confirmar_senha = st.text_input(
+                            "Confirmar Senha:",
+                            type="password",
+                            key=f"conf_senha_{usuario_id}"
+                        )
 
-                            if st.button("?%s Alterar Senha", key=f"btn_senha_{usuario_id}"):
-                                if not nova_senha:
-                                    st.error("%s Digite uma senha!")
-                                elif nova_senha != confirmar_senha:
-                                    st.error("%s As senhas não conferem!")
-                                else:
-                                    conn = get_connection()
-                                    cursor = conn.cursor()
+                        if st.button("🔑 Alterar Senha", key=f"btn_senha_{usuario_id}"):
+                            if not nova_senha:
+                                st.error("❌ Digite uma senha!")
+                            elif nova_senha != confirmar_senha:
+                                st.error("❌ As senhas não conferem!")
+                            else:
+                                conn = get_connection()
+                                cursor = conn.cursor()
 
-                                    senha_hash = hashlib.sha256(
-                                        nova_senha.encode()).hexdigest()
-                                    cursor.execute(
-                                        "UPDATE usuarios SET senha = %s WHERE id = %s",
-                                        (senha_hash, usuario_id)
-                                    )
+                                senha_hash = hashlib.sha256(
+                                    nova_senha.encode()).hexdigest()
+                                cursor.execute(
+                                    "UPDATE usuarios SET senha = %s WHERE id = %s",
+                                    (senha_hash, usuario_id)
+                                )
 
-                                    conn.commit()
-                                    conn.close()
+                                conn.commit()
+                                conn.close()
 
-                                    st.success("%s Senha alterada com sucesso!")
+                                st.success("✅ Senha alterada com sucesso!")
 
                     with col2:
                         st.write("")
                         st.write("")
 
                         # Botão de salvar
-                        if st.button("?%s Salvar", key=f"save_{usuario_id}", use_container_width=True):
+                        if st.button("💾 Salvar", key=f"save_{usuario_id}", use_container_width=True):
                             conn = get_connection()
                             cursor = conn.cursor()
 
                             cursor.execute("""
                                 UPDATE usuarios 
-                                SET nome_completo = %s, tipo = %s, ativo = %s,
-                                    jornada_inicio_previsto = %s, jornada_fim_previsto = %s
-                                WHERE id = %s
+                                SET nome_completo = ?, tipo = ?, ativo = ?,
+                                    jornada_inicio_previsto = ?, jornada_fim_previsto = ?
+                                WHERE id = ?
                             """, (
                                 novo_nome,
                                 novo_tipo,
@@ -3259,31 +3303,31 @@ def gerenciar_usuarios_interface():
                             conn.commit()
                             conn.close()
 
-                            st.success("%s Usuário atualizado!")
+                            st.success("✅ Usuário atualizado!")
                             st.rerun()
 
                         # Botão de excluir
-                        if st.button("??%s Excluir", key=f"del_{usuario_id}", use_container_width=True):
+                        if st.button("🗑️ Excluir", key=f"del_{usuario_id}", use_container_width=True):
                             st.session_state[f"confirm_del_user_{usuario_id}"] = True
 
                         if st.session_state.get(f"confirm_del_user_{usuario_id}"):
-                            st.warning("?%s Confirmar%s")
+                            st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{usuario_id}"):
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM usuarios WHERE id = %s", (usuario_id,))
+                                    "DELETE FROM usuarios WHERE id = ?", (usuario_id,))
                                 conn.commit()
                                 conn.close()
 
                                 del st.session_state[f"confirm_del_user_{usuario_id}"]
-                                st.success("%s Usuário excluído!")
+                                st.success("✅ Usuário excluído!")
                                 st.rerun()
         else:
-            st.info("?%s Nenhum usuário encontrado")
+            st.info("👤 Nenhum usuário encontrado")
 
     with tab2:
-        st.markdown("### %s Cadastrar Novo Usuário")
+        st.markdown("### ➕ Cadastrar Novo Usuário")
 
         with st.form("novo_usuario"):
             col1, col2 = st.columns(2)
@@ -3312,14 +3356,14 @@ def gerenciar_usuarios_interface():
                     "Fim da Jornada:", value=time(17, 0))
 
             submitted = st.form_submit_button(
-                "%s Cadastrar Usuário", use_container_width=True)
+                "➕ Cadastrar Usuário", use_container_width=True)
 
             if submitted:
                 # Validações
                 if not novo_login or not novo_nome or not nova_senha:
-                    st.error("%s Preencha todos os campos obrigatórios!")
+                    st.error("❌ Preencha todos os campos obrigatórios!")
                 elif nova_senha != confirmar_senha:
-                    st.error("%s As senhas não conferem!")
+                    st.error("❌ As senhas não conferem!")
                 else:
                     try:
                         conn = get_connection()
@@ -3332,7 +3376,7 @@ def gerenciar_usuarios_interface():
                             INSERT INTO usuarios 
                             (usuario, senha, tipo, nome_completo, ativo, 
                              jornada_inicio_previsto, jornada_fim_previsto)
-                            VALUES (%s, %s, %s, %s, %s, %s, %s)
+                            VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (
                             novo_login,
                             senha_hash,
@@ -3347,17 +3391,17 @@ def gerenciar_usuarios_interface():
                         conn.close()
 
                         st.success(
-                            f"%s Usuário '{novo_nome}' cadastrado com sucesso!")
+                            f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
                         st.rerun()
                     except sqlite3.IntegrityError:
-                        st.error("%s Já existe um usuário com este login!")
+                        st.error("❌ Já existe um usuário com este login!")
 
 
 def sistema_interface():
     """Interface de configurações do sistema"""
     st.markdown("""
     <div class="feature-card">
-        <h3>?%s Configurações do Sistema</h3>
+        <h3>⚙️ Configurações do Sistema</h3>
         <p>Configure parâmetros gerais do sistema de ponto</p>
     </div>
     """, unsafe_allow_html=True)
@@ -3395,8 +3439,9 @@ def sistema_interface():
 
     for chave, valor, descricao in configs_padrao:
         cursor.execute("""
-            INSERT OR IGNORE INTO configuracoes (chave, valor, descricao)
+            INSERT INTO configuracoes (chave, valor, descricao)
             VALUES (%s, %s, %s)
+            ON CONFLICT (chave) DO NOTHING
         """, (chave, valor, descricao))
 
     conn.commit()
@@ -3408,7 +3453,7 @@ def sistema_interface():
     conn.close()
 
     # Organizar por categorias
-    st.markdown("### %s Configurações de Jornada")
+    st.markdown("### ⏰ Configurações de Jornada")
 
     with st.form("config_jornada"):
         col1, col2 = st.columns(2)
@@ -3442,7 +3487,7 @@ def sistema_interface():
                 value=int(config_dict.get('dias_historico_padrao', '30'))
             )
 
-        if st.form_submit_button("?%s Salvar Configurações de Jornada", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de Jornada", use_container_width=True):
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -3456,18 +3501,18 @@ def sistema_interface():
             for chave, valor in configs_jornada:
                 cursor.execute("""
                     UPDATE configuracoes 
-                    SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = %s
+                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = ?
                 """, (valor, chave))
 
             conn.commit()
             conn.close()
 
-            st.success("%s Configurações de jornada salvas!")
+            st.success("✅ Configurações de jornada salvas!")
             st.rerun()
 
     st.markdown("---")
-    st.markdown("### %s%s Configurações de Horas Extras")
+    st.markdown("### 🕐 Configurações de Horas Extras")
 
     with st.form("config_horas_extras"):
         col1, col2 = st.columns(2)
@@ -3486,7 +3531,7 @@ def sistema_interface():
                     int(config_dict.get('notificacao_fim_jornada', '1')))
             )
 
-        if st.form_submit_button("?%s Salvar Configurações de Horas Extras", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de Horas Extras", use_container_width=True):
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -3498,18 +3543,18 @@ def sistema_interface():
             for chave, valor in configs_he:
                 cursor.execute("""
                     UPDATE configuracoes 
-                    SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = %s
+                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = ?
                 """, (valor, chave))
 
             conn.commit()
             conn.close()
 
-            st.success("%s Configurações de horas extras salvas!")
+            st.success("✅ Configurações de horas extras salvas!")
             st.rerun()
 
     st.markdown("---")
-    st.markdown("### %s%s Configurações de GPS")
+    st.markdown("### 📍 Configurações de GPS")
 
     with st.form("config_gps"):
         col1, col2 = st.columns(2)
@@ -3529,9 +3574,9 @@ def sistema_interface():
                 step=100
             )
 
-        st.info("?%s Quando GPS obrigatório está ativado, o sistema não permitirá registro de ponto sem localização válida.")
+        st.info("💡 Quando GPS obrigatório está ativado, o sistema não permitirá registro de ponto sem localização válida.")
 
-        if st.form_submit_button("?%s Salvar Configurações de GPS", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de GPS", use_container_width=True):
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -3543,18 +3588,18 @@ def sistema_interface():
             for chave, valor in configs_gps:
                 cursor.execute("""
                     UPDATE configuracoes 
-                    SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = %s
+                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = ?
                 """, (valor, chave))
 
             conn.commit()
             conn.close()
 
-            st.success("%s Configurações de GPS salvas!")
+            st.success("✅ Configurações de GPS salvas!")
             st.rerun()
 
     st.markdown("---")
-    st.markdown("### %s%s Configurações Gerais")
+    st.markdown("### 🔧 Configurações Gerais")
 
     with st.form("config_gerais"):
         col1, col2 = st.columns(2)
@@ -3564,7 +3609,7 @@ def sistema_interface():
                 "Backup Automático Diário"
             )
             
-        if st.form_submit_button("?%s Salvar Configurações Gerais", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações Gerais", use_container_width=True):
             conn = get_connection()
             cursor = conn.cursor()
 
@@ -3575,13 +3620,13 @@ def sistema_interface():
             for chave, valor in configs_gerais:
                 cursor.execute("""
                     UPDATE configuracoes 
-                    SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = %s
+                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = ?
                 """, (valor, chave))
 
             conn.commit()
             conn.close()
-            st.success("%s Configurações salvas!")
+            st.success("✅ Configurações salvas!")
             st.rerun()
 
 # Rodapé unificado
@@ -3604,7 +3649,7 @@ def buscar_registros_dia(usuario, data):
         cursor.execute("""
             SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
             FROM registros_ponto 
-            WHERE usuario = %s AND DATE(data_hora) = %s
+            WHERE usuario = ? AND DATE(data_hora) = ?
             ORDER BY data_hora
         """, (usuario, data))
         
@@ -3632,22 +3677,22 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
     
     try:
         # Verificar se o registro existe
-        cursor.execute("SELECT id FROM registros_ponto WHERE id = %s", (registro_id,))
+        cursor.execute(f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
         if not cursor.fetchone():
             return {"success": False, "message": "Registro não encontrado"}
         
         # Atualizar registro
-        cursor.execute("""
+        cursor.execute(f"""
             UPDATE registros_ponto 
-            SET tipo = %s, data_hora = %s, modalidade = %s, projeto = %s
-            WHERE id = %s
+            SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+            WHERE id = {SQL_PLACEHOLDER}
         """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
         
         # Registrar auditoria da correção
-        cursor.execute("""
+        cursor.execute(f"""
             INSERT INTO auditoria_correcoes 
             (registro_id, gestor, justificativa, data_correcao)
-            VALUES (%s, %s, %s, CURRENT_TIMESTAMP)
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
         """, (registro_id, gestor, justificativa))
         
         conn.commit()
