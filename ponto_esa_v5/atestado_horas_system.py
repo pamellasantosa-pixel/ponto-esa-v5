@@ -24,7 +24,7 @@ class AtestadoHorasSystem:
         # Tabela para atestados de horas
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS atestado_horas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 usuario TEXT NOT NULL,
                 data DATE NOT NULL,
                 hora_inicio TIME NOT NULL,
@@ -44,7 +44,7 @@ class AtestadoHorasSystem:
         # Tabela para uploads de arquivos
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS uploads (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                id SERIAL PRIMARY KEY,
                 usuario TEXT NOT NULL,
                 nome_original TEXT NOT NULL,
                 nome_arquivo TEXT NOT NULL,
