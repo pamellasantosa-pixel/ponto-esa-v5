@@ -6,6 +6,12 @@ Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
 Deploy: Render.com | Banco: PostgreSQL
 """
 
+from notifications import notification_manager
+from calculo_horas_system import CalculoHorasSystem
+from banco_horas_system import BancoHorasSystem, format_saldo_display
+from horas_extras_system import HorasExtrasSystem
+from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
+from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
 import streamlit as st
 import os
 import hashlib
@@ -43,17 +49,13 @@ if os.path.dirname(__file__) not in sys.path:
 # Configurar timezone do Brasil (Brasília)
 TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
 
+
 def get_datetime_br():
     """Retorna datetime atual no fuso horário de Brasília"""
     return datetime.now(TIMEZONE_BR)
 
+
 # Importar sistemas desenvolvidos
-from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
-from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
-from horas_extras_system import HorasExtrasSystem
-from banco_horas_system import BancoHorasSystem, format_saldo_display
-from calculo_horas_system import CalculoHorasSystem
-from notifications import notification_manager
 
 # Configuração da página
 st.set_page_config(
@@ -1188,7 +1190,8 @@ def atestado_horas_interface(atestado_system, upload_system):
                         max_value=date.today() + timedelta(days=3)
                     )
 
-                    hora_inicio = st.time_input("🕐 Horário de Início da Ausência")
+                    hora_inicio = st.time_input(
+                        "🕐 Horário de Início da Ausência")
 
                 with col2:
                     hora_fim = st.time_input("🕕 Horário de Fim da Ausência")
@@ -1302,7 +1305,8 @@ def atestado_horas_interface(atestado_system, upload_system):
             )
 
             if status_filtro != "Todos":
-                atestados = [a for a in atestados if a["status"] == status_filtro]
+                atestados = [
+                    a for a in atestados if a["status"] == status_filtro]
 
             if atestados:
                 for atestado in atestados:
@@ -1317,7 +1321,8 @@ def atestado_horas_interface(atestado_system, upload_system):
                                 f"**Total:** {format_time_duration(atestado['total_horas'])}")
 
                         with col2:
-                            st.write(f"**Status:** {atestado['status'].title()}")
+                            st.write(
+                                f"**Status:** {atestado['status'].title()}")
                             if atestado['aprovado_por']:
                                 st.write(
                                     f"**Aprovado por:** {atestado['aprovado_por']}")
@@ -1329,13 +1334,15 @@ def atestado_horas_interface(atestado_system, upload_system):
                             st.write(f"**Motivo:** {atestado['motivo']}")
 
                         if atestado['observacoes']:
-                            st.write(f"**Observações:** {atestado['observacoes']}")
+                            st.write(
+                                f"**Observações:** {atestado['observacoes']}")
 
                         if atestado['arquivo_comprovante']:
                             st.write(
                                 f"📎 **Comprovante:** {atestado['arquivo_comprovante']}")
             else:
-                st.info("📋 Nenhum atestado de horas encontrado no período selecionado")
+                st.info(
+                    "📋 Nenhum atestado de horas encontrado no período selecionado")
     except Exception as e:
         st.error(f"❌ Erro na página de atestado de horas: {str(e)}")
         st.code(str(e))
@@ -1368,10 +1375,12 @@ def corrigir_registros_interface():
         )
 
         # Buscar registros do dia
-        registros = buscar_registros_dia(usuario, data_corrigir.strftime("%Y-%m-%d"))
+        registros = buscar_registros_dia(
+            usuario, data_corrigir.strftime("%Y-%m-%d"))
 
         if registros:
-            st.subheader(f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
+            st.subheader(
+                f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
             for registro in registros:
                 with st.expander(f"⏰ {registro['data_hora']} - {registro['tipo']}"):
@@ -1379,9 +1388,12 @@ def corrigir_registros_interface():
 
                     with col1:
                         st.write(f"**Tipo:** {registro['tipo']}")
-                        st.write(f"**Data/Hora Atual:** {registro['data_hora']}")
-                        st.write(f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
-                        st.write(f"**Projeto:** {registro['projeto'] or 'N/A'}")
+                        st.write(
+                            f"**Data/Hora Atual:** {registro['data_hora']}")
+                        st.write(
+                            f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
+                        st.write(
+                            f"**Projeto:** {registro['projeto'] or 'N/A'}")
 
                     with col2:
                         # Formulário de edição
@@ -1389,7 +1401,8 @@ def corrigir_registros_interface():
                             novo_tipo = st.selectbox(
                                 "Novo Tipo",
                                 ["inicio", "intermediario", "fim"],
-                                index=["inicio", "intermediario", "fim"].index(registro['tipo'])
+                                index=["inicio", "intermediario",
+                                       "fim"].index(registro['tipo'])
                             )
 
                             nova_data_hora = st.text_input(
@@ -1400,13 +1413,15 @@ def corrigir_registros_interface():
                             nova_modalidade = st.selectbox(
                                 "Nova Modalidade",
                                 ["", "presencial", "home_office", "campo"],
-                                index=["", "presencial", "home_office", "campo"].index(registro['modalidade'] or "")
+                                index=["", "presencial", "home_office", "campo"].index(
+                                    registro['modalidade'] or "")
                             )
 
                             novo_projeto = st.selectbox(
                                 "Novo Projeto",
                                 [""] + obter_projetos_ativos(),
-                                index=[""] + obter_projetos_ativos().index(registro['projeto']) if registro['projeto'] in obter_projetos_ativos() else 0
+                                index=[""] + obter_projetos_ativos().index(
+                                    registro['projeto']) if registro['projeto'] in obter_projetos_ativos() else 0
                             )
 
                             justificativa_edicao = st.text_area(
@@ -1414,11 +1429,13 @@ def corrigir_registros_interface():
                                 placeholder="Explique o motivo da correção..."
                             )
 
-                            submitted = st.form_submit_button("💾 Salvar Correção")
+                            submitted = st.form_submit_button(
+                                "💾 Salvar Correção")
 
                             if submitted:
                                 if not justificativa_edicao.strip():
-                                    st.error("❌ Justificativa obrigatória para correções")
+                                    st.error(
+                                        "❌ Justificativa obrigatória para correções")
                                 else:
                                     resultado = corrigir_registro_ponto(
                                         registro['id'],
@@ -1436,7 +1453,8 @@ def corrigir_registros_interface():
                                     else:
                                         st.error(f"❌ {resultado['message']}")
         else:
-            st.info(f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
+            st.info(
+                f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
 
 
 def meus_registros_interface(calculo_horas_system):
@@ -1625,21 +1643,24 @@ def tela_gestor():
     atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system = init_systems()
 
     # Verificar notificações pendentes
-    notificacoes = notification_manager.get_notifications(st.session_state.usuario)
-    notificacoes_pendentes = [n for n in notificacoes if n.get('requires_response', False)]
+    notificacoes = notification_manager.get_notifications(
+        st.session_state.usuario)
+    notificacoes_pendentes = [
+        n for n in notificacoes if n.get('requires_response', False)]
 
     if notificacoes_pendentes:
         for notificacao in notificacoes_pendentes:
             with st.container():
-                st.warning(f"🔔 {notificacao['title']}: {notificacao['message']}")
-                
+                st.warning(
+                    f"🔔 {notificacao['title']}: {notificacao['message']}")
+
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ Responder", key=f"responder_{notificacao['solicitacao_id']}"):
                         # Redirecionar para a tela de aprovação
                         st.session_state.pagina_atual = "🕐 Aprovar Horas Extras"
                         st.rerun()
-                
+
                 with col2:
                     if st.button("⏰ Lembrar Depois", key=f"lembrar_{notificacao['solicitacao_id']}"):
                         # Manter notificação ativa
@@ -1739,7 +1760,8 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     # Ausências pendentes
     ausencias_pendentes = 0
     try:
-        cursor.execute("SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
+        cursor.execute(
+            "SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
         resultado = cursor.fetchone()
         if resultado:
             ausencias_pendentes = resultado[0]
@@ -3608,7 +3630,7 @@ def sistema_interface():
             backup_auto = st.checkbox(
                 "Backup Automático Diário"
             )
-            
+
         if st.form_submit_button("💾 Salvar Configurações Gerais", use_container_width=True):
             conn = get_connection()
             cursor = conn.cursor()
@@ -3629,6 +3651,7 @@ def sistema_interface():
             st.success("✅ Configurações salvas!")
             st.rerun()
 
+
 # Rodapé unificado
 st.markdown("""
 <div class="footer-left">
@@ -3644,7 +3667,7 @@ def buscar_registros_dia(usuario, data):
     """Busca todos os registros de ponto de um usuário em uma data específica"""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         cursor.execute("""
             SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
@@ -3652,7 +3675,7 @@ def buscar_registros_dia(usuario, data):
             WHERE usuario = ? AND DATE(data_hora) = ?
             ORDER BY data_hora
         """, (usuario, data))
-        
+
         registros = []
         for row in cursor.fetchall():
             registros.append({
@@ -3664,7 +3687,7 @@ def buscar_registros_dia(usuario, data):
                 'projeto': row[5],
                 'atividade': row[6]
             })
-        
+
         return registros
     finally:
         conn.close()
@@ -3674,27 +3697,28 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
     """Corrige um registro de ponto existente"""
     conn = get_connection()
     cursor = conn.cursor()
-    
+
     try:
         # Verificar se o registro existe
-        cursor.execute(f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
+        cursor.execute(
+            f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
         if not cursor.fetchone():
             return {"success": False, "message": "Registro não encontrado"}
-        
+
         # Atualizar registro
         cursor.execute(f"""
             UPDATE registros_ponto 
             SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
             WHERE id = {SQL_PLACEHOLDER}
         """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
-        
+
         # Registrar auditoria da correção
         cursor.execute(f"""
             INSERT INTO auditoria_correcoes 
             (registro_id, gestor, justificativa, data_correcao)
             VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
         """, (registro_id, gestor, justificativa))
-        
+
         conn.commit()
         return {"success": True, "message": "Registro corrigido com sucesso"}
     except Exception as e:
@@ -3724,7 +3748,7 @@ def main():
             st.rerun()
     else:
         tela_login()
-    
+
     # Rodapé unificado
     st.markdown("""
     <div class="footer-left">
