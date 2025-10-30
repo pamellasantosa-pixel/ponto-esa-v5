@@ -8,7 +8,7 @@ Corrige: timezone em todas as funções, SQL placeholders, expander aninhado
 import re
 
 # Ler arquivo
-with open('ponto_esa_v5/app_v5_final.py', 'r', encoding='utf-8') as f:
+with open('ponto_esa_v5/app_v5_final.py', 'r', encoding='latin-1') as f:
     content = f.read()
 
 print(f"Tamanho original: {len(content)} bytes")
@@ -22,7 +22,8 @@ old_datetime_now = re.compile(r'datetime\.now\(\)(?!\s*\(TIMEZONE_BR\))')
 matches = old_datetime_now.findall(content)
 if matches:
     content = old_datetime_now.sub('get_datetime_br()', content)
-    changes_made.append(f"datetime.now() -> get_datetime_br(): {len(matches)} ocorrências")
+    changes_made.append(
+        f"datetime.now() -> get_datetime_br(): {len(matches)} ocorrências")
 
 # 2. Atualizar registrar_ponto() para usar SQL_PLACEHOLDER
 old_registrar = '''        cursor.execute(\'\'\'
@@ -77,7 +78,8 @@ new_obter_registros = f'''    cursor.execute(f\'\'\'
 
 if old_obter_registros in content:
     content = content.replace(old_obter_registros, new_obter_registros)
-    changes_made.append("obter_registros_usuario() atualizada com SQL_PLACEHOLDER")
+    changes_made.append(
+        "obter_registros_usuario() atualizada com SQL_PLACEHOLDER")
 
 # 4. Corrigir expander aninhado (linha ~3190)
 old_expander = '''                with st.expander("🔑 Alterar Senha"):'''
@@ -116,7 +118,8 @@ new_corrigir = '''        placeholders_update = [SQL_PLACEHOLDER] * 5
 
 if old_corrigir in content:
     content = content.replace(old_corrigir, new_corrigir)
-    changes_made.append("corrigir_registro_ponto() atualizada com SQL_PLACEHOLDER")
+    changes_made.append(
+        "corrigir_registro_ponto() atualizada com SQL_PLACEHOLDER")
 
 # 6. Atualizar docstring no topo
 old_docstring = '''"""
@@ -155,12 +158,15 @@ print("\n✅ Arquivo salvo com line endings LF!")
 # Verificação final
 with open('ponto_esa_v5/app_v5_final.py', 'r', encoding='utf-8') as f:
     verification = f.read()
-    
+
 print(f"\n{'='*60}")
 print("VERIFICAÇÃO FINAL:")
 print(f"{'='*60}")
-print(f"✓ SQL_PLACEHOLDER presente: {verification.count('SQL_PLACEHOLDER')} ocorrências")
-print(f"✓ get_datetime_br presente: {verification.count('get_datetime_br')} ocorrências")
+print(
+    f"✓ SQL_PLACEHOLDER presente: {verification.count('SQL_PLACEHOLDER')} ocorrências")
+print(
+    f"✓ get_datetime_br presente: {verification.count('get_datetime_br')} ocorrências")
 print(f"✓ datetime.now() restantes: {verification.count('datetime.now()')}")
 print(f"✓ import pytz presente: {'import pytz' in verification}")
-print(f"✓ Expander aninhado removido: {'with st.expander' in verification.split('Alterar Senha')[1].split('\n')[0] if 'Alterar Senha' in verification else 'N/A'}")
+print(
+    f"✓ Expander aninhado removido: {'with st.expander' in verification.split('Alterar Senha')[1].split('\n')[0] if 'Alterar Senha' in verification else 'N/A'}")
