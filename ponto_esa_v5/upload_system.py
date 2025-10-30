@@ -56,7 +56,7 @@ class UploadSystem:
 
     def init_database(self):
         """Inicializa tabela de uploads"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -207,7 +207,7 @@ class UploadSystem:
 
     def register_upload(self, usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a=None, relacionado_id=None):
         """Registra upload no banco de dados"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -228,7 +228,7 @@ class UploadSystem:
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -249,7 +249,7 @@ class UploadSystem:
 
     def get_user_uploads(self, usuario, categoria=None, relacionado_a=None, relacionado_id=None):
         """Lista uploads de um usuário"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM uploads WHERE usuario = ? AND status = 'ativo'"
@@ -284,7 +284,7 @@ class UploadSystem:
 
     def get_file_info(self, upload_id, usuario=None):
         """Obtém informações de um arquivo específico"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = "SELECT * FROM uploads WHERE id = ?"
@@ -308,7 +308,7 @@ class UploadSystem:
 
     def delete_file(self, upload_id, usuario):
         """Remove arquivo (marca como inativo)"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -374,7 +374,7 @@ class UploadSystem:
 
     def get_storage_stats(self):
         """Obtém estatísticas de armazenamento"""
-        conn = sqlite3.connect(self.db_path)
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
