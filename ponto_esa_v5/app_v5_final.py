@@ -1,4 +1,4 @@
-"""
+﻿"""
 Ponto ExSA v5.0 - Sistema de Controle de Ponto
 Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias
 Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
@@ -1717,7 +1717,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     # Horas extras pendentes
     cursor.execute(
         "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
-    horas_extras_pendentes = cursor.fetchone()[0]
+    resultado = cursor.fetchone()`n        if resultado:`n            horas_extras_pendentes = resultado[0]
 
     # Atestados do mês
     primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
@@ -1725,7 +1725,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
         SELECT COUNT(*) FROM ausencias 
         WHERE data_inicio >= %s AND tipo LIKE '%Atestado%'
     """, (primeiro_dia_mes,))
-    atestados_mes = cursor.fetchone()[0]
+    resultado = cursor.fetchone()`n    if resultado:`n        atestados_mes = resultado[0]
 
     conn.close()
 
