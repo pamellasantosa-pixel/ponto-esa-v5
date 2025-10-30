@@ -35,7 +35,12 @@ class HorasExtrasSystem:
 
         # Verificar se é hora de notificar
         agora = datetime.now().time()
-        jornada_fim_time = datetime.strptime(jornada_fim, "%H:%M").time()
+        
+        # Converter para time se for string, senão usar diretamente
+        if isinstance(jornada_fim, str):
+            jornada_fim_time = datetime.strptime(jornada_fim, "%H:%M").time()
+        else:
+            jornada_fim_time = jornada_fim
 
         # Notificar se passou do horário previsto
         if agora >= jornada_fim_time:
