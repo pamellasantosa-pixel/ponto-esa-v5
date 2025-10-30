@@ -1,3 +1,1 @@
-Deploy forçado em 30/10/2025 01:00
-Motivo: Render usando commit antigo sem correção AUTOINCREMENT
-Correção: AUTOINCREMENT → SERIAL para PostgreSQL (commit 882f114)
+﻿Deploy 2025-10-29 23:47:13 - Fixed SQL placeholders and IndexError
