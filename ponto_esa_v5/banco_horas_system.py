@@ -305,7 +305,7 @@ class BancoHorasSystem:
         
         cursor.execute("""
             SELECT COUNT(*) FROM feriados 
-            WHERE data = %s AND ativo = 1
+            WHERE data = %s
         """, (data.strftime("%Y-%m-%d"),))
         
         eh_feriado = cursor.fetchone()[0] > 0

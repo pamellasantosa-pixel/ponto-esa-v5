@@ -2519,12 +2519,12 @@ def aprovar_atestados_interface(atestado_system):
         # Listagem completa
         st.markdown("---")
 
-        cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
-                   a.status, a.data_solicitacao, u.nome_completo
+        cursor.execute(f"""
+            SELECT a.id, a.usuario, a.data, a.total_horas,
+                   a.status, a.data_registro, u.nome_completo
             FROM atestados_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
-            ORDER BY a.data_solicitacao DESC
+            ORDER BY a.data_registro DESC
             LIMIT 100
         """)
         todos = cursor.fetchall()
@@ -2533,7 +2533,7 @@ def aprovar_atestados_interface(atestado_system):
         if todos:
             # Criar DataFrame
             df = pd.DataFrame(todos, columns=[
-                'ID', 'Usuário', 'Data', 'Horas', 'Status', 'Data Solicitação', 'Nome'
+                'ID', 'Usuário', 'Data', 'Total Horas', 'Status', 'Data Registro', 'Nome'
             ])
 
             df['Status'] = df['Status'].map({
@@ -2543,14 +2543,14 @@ def aprovar_atestados_interface(atestado_system):
             })
 
             df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y')
-            df['Data Solicitação'] = pd.to_datetime(
-                df['Data Solicitação']).dt.strftime('%d/%m/%Y %H:%M')
+            df['Data Registro'] = pd.to_datetime(
+                df['Data Registro']).dt.strftime('%d/%m/%Y %H:%M')
             df['Nome'] = df.apply(lambda row: row['Nome']
                                   or row['Usuário'], axis=1)
 
             # Exibir apenas colunas relevantes
             st.dataframe(
-                df[['Nome', 'Data', 'Horas', 'Status', 'Data Solicitação']],
+                df[['Nome', 'Data', 'Total Horas', 'Status', 'Data Registro']],
                 use_container_width=True,
                 hide_index=True
             )
