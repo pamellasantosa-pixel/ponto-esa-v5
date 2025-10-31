@@ -713,22 +713,19 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         pode_registrar = calculo_horas_system.pode_registrar_tipo(
             st.session_state.usuario, data_str, tipo_registro)
 
-        desabilitar_botao = False
-        if tipo_registro in ["Início", "Fim"]:
-            if not pode_registrar:
-                st.warning(
-                    f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
-                desabilitar_botao = True
-        else:
-            # Registros intermediários podem ser realizados livremente
-            desabilitar_botao = False
+        if tipo_registro in ["Início", "Fim"] and not pode_registrar:
+            st.warning(
+                f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
         submitted = st.form_submit_button(
-            "✅ Registrar Ponto", use_container_width=True, disabled=desabilitar_botao)
+            "✅ Registrar Ponto", use_container_width=True)
 
-    if submitted and (pode_registrar or tipo_registro == "Intermediário"):
+        if submitted:
             if not atividade.strip():
                 st.error("❌ A descrição da atividade é obrigatória")
+            elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
+                st.error(
+                    f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
                 # Tentar obter coordenadas GPS via JavaScript
                 gps_coords = st.components.v1.html("""
