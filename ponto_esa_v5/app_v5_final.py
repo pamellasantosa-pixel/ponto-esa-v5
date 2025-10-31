@@ -1155,8 +1155,17 @@ def registrar_ausencia_interface(upload_system):
         motivo = st.text_area("📝 Motivo da Ausência",
                               placeholder="Descreva o motivo da ausência...")
 
-        # Removido: opção de não possuir comprovante e upload (será tratado via Atestado)
+        # Opção de upload de comprovante
+        st.markdown("**📎 Comprovante:**")
+        nao_possui_comprovante_check = st.checkbox("❌ Não possuo comprovante")
+        
         uploaded_file = None
+        if not nao_possui_comprovante_check:
+            uploaded_file = st.file_uploader(
+                "Anexar comprovante (PDF, JPG, PNG)",
+                type=['pdf', 'jpg', 'jpeg', 'png'],
+                help="Faça upload do atestado médico, declaração ou outro documento comprobatório"
+            )
 
         submitted = st.form_submit_button(
             "✅ Registrar Ausência", use_container_width=True)
@@ -1169,22 +1178,41 @@ def registrar_ausencia_interface(upload_system):
                     "❌ Data de início deve ser anterior ou igual à data de fim")
             else:
                 arquivo_comprovante = None
-
-                # Não há upload de comprovante nesta tela; arquivo_comprovante permanece None.
-                # Nota: anteriormente havia um checkbox "Não possuo comprovante" aqui. Para evitar
-                # referências indefinidas e manter compatibilidade do schema, definimos o valor
-                # padrão para a coluna `nao_possui_comprovante` como 0 (falso).
-                nao_possui_comprovante = 0
+                
+                # Processar upload se houver arquivo
+                if uploaded_file is not None:
+                    import hashlib
+                    from datetime import datetime
+                    
+                    # Gerar nome único para o arquivo
+                    file_hash = hashlib.md5(uploaded_file.read()).hexdigest()
+                    uploaded_file.seek(0)  # Resetar ponteiro do arquivo
+                    
+                    ext = uploaded_file.name.split('.')[-1]
+                    nome_arquivo = f"{st.session_state.usuario}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file_hash[:8]}.{ext}"
+                    
+                    # Criar diretório se não existir
+                    ano = datetime.now().year
+                    mes = datetime.now().month
+                    upload_dir = os.path.join("uploads", "ausencias", str(ano), str(mes).zfill(2))
+                    os.makedirs(upload_dir, exist_ok=True)
+                    
+                    # Salvar arquivo
+                    caminho_completo = os.path.join(upload_dir, nome_arquivo)
+                    with open(caminho_completo, "wb") as f:
+                        f.write(uploaded_file.read())
+                    
+                    arquivo_comprovante = caminho_completo
 
                 # Registrar ausência no banco
                 conn = get_connection()
                 cursor = conn.cursor()
 
                 try:
-                    cursor.execute("""
+                    cursor.execute(f"""
                         INSERT INTO ausencias 
                         (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                     """, (
                         st.session_state.usuario,
                         data_inicio.strftime("%Y-%m-%d"),
@@ -1192,13 +1220,13 @@ def registrar_ausencia_interface(upload_system):
                         tipo_ausencia,
                         motivo,
                         arquivo_comprovante,
-                        1 if nao_possui_comprovante else 0
+                        1 if nao_possui_comprovante_check else 0
                     ))
 
                     conn.commit()
                     st.success("✅ Ausência registrada com sucesso!")
 
-                    if nao_possui_comprovante:
+                    if nao_possui_comprovante_check:
                         st.info(
                             "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
 
