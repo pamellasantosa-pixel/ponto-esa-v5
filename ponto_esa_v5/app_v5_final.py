@@ -713,14 +713,20 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         pode_registrar = calculo_horas_system.pode_registrar_tipo(
             st.session_state.usuario, data_str, tipo_registro)
 
-        if not pode_registrar and tipo_registro in ["Início", "Fim"]:
-            st.warning(
-                f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
+        desabilitar_botao = False
+        if tipo_registro in ["Início", "Fim"]:
+            if not pode_registrar:
+                st.warning(
+                    f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
+                desabilitar_botao = True
+        else:
+            # Registros intermediários podem ser realizados livremente
+            desabilitar_botao = False
 
         submitted = st.form_submit_button(
-            "✅ Registrar Ponto", use_container_width=True, disabled=not pode_registrar)
+            "✅ Registrar Ponto", use_container_width=True, disabled=desabilitar_botao)
 
-        if submitted and pode_registrar:
+    if submitted and (pode_registrar or tipo_registro == "Intermediário"):
             if not atividade.strip():
                 st.error("❌ A descrição da atividade é obrigatória")
             else:
