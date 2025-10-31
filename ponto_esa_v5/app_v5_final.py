@@ -1869,9 +1869,8 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 jornada_fim = jornada[1] or "17:00"
 
                 # Calcular discrepâncias
-                inicio_previsto = datetime.strptime(
-                    jornada_inicio, "%H:%M").time()
-                fim_previsto = datetime.strptime(jornada_fim, "%H:%M").time()
+                inicio_previsto = safe_time_parse(jornada_inicio).time()
+                fim_previsto = safe_time_parse(jornada_fim).time()
 
                 inicio_real = datetime.strptime(
                     calculo_dia["primeiro_registro"], "%H:%M").time()
@@ -3284,15 +3283,13 @@ def gerenciar_usuarios_interface():
                         with col_c:
                             nova_jornada_inicio = st.time_input(
                                 "Início:",
-                                value=datetime.strptime(jornada_inicio or "08:00", "%H:%M").time(
-                                ) if jornada_inicio else time(8, 0),
+                                value=safe_time_parse(jornada_inicio or "08:00").time() if jornada_inicio else time(8, 0),
                                 key=f"inicio_{usuario_id}"
                             )
                         with col_d:
                             nova_jornada_fim = st.time_input(
                                 "Fim:",
-                                value=datetime.strptime(jornada_fim or "17:00", "%H:%M").time(
-                                ) if jornada_fim else time(17, 0),
+                                value=safe_time_parse(jornada_fim or "17:00").time() if jornada_fim else time(17, 0),
                                 key=f"fim_{usuario_id}"
                             )
 

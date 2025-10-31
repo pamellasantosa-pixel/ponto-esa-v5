@@ -5,8 +5,24 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 
 import sqlite3
 from database_postgresql import get_connection
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as time_type
 import calendar
+
+
+def safe_time_parse(time_value):
+    """
+    Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
+    PostgreSQL retorna time objects, SQLite retorna strings.
+    """
+    if time_value is None:
+        return datetime.strptime("08:00", "%H:%M")
+    if isinstance(time_value, time_type):
+        # PostgreSQL retorna datetime.time - converter para datetime
+        return datetime.combine(date.today(), time_value)
+    if isinstance(time_value, str):
+        # SQLite retorna string
+        return datetime.strptime(time_value, "%H:%M")
+    return time_value
 
 
 class CalculoHorasSystem:
@@ -249,8 +265,8 @@ class CalculoHorasSystem:
         jornada_fim = jornada[1] or "17:00"
 
         # Calcular horas previstas por dia
-        inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
-        fim_dt = datetime.strptime(jornada_fim, "%H:%M")
+        inicio_dt = safe_time_parse(jornada_inicio)
+        fim_dt = safe_time_parse(jornada_fim)
         horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas > 6:
             horas_previstas -= 1  # Desconto do almoço
