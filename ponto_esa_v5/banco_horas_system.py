@@ -102,11 +102,24 @@ class BancoHorasSystem:
         # Processar registros de ponto
         for registro in registros_por_dia:
             data_reg = registro[0]
-            primeiro = datetime.strptime(registro[1], "%Y-%m-%d %H:%M:%S")
-            ultimo = datetime.strptime(registro[2], "%Y-%m-%d %H:%M:%S")
+            # PostgreSQL retorna datetime, SQLite retorna string
+            if isinstance(registro[1], datetime):
+                primeiro = registro[1]
+            else:
+                primeiro = datetime.strptime(registro[1], "%Y-%m-%d %H:%M:%S")
+            
+            if isinstance(registro[2], datetime):
+                ultimo = registro[2]
+            else:
+                ultimo = datetime.strptime(registro[2], "%Y-%m-%d %H:%M:%S")
             
             # Verificar se é domingo ou feriado
-            data_obj = datetime.strptime(data_reg, "%Y-%m-%d").date()
+            if isinstance(data_reg, date):
+                data_obj = data_reg
+            elif isinstance(data_reg, datetime):
+                data_obj = data_reg.date()
+            else:
+                data_obj = datetime.strptime(data_reg, "%Y-%m-%d").date()
             eh_domingo = data_obj.weekday() == 6
             eh_feriado = self._eh_feriado(data_obj)
             

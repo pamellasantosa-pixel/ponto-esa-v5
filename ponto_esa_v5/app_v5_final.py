@@ -85,6 +85,21 @@ def safe_date_parse(date_value):
     return date_value
 
 
+def safe_time_parse(time_value):
+    """
+    Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
+    PostgreSQL retorna time objects, SQLite retorna strings.
+    """
+    from datetime import time as time_type
+    if time_value is None:
+        return None
+    if isinstance(time_value, time_type):
+        return datetime.combine(date.today(), time_value)
+    if isinstance(time_value, str):
+        return datetime.strptime(time_value, "%H:%M")
+    return time_value
+
+
 # Importar sistemas desenvolvidos
 
 # Configuração da página
@@ -2404,14 +2419,14 @@ def aprovar_atestados_interface(atestado_system):
         cursor = conn.cursor()
 
         cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
-                   a.justificativa, a.data_rejeicao, a.rejeitado_por,
-                   a.motivo_rejeicao, u.nome_completo, u2.nome_completo as rejeitador_nome
+            SELECT a.id, a.usuario, a.data, a.total_horas, 
+                   a.motivo, a.data_aprovacao, a.aprovado_por,
+                   a.observacoes, u.nome_completo, u2.nome_completo as aprovador_nome
             FROM atestados_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
-            LEFT JOIN usuarios u2 ON a.rejeitado_por = u2.usuario
+            LEFT JOIN usuarios u2 ON a.aprovado_por = u2.usuario
             WHERE a.status = 'rejeitado'
-            ORDER BY a.data_rejeicao DESC
+            ORDER BY a.data_aprovacao DESC
             LIMIT 50
         """)
         rejeitados = cursor.fetchall()
@@ -2421,22 +2436,23 @@ def aprovar_atestados_interface(atestado_system):
             st.warning(f"❌ {len(rejeitados)} atestado(s) rejeitado(s)")
 
             for atestado in rejeitados:
-                atestado_id, usuario, data, horas, justificativa, data_rejeicao, rejeitado_por, motivo_rejeicao, nome_completo, rejeitador_nome = atestado
+                atestado_id, usuario, data, horas, motivo, data_rejeicao, rejeitado_por, observacoes, nome_completo, rejeitador_nome = atestado
 
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(
                         f"**Data:** {safe_date_parse(data).strftime('%d/%m/%Y')}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
-                    st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
+                    st.markdown(f"**Motivo:** {motivo or 'N/A'}")
 
                     st.markdown("---")
-                    st.error(
-                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                    if data_rejeicao and rejeitador_nome:
+                        st.error(
+                            f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
 
-                    if motivo_rejeicao:
+                    if observacoes:
                         st.warning(
-                            f"📝 **Motivo da Rejeição:** {motivo_rejeicao}")
+                            f"📝 **Observações:** {observacoes}")
         else:
             st.info("📁 Nenhum atestado rejeitado")
 
@@ -3549,10 +3565,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_jornada:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3591,10 +3607,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_he:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3636,10 +3652,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_gps:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3668,10 +3684,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_gerais:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
