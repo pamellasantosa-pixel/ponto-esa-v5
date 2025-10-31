@@ -1161,6 +1161,8 @@ def registrar_ausencia_interface(upload_system):
         # Opção de upload de comprovante
         st.markdown("**📎 Comprovante:**")
         nao_possui_comprovante_check = st.checkbox("❌ Não possuo comprovante")
+        if nao_possui_comprovante_check:
+            st.warning("⚠️ Ausências sem comprovante podem gerar desconto automático no banco de horas.")
         
         uploaded_file = None
         if not nao_possui_comprovante_check:
@@ -1179,18 +1181,17 @@ def registrar_ausencia_interface(upload_system):
             elif data_inicio > data_fim:
                 st.error(
                     "❌ Data de início deve ser anterior ou igual à data de fim")
+            elif not nao_possui_comprovante_check and uploaded_file is None:
+                st.error("❌ Anexe o comprovante ou marque a opção 'Não possuo comprovante'.")
             else:
                 arquivo_comprovante = None
                 
                 # Processar upload se houver arquivo
                 if uploaded_file is not None:
                     import hashlib
-                    from datetime import datetime
-                    
-                    # Gerar nome único para o arquivo
-                    file_hash = hashlib.md5(uploaded_file.read()).hexdigest()
-                    uploaded_file.seek(0)  # Resetar ponteiro do arquivo
-                    
+                    file_bytes = uploaded_file.read()
+                    file_hash = hashlib.md5(file_bytes).hexdigest()
+
                     ext = uploaded_file.name.split('.')[-1]
                     nome_arquivo = f"{st.session_state.usuario}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file_hash[:8]}.{ext}"
                     
@@ -1203,7 +1204,7 @@ def registrar_ausencia_interface(upload_system):
                     # Salvar arquivo
                     caminho_completo = os.path.join(upload_dir, nome_arquivo)
                     with open(caminho_completo, "wb") as f:
-                        f.write(uploaded_file.read())
+                        f.write(file_bytes)
                     
                     arquivo_comprovante = caminho_completo
 
@@ -1231,7 +1232,7 @@ def registrar_ausencia_interface(upload_system):
 
                     if nao_possui_comprovante_check:
                         st.info(
-                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
+                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação. O desconto será lançado no banco de horas até a regularização.")
 
                     st.rerun()
 

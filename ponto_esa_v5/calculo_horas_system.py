@@ -215,7 +215,7 @@ class CalculoHorasSystem:
         try:
             cursor.execute("""
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = %s AND ativo = 1
+                WHERE data = %s
             """, (data.strftime("%Y-%m-%d"),))
 
             eh_feriado = cursor.fetchone()[0] > 0
@@ -236,7 +236,7 @@ class CalculoHorasSystem:
 
         cursor.execute("""
             SELECT data, nome, tipo FROM feriados 
-            WHERE data BETWEEN %s AND %s AND ativo = 1
+            WHERE data BETWEEN %s AND %s
             ORDER BY data
         """, (data_inicio, data_fim))
 
