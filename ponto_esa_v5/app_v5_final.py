@@ -55,6 +55,36 @@ def get_datetime_br():
     return datetime.now(TIMEZONE_BR)
 
 
+def safe_datetime_parse(dt_value):
+    """
+    Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
+    PostgreSQL retorna datetime objects, SQLite retorna strings ISO.
+    """
+    if dt_value is None:
+        return None
+    if isinstance(dt_value, datetime):
+        return dt_value
+    if isinstance(dt_value, str):
+        return datetime.fromisoformat(dt_value)
+    return dt_value
+
+
+def safe_date_parse(date_value):
+    """
+    Converte para date de forma segura (compatível com PostgreSQL e SQLite).
+    PostgreSQL retorna date objects, SQLite retorna strings.
+    """
+    if date_value is None:
+        return None
+    if isinstance(date_value, date):
+        return date_value
+    if isinstance(date_value, datetime):
+        return date_value.date()
+    if isinstance(date_value, str):
+        return datetime.strptime(date_value, '%Y-%m-%d').date()
+    return date_value
+
+
 # Importar sistemas desenvolvidos
 
 # Configuração da página
@@ -2137,11 +2167,11 @@ def aprovar_atestados_interface(atestado_system):
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
                         st.markdown(
-                            f"**Data do Atestado:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                            f"**Data do Atestado:** {safe_date_parse(data).strftime('%d/%m/%Y')}")
                         st.markdown(
                             f"**Horas Trabalhadas:** {format_time_duration(horas)}")
                         st.markdown(
-                            f"**Solicitado em:** {datetime.fromisoformat(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
 
                         st.markdown("---")
                         st.markdown("**Justificativa:**")
@@ -2321,7 +2351,7 @@ def aprovar_atestados_interface(atestado_system):
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
                         st.markdown(
-                            f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                            f"**Data:** {safe_date_parse(data).strftime('%d/%m/%Y')}")
                         st.markdown(
                             f"**Horas:** {format_time_duration(horas)}")
                         st.markdown(
@@ -2329,7 +2359,7 @@ def aprovar_atestados_interface(atestado_system):
 
                         st.markdown("---")
                         st.success(
-                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
 
                         if observacoes:
                             st.info(f"💬 **Observações:** {observacoes}")
@@ -2397,13 +2427,13 @@ def aprovar_atestados_interface(atestado_system):
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(
-                        f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                        f"**Data:** {safe_date_parse(data).strftime('%d/%m/%Y')}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
                     st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
 
                     st.markdown("---")
                     st.error(
-                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
 
                     if motivo_rejeicao:
                         st.warning(
@@ -2636,7 +2666,8 @@ def todos_registros_interface(calculo_horas_system):
         registros_agrupados = {}
         for registro in registros:
             reg_id, usuario, data_hora_str, tipo, modalidade, projeto, atividade, localizacao, lat, lng, nome_completo = registro
-            data_hora = datetime.fromisoformat(data_hora_str)
+            # PostgreSQL retorna datetime object, SQLite retorna string
+            data_hora = safe_datetime_parse(data_hora_str)
             data_str = data_hora.strftime("%Y-%m-%d")
 
             chave = f"{usuario}_{data_str}"
@@ -2932,7 +2963,7 @@ def gerenciar_arquivos_interface(upload_system):
                     st.write(f"**Usuário:** {nome_completo or usuario}")
                     st.write(f"**Tipo:** {tipo_arquivo or 'N/A'}")
                     st.write(
-                        f"**Data:** {datetime.fromisoformat(data).strftime('%d/%m/%Y às %H:%M')}")
+                        f"**Data:** {safe_datetime_parse(data).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
                     st.write(f"**Formato:** {tipo_mime}")
 
