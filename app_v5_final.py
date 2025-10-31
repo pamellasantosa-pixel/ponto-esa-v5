@@ -1,61 +1,32 @@
 """
 Ponto ExSA v5.0 - Sistema de Controle de Ponto
-Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias  
+Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias
 Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
-Última atualização: 24/10/2025 16:45 - TIMEZONE BRASÍLIA CORRIGIDO (get_datetime_br)
-Deploy: Render.com | Banco: PostgreSQL
 """
 
-from notifications import notification_manager
-from calculo_horas_system import CalculoHorasSystem
-from banco_horas_system import BancoHorasSystem, format_saldo_display
-from horas_extras_system import HorasExtrasSystem
-from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
-from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
 import streamlit as st
-import os
+import sqlite3
 import hashlib
 from datetime import datetime, timedelta, date, time
 import pandas as pd
+import os
 import base64
 import json
 import uuid
 from io import BytesIO
 import sys
-from dotenv import load_dotenv
-import pytz  # Para gerenciar fusos horários
-
-# Carregar variáveis de ambiente
-load_dotenv()
-
-# Verificar se usa PostgreSQL
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
-
-if USE_POSTGRESQL:
-    import psycopg2
-    from database_postgresql import get_connection, init_db
-    # PostgreSQL usa %s como placeholder
-    SQL_PLACEHOLDER = '%s'
-else:
-    import sqlite3
-    from database import init_db, get_connection
-    # SQLite usa ? como placeholder
-    SQL_PLACEHOLDER = '?'
 
 # Adicionar o diretório atual ao path para permitir importações
 if os.path.dirname(__file__) not in sys.path:
     sys.path.insert(0, os.path.dirname(__file__))
 
-# Configurar timezone do Brasil (Brasília)
-TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
-
-
-def get_datetime_br():
-    """Retorna datetime atual no fuso horário de Brasília"""
-    return datetime.now(TIMEZONE_BR)
-
-
 # Importar sistemas desenvolvidos
+from database import init_db
+from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
+from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
+from horas_extras_system import HorasExtrasSystem
+from banco_horas_system import BancoHorasSystem, format_saldo_display
+from calculo_horas_system import CalculoHorasSystem
 
 # Configuração da página
 st.set_page_config(
@@ -253,27 +224,6 @@ st.markdown("""
         color: #721c24;
     }
 </style>
-
-<script>
-function updateClock() {
-    const now = new Date();
-    const dateStr = now.toLocaleDateString('pt-BR');
-    const timeStr = now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
-    const elements = document.querySelectorAll('.user-info');
-    elements.forEach(el => {
-        if (el.textContent.includes('•')) {
-            const parts = el.textContent.split(' • ');
-            if (parts.length === 2) {
-                el.textContent = parts[0] + ' • ' + dateStr + ' ' + timeStr;
-            }
-        }
-    });
-}
-// Atualizar a cada minuto
-setInterval(updateClock, 60000);
-// Atualizar imediatamente
-updateClock();
-</script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -375,12 +325,12 @@ def init_systems():
 
 def verificar_login(usuario, senha):
     """Verifica credenciais de login"""
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
 
     senha_hash = hashlib.sha256(senha.encode()).hexdigest()
     cursor.execute(
-        "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
+        "SELECT tipo, nome_completo FROM usuarios WHERE usuario = ? AND senha = ?", (usuario, senha_hash))
     result = cursor.fetchone()
     conn.close()
 
@@ -389,7 +339,7 @@ def verificar_login(usuario, senha):
 
 def obter_projetos_ativos():
     """Obtém lista de projetos ativos"""
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
     cursor.execute("SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
     projetos = [row[0] for row in cursor.fetchall()]
@@ -399,17 +349,17 @@ def obter_projetos_ativos():
 
 def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro=None, latitude=None, longitude=None):
     """Registra ponto do usuário com GPS real"""
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
 
-    # Se não especificada, usar data/hora atual no fuso horário de Brasília
+    # Se não especificada, usar data/hora atual
     if data_registro:
-        agora = get_datetime_br()
+        agora = datetime.now()
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
-        data_hora_registro = TIMEZONE_BR.localize(data_obj.replace(
-            hour=agora.hour, minute=agora.minute, second=agora.second))
+        data_hora_registro = data_obj.replace(
+            hour=agora.hour, minute=agora.minute, second=agora.second)
     else:
-        data_hora_registro = get_datetime_br()
+        data_hora_registro = datetime.now()
 
     # Formatar localização
     if latitude and longitude:
@@ -417,11 +367,9 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
     else:
         localizacao = "GPS não disponível"
 
-    # Usar placeholder correto baseado no tipo de banco
-    placeholders = ', '.join([SQL_PLACEHOLDER] * 9)
-    cursor.execute(f'''
+    cursor.execute('''
         INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-        VALUES ({placeholders})
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
     ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
 
     conn.commit()
@@ -432,14 +380,16 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
 
 def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
     """Obtém registros de ponto do usuário"""
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
 
-    query = f"SELECT * FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER}"
+    query = """SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade, 
+               localizacao, latitude, longitude, data_hora as registro 
+               FROM registros_ponto WHERE usuario = ?"""
     params = [usuario]
 
     if data_inicio and data_fim:
-        query += f" AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}"
+        query += " AND DATE(data_hora) BETWEEN ? AND ?"
         params.extend([data_inicio, data_fim])
 
     query += " ORDER BY data_hora DESC"
@@ -453,24 +403,13 @@ def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
 
 def obter_usuarios_para_aprovacao():
     """Obtém lista de usuários que podem aprovar horas extras"""
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
     cursor.execute(
         "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
     usuarios = cursor.fetchall()
     conn.close()
     return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
-
-
-def obter_usuarios_ativos():
-    """Obtém lista de usuários ativos (retorna dicionários com 'usuario' e 'nome_completo')."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows]
 
 # Interface de login
 
@@ -552,7 +491,7 @@ def tela_funcionario():
     st.markdown(f"""
     <div class="main-header">
         <div class="user-welcome">👋 Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Funcionário • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-info">Funcionário • {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -633,96 +572,98 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
     st.subheader("➕ Novo Registro")
 
-    with st.form("registro_ponto"):
-        col1, col2 = st.columns(2)
+    # Campos fora do formulário para validação em tempo real
+    col1, col2 = st.columns(2)
 
-        with col1:
-            data_registro = st.date_input(
-                "📅 Data do Registro",
-                value=date.today(),
-                min_value=date.today() - timedelta(days=3),
-                max_value=date.today(),
-                help="Você pode registrar ponto para hoje ou até 3 dias retroativos"
-            )
-
-            modalidade = st.selectbox(
-                "🏢 Modalidade de Trabalho",
-                ["Presencial", "Home Office", "Trabalho em Campo"]
-            )
-
-        with col2:
-            tipo_registro = st.selectbox(
-                "⏰ Tipo de Registro",
-                ["Início", "Intermediário", "Fim"]
-            )
-
-            projeto = st.selectbox("📊 Projeto", obter_projetos_ativos())
-
-        atividade = st.text_area(
-            "📝 Descrição da Atividade",
-            placeholder="Descreva brevemente a atividade realizada..."
+    with col1:
+        data_registro = st.date_input(
+            "📅 Data do Registro",
+            value=date.today(),
+            min_value=date.today() - timedelta(days=3),
+            max_value=date.today(),
+            help="Você pode registrar ponto para hoje ou até 3 dias retroativos",
+            key="data_registro"
         )
 
-        # Validação de registros
-        data_str = data_registro.strftime("%Y-%m-%d")
-        pode_registrar = calculo_horas_system.pode_registrar_tipo(
-            st.session_state.usuario, data_str, tipo_registro)
+        modalidade = st.selectbox(
+            "🏢 Modalidade de Trabalho",
+            ["Presencial", "Home Office", "Trabalho em Campo"],
+            key="modalidade"
+        )
 
-        if not pode_registrar and tipo_registro in ["Início", "Fim"]:
-            st.warning(
-                f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
+    with col2:
+        tipo_registro = st.selectbox(
+            "⏰ Tipo de Registro",
+            ["Início", "Intermediário", "Fim"],
+            key="tipo_registro"
+        )
 
-        submitted = st.form_submit_button(
-            "✅ Registrar Ponto", use_container_width=True, disabled=not pode_registrar)
+        projeto = st.selectbox("📊 Projeto", obter_projetos_ativos(), key="projeto")
 
-        if submitted and pode_registrar:
-            if not atividade.strip():
-                st.error("❌ A descrição da atividade é obrigatória")
-            else:
-                # Tentar obter coordenadas GPS via JavaScript
-                gps_coords = st.components.v1.html("""
-                <script>
-                const gps = getStoredGPS();
-                if (gps) {
-                    document.write(JSON.stringify(gps));
-                } else {
-                    document.write('null');
-                }
-                </script>
-                """, height=0)
+    atividade = st.text_area(
+        "📝 Descrição da Atividade",
+        placeholder="Descreva brevemente a atividade realizada...",
+        key="atividade"
+    )
 
-                latitude = None
-                longitude = None
+    # Validação de registros
+    data_str = data_registro.strftime("%Y-%m-%d")
+    pode_registrar = calculo_horas_system.pode_registrar_tipo(
+        st.session_state.usuario, data_str, tipo_registro)
 
-                # Registrar ponto
-                data_hora_registro = registrar_ponto(
-                    st.session_state.usuario,
-                    tipo_registro,
-                    modalidade,
-                    projeto,
-                    atividade,
-                    data_registro.strftime("%Y-%m-%d"),
-                    latitude,
-                    longitude
-                )
+    if not pode_registrar:
+        st.warning(
+            f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
-                st.success(f"✅ Ponto registrado com sucesso!")
-                st.info(
-                    f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
+    # Botão de registro
+    if st.button("✅ Registrar Ponto", use_container_width=True, disabled=not pode_registrar, key="btn_registrar"):
+        if not atividade.strip():
+            st.error("❌ A descrição da atividade é obrigatória")
+        else:
+            # Tentar obter coordenadas GPS via JavaScript
+            gps_coords = st.components.v1.html("""
+            <script>
+            const gps = getStoredGPS();
+            if (gps) {
+                document.write(JSON.stringify(gps));
+            } else {
+                document.write('null');
+            }
+            </script>
+            """, height=0)
 
-                # Verificar se é fim de jornada para notificar horas extras (se disponível)
-                if tipo_registro == "Fim" and horas_extras_system is not None:
-                    try:
-                        verificacao = horas_extras_system.verificar_fim_jornada(
-                            st.session_state.usuario)
-                        if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
-                            st.info(f"💡 {verificacao.get('message')}")
-                    except Exception:
-                        # Não bloquear o registro por erro em sistema de horas extras
-                        st.info(
-                            "💡 Não foi possível verificar horas extras no momento.")
+            latitude = None
+            longitude = None
 
-                st.rerun()
+            # Registrar ponto
+            data_hora_registro = registrar_ponto(
+                st.session_state.usuario,
+                tipo_registro,
+                modalidade,
+                projeto,
+                atividade,
+                data_registro.strftime("%Y-%m-%d"),
+                latitude,
+                longitude
+            )
+
+            st.success(f"✅ Ponto registrado com sucesso!")
+            st.info(
+                f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
+
+            # Verificar se é fim de jornada para notificar horas extras (se disponível)
+            if tipo_registro == "Fim" and horas_extras_system is not None:
+                try:
+                    verificacao = horas_extras_system.verificar_fim_jornada(
+                        st.session_state.usuario)
+                    if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
+                        st.info(f"💡 {verificacao.get('message')}")
+                except Exception:
+                    # Não bloquear o registro por erro em sistema de horas extras
+                    st.info(
+                        "💡 Não foi possível verificar horas extras no momento.")
+
+            st.rerun()
 
     # Mostrar registros do dia selecionado
     data_selecionada = st.date_input(
@@ -884,7 +825,7 @@ def horas_extras_interface(horas_extras_system):
         # Aplicar filtro de período
         if periodo != "Todos":
             dias = 7 if periodo == "Últimos 7 dias" else 30
-            data_limite = (get_datetime_br() - timedelta(days=dias)
+            data_limite = (datetime.now() - timedelta(days=dias)
                            ).strftime("%Y-%m-%d")
             solicitacoes = [
                 s for s in solicitacoes if s["data"] >= data_limite]
@@ -1110,8 +1051,28 @@ def registrar_ausencia_interface(upload_system):
         motivo = st.text_area("📝 Motivo da Ausência",
                               placeholder="Descreva o motivo da ausência...")
 
-        # Removido: opção de não possuir comprovante e upload (será tratado via Atestado)
-        uploaded_file = None
+        # Upload de comprovante e checkbox
+        st.markdown("📎 **Comprovante**")
+        
+        # Mostrar aviso para Atestado Médico
+        if tipo_ausencia == "Atestado Médico":
+            st.info("ℹ️ Para Atestado Médico é obrigatório anexar o comprovante ou marcar que não possui.")
+        
+        uploaded_file = st.file_uploader(
+            "Anexe comprovante (PDF, JPG, PNG, DOCX)" + (" - OBRIGATÓRIO" if tipo_ausencia == "Atestado Médico" else " - Opcional"),
+            type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+            help="Tamanho máximo: 10MB",
+            key="ausencia_uploaded_file"
+        )
+
+        nao_possui_comprovante = st.checkbox(
+            "❌ Não possuo comprovante no momento",
+            help="Marque se não houver documento a anexar agora",
+            key="ausencia_nao_possui"
+        )
+
+        if nao_possui_comprovante:
+            st.warning("⚠️ O período será descontado em banco de horas até apresentação do comprovante.")
 
         submitted = st.form_submit_button(
             "✅ Registrar Ausência", use_container_width=True)
@@ -1123,23 +1084,39 @@ def registrar_ausencia_interface(upload_system):
                 st.error(
                     "❌ Data de início deve ser anterior ou igual à data de fim")
             else:
+                # Validação para Atestado Médico
+                if tipo_ausencia == "Atestado Médico":
+                    if not uploaded_file and not nao_possui_comprovante:
+                        st.error("❌ Para 'Atestado Médico' é obrigatório anexar o comprovante OU marcar que não possui.")
+                        st.stop()
+
                 arquivo_comprovante = None
 
-                # Não há upload de comprovante nesta tela; arquivo_comprovante permanece None.
-                # Nota: anteriormente havia um checkbox "Não possuo comprovante" aqui. Para evitar
-                # referências indefinidas e manter compatibilidade do schema, definimos o valor
-                # padrão para a coluna `nao_possui_comprovante` como 0 (falso).
-                nao_possui_comprovante = 0
+                # Processar upload se houver
+                if uploaded_file and not nao_possui_comprovante:
+                    upload_result = upload_system.save_file(
+                        file_content=uploaded_file.read(),
+                        usuario=st.session_state.usuario,
+                        original_filename=uploaded_file.name,
+                        categoria='ausencia'
+                    )
+
+                    if upload_result.get("success"):
+                        arquivo_comprovante = upload_result.get("filename")
+                        st.success(f"📎 Arquivo enviado: {uploaded_file.name}")
+                    else:
+                        st.error(f"❌ Erro no upload: {upload_result.get('message','erro')}")
+                        st.stop()
 
                 # Registrar ausência no banco
-                conn = get_connection()
+                conn = sqlite3.connect("database/ponto_esa.db")
                 cursor = conn.cursor()
 
                 try:
                     cursor.execute("""
                         INSERT INTO ausencias 
                         (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
                     """, (
                         st.session_state.usuario,
                         data_inicio.strftime("%Y-%m-%d"),
@@ -1153,9 +1130,14 @@ def registrar_ausencia_interface(upload_system):
                     conn.commit()
                     st.success("✅ Ausência registrada com sucesso!")
 
-                    if nao_possui_comprovante:
-                        st.info(
-                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
+                    # Mensagens específicas
+                    if tipo_ausencia == "Atestado Médico":
+                        if arquivo_comprovante:
+                            st.success("✅ Atestado médico com comprovante anexado - período será abonado conforme política.")
+                        elif nao_possui_comprovante:
+                            st.warning("⚠️ Atestado médico SEM comprovante - o período será descontado em banco de horas até apresentação.")
+                    elif nao_possui_comprovante:
+                        st.info("💡 Lembre-se de apresentar o comprovante assim que possível.")
 
                     st.rerun()
 
@@ -1167,294 +1149,179 @@ def registrar_ausencia_interface(upload_system):
 
 def atestado_horas_interface(atestado_system, upload_system):
     """Interface para atestado de horas"""
-    try:
-        st.markdown("""
-        <div class="feature-card">
-            <h3>⏰ Atestado de Horas</h3>
-            <p>Registre ausências parciais com horários específicos</p>
-        </div>
-        """, unsafe_allow_html=True)
-
-        tab1, tab2 = st.tabs(["📝 Novo Atestado", "📋 Meus Atestados"])
-
-        with tab1:
-            st.subheader("📝 Registrar Novo Atestado de Horas")
-
-            with st.form("atestado_horas_form"):
-                col1, col2 = st.columns(2)
-
-                with col1:
-                    data_atestado = st.date_input(
-                        "📅 Data da Ausência",
-                        value=date.today(),
-                        max_value=date.today() + timedelta(days=3)
-                    )
-
-                    hora_inicio = st.time_input(
-                        "🕐 Horário de Início da Ausência")
-
-                with col2:
-                    hora_fim = st.time_input("🕕 Horário de Fim da Ausência")
-
-                    # Calcular horas automaticamente
-                    if hora_inicio and hora_fim:
-                        total_horas = atestado_system.calcular_horas_ausencia(
-                            hora_inicio.strftime("%H:%M"),
-                            hora_fim.strftime("%H:%M")
-                        )
-                        st.info(
-                            f"⏱️ Total de horas: {format_time_duration(total_horas)}")
-
-                    motivo = st.text_area("📝 Motivo da Ausência",
-                                          placeholder="Descreva o motivo da ausência...")
-
-                    # Upload de comprovante (opcional)
-                    st.markdown("📎 **Comprovante (Opcional)**")
-                    uploaded_file = st.file_uploader(
-                        "Anexe um comprovante (atestado médico, declaração, etc.)",
-                        type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
-                        help="Tamanho máximo: 10MB"
-                    )
-
-                    submitted = st.form_submit_button(
-                        "✅ Registrar Atestado", use_container_width=True)
-
-                if submitted:
-                    if not motivo.strip():
-                        st.error("❌ O motivo é obrigatório")
-                    elif hora_inicio >= hora_fim:
-                        st.error(
-                            "❌ Horário de início deve ser anterior ao horário de fim")
-                    else:
-                        arquivo_comprovante = None
-
-                        # Checkbox para indicar que não possui atestado físico
-                        nao_possui_comprovante = st.checkbox(
-                            "❌ Não possuo atestado físico",
-                            help="Marque se não houver documento a anexar"
-                        )
-
-                        # Nota explicativa (exibida sempre, antes da submissão)
-                        st.caption(
-                            "Nota: Ao marcar 'Não possuo atestado físico' o atestado será registrado sem documento. "
-                            "O gestor será notificado e as horas poderão ser lançadas como débito no banco de horas até a apresentação do comprovante."
-                        )
-
-                        if nao_possui_comprovante:
-                            # Aviso visível ao usuário quando opta por não anexar o atestado físico.
-                            st.warning(
-                                "⚠️ Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
-                            uploaded_file = None
-
-                        # Processar upload se houver e se não marcou nao_possui_comprovante
-                        if uploaded_file and not nao_possui_comprovante:
-                            upload_result = upload_system.save_file(
-                                file_content=uploaded_file.read(),
-                                usuario=st.session_state.usuario,
-                                original_filename=uploaded_file.name,
-                                categoria='atestado_horas'
-                            )
-
-                            if upload_result["success"]:
-                                arquivo_comprovante = upload_result["filename"]
-                                st.success(
-                                    f"📎 Arquivo enviado: {uploaded_file.name}")
-                            else:
-                                st.error(
-                                    f"❌ Erro no upload: {upload_result['message']}")
-
-                        # Registrar atestado
-                        resultado = atestado_system.registrar_atestado_horas(
-                            usuario=st.session_state.usuario,
-                            data=data_atestado.strftime("%Y-%m-%d"),
-                            hora_inicio=hora_inicio.strftime("%H:%M"),
-                            hora_fim=hora_fim.strftime("%H:%M"),
-                            motivo=motivo,
-                            arquivo_comprovante=arquivo_comprovante,
-                            nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
-                            ) and nao_possui_comprovante else 0
-                        )
-
-                        if resultado["success"]:
-                            st.success(f"✅ {resultado['message']}")
-                            st.info(
-                                f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
-                            st.rerun()
-                        else:
-                            st.error(f"❌ {resultado['message']}")
-
-        with tab2:
-            st.subheader("📋 Meus Atestados de Horas")
-
-            # Filtros
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                data_inicio = st.date_input(
-                    "Data Início", value=date.today() - timedelta(days=30))
-            with col2:
-                data_fim = st.date_input("Data Fim", value=date.today())
-            with col3:
-                status_filtro = st.selectbox(
-                    "Status", ["Todos", "pendente", "aprovado", "rejeitado"])
-
-            # Buscar atestados
-            atestados = atestado_system.listar_atestados_usuario(
-                st.session_state.usuario,
-                data_inicio.strftime("%Y-%m-%d"),
-                data_fim.strftime("%Y-%m-%d")
-            )
-
-            if status_filtro != "Todos":
-                atestados = [
-                    a for a in atestados if a["status"] == status_filtro]
-
-            if atestados:
-                for atestado in atestados:
-                    with st.expander(f"{get_status_emoji(atestado['status'])} {atestado['data']} - {format_time_duration(atestado['total_horas'])}"):
-                        col1, col2 = st.columns(2)
-
-                        with col1:
-                            st.write(f"**Data:** {atestado['data']}")
-                            st.write(
-                                f"**Horário:** {atestado['hora_inicio']} às {atestado['hora_fim']}")
-                            st.write(
-                                f"**Total:** {format_time_duration(atestado['total_horas'])}")
-
-                        with col2:
-                            st.write(
-                                f"**Status:** {atestado['status'].title()}")
-                            if atestado['aprovado_por']:
-                                st.write(
-                                    f"**Aprovado por:** {atestado['aprovado_por']}")
-                            if atestado['data_aprovacao']:
-                                st.write(
-                                    f"**Data aprovação:** {atestado['data_aprovacao'][:10]}")
-
-                        if atestado['motivo']:
-                            st.write(f"**Motivo:** {atestado['motivo']}")
-
-                        if atestado['observacoes']:
-                            st.write(
-                                f"**Observações:** {atestado['observacoes']}")
-
-                        if atestado['arquivo_comprovante']:
-                            st.write(
-                                f"📎 **Comprovante:** {atestado['arquivo_comprovante']}")
-            else:
-                st.info(
-                    "📋 Nenhum atestado de horas encontrado no período selecionado")
-    except Exception as e:
-        st.error(f"❌ Erro na página de atestado de horas: {str(e)}")
-        st.code(str(e))
-
-
-def corrigir_registros_interface():
-    """Interface para gestores corrigirem registros de ponto dos funcionários"""
     st.markdown("""
     <div class="feature-card">
-        <h3>🔧 Corrigir Registros de Ponto</h3>
-        <p>Edite registros de ponto dos funcionários quando necessário</p>
+        <h3>⏰ Atestado de Horas</h3>
+        <p>Registre ausências parciais com horários específicos</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Selecionar funcionário
-    usuarios = obter_usuarios_ativos()
-    usuario_selecionado = st.selectbox(
-        "👤 Selecione o Funcionário",
-        [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios]
-    )
+    tab1, tab2 = st.tabs(["📝 Novo Atestado", "📋 Meus Atestados"])
 
-    if usuario_selecionado:
-        usuario = usuario_selecionado.split('(')[-1].replace(')', '')
+    with tab1:
+        st.subheader("📝 Registrar Novo Atestado de Horas")
 
-        # Selecionar data
-        data_corrigir = st.date_input(
-            "📅 Data do Registro",
-            value=date.today(),
-            max_value=date.today()
+        with st.form("atestado_horas_form"):
+            col1, col2 = st.columns(2)
+
+            with col1:
+                data_atestado = st.date_input(
+                    "📅 Data da Ausência",
+                    value=date.today(),
+                    max_value=date.today() + timedelta(days=3)
+                )
+
+                hora_inicio = st.time_input("🕐 Horário de Início da Ausência")
+
+            with col2:
+                hora_fim = st.time_input("🕕 Horário de Fim da Ausência")
+
+                # Calcular horas automaticamente
+                if hora_inicio and hora_fim:
+                    total_horas = atestado_system.calcular_horas_ausencia(
+                        hora_inicio.strftime("%H:%M"),
+                        hora_fim.strftime("%H:%M")
+                    )
+                    st.info(
+                        f"⏱️ Total de horas: {format_time_duration(total_horas)}")
+
+            motivo = st.text_area("📝 Motivo da Ausência",
+                                  placeholder="Descreva o motivo da ausência...")
+
+            # Upload de comprovante (obrigatório ou marcar que não possui)
+            st.markdown("📎 **Comprovante (Obrigatório para abono)**")
+            uploaded_file = st.file_uploader(
+                "Anexe comprovante (PDF, JPG, PNG, DOCX). Se não possuir, marque a opção abaixo.",
+                type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+                help="Tamanho máximo: 10MB",
+                key="atestado_uploaded_file"
+            )
+
+            nao_possui_comprovante = st.checkbox(
+                "❌ Não possuo atestado físico",
+                help="Marque se não houver documento a anexar",
+                key="atestado_nao_possui"
+            )
+
+            if nao_possui_comprovante:
+                st.warning("⚠️ O período será descontado em banco de horas.")
+
+            # Nota explicativa
+            st.caption(
+                "Nota: Ao enviar o comprovante, o período será analisado e poderá ser abonado no banco de horas. "
+                "Se marcar que não possui comprovante, o período será descontado até apresentação do documento."
+            )
+
+            submitted = st.form_submit_button(
+                "✅ Registrar Atestado", use_container_width=True)
+
+            if submitted:
+                if not motivo.strip():
+                    st.error("❌ O motivo é obrigatório")
+                elif hora_inicio >= hora_fim:
+                    st.error(
+                        "❌ Horário de início deve ser anterior ao horário de fim")
+                else:
+                    # Validação: exigir comprovante OU marcar 'não possuo'
+                    if not uploaded_file and not nao_possui_comprovante:
+                        st.error("❌ É obrigatório anexar o comprovante ou marcar que não possui. O período será descontado em banco de horas.")
+                        st.stop()
+
+                    arquivo_comprovante = None
+
+                    # Processar upload se houver
+                    if uploaded_file and not nao_possui_comprovante:
+                        upload_result = upload_system.save_file(
+                            file_content=uploaded_file.read(),
+                            usuario=st.session_state.usuario,
+                            original_filename=uploaded_file.name,
+                            categoria='atestado_horas'
+                        )
+
+                        if upload_result.get("success"):
+                            arquivo_comprovante = upload_result.get("filename")
+                            st.success(
+                                f"📎 Arquivo enviado: {uploaded_file.name}")
+                        else:
+                            st.error(
+                                f"❌ Erro no upload: {upload_result.get('message','erro')}")
+                            st.stop()
+
+                    # Registrar atestado
+                    resultado = atestado_system.registrar_atestado_horas(
+                        usuario=st.session_state.usuario,
+                        data=data_atestado.strftime("%Y-%m-%d"),
+                        hora_inicio=hora_inicio.strftime("%H:%M"),
+                        hora_fim=hora_fim.strftime("%H:%M"),
+                        motivo=motivo,
+                        arquivo_comprovante=arquivo_comprovante,
+                        nao_possui_comprovante=1 if nao_possui_comprovante else 0
+                    )
+
+                    if resultado["success"]:
+                        st.success(f"✅ {resultado['message']}")
+                        st.info(
+                            f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {resultado['message']}")
+
+    with tab2:
+        st.subheader("📋 Meus Atestados de Horas")
+
+        # Filtros
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            data_inicio = st.date_input(
+                "Data Início", value=date.today() - timedelta(days=30))
+        with col2:
+            data_fim = st.date_input("Data Fim", value=date.today())
+        with col3:
+            status_filtro = st.selectbox(
+                "Status", ["Todos", "pendente", "aprovado", "rejeitado"])
+
+        # Buscar atestados
+        atestados = atestado_system.listar_atestados_usuario(
+            st.session_state.usuario,
+            data_inicio.strftime("%Y-%m-%d"),
+            data_fim.strftime("%Y-%m-%d")
         )
 
-        # Buscar registros do dia
-        registros = buscar_registros_dia(
-            usuario, data_corrigir.strftime("%Y-%m-%d"))
+        if status_filtro != "Todos":
+            atestados = [a for a in atestados if a["status"] == status_filtro]
 
-        if registros:
-            st.subheader(
-                f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
-
-            for registro in registros:
-                with st.expander(f"⏰ {registro['data_hora']} - {registro['tipo']}"):
+        if atestados:
+            for atestado in atestados:
+                with st.expander(f"{get_status_emoji(atestado['status'])} {atestado['data']} - {format_time_duration(atestado['total_horas'])}"):
                     col1, col2 = st.columns(2)
 
                     with col1:
-                        st.write(f"**Tipo:** {registro['tipo']}")
+                        st.write(f"**Data:** {atestado['data']}")
                         st.write(
-                            f"**Data/Hora Atual:** {registro['data_hora']}")
+                            f"**Horário:** {atestado['hora_inicio']} às {atestado['hora_fim']}")
                         st.write(
-                            f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
-                        st.write(
-                            f"**Projeto:** {registro['projeto'] or 'N/A'}")
+                            f"**Total:** {format_time_duration(atestado['total_horas'])}")
 
                     with col2:
-                        # Formulário de edição
-                        with st.form(f"editar_registro_{registro['id']}"):
-                            novo_tipo = st.selectbox(
-                                "Novo Tipo",
-                                ["inicio", "intermediario", "fim"],
-                                index=["inicio", "intermediario",
-                                       "fim"].index(registro['tipo'])
-                            )
+                        st.write(f"**Status:** {atestado['status'].title()}")
+                        if atestado['aprovado_por']:
+                            st.write(
+                                f"**Aprovado por:** {atestado['aprovado_por']}")
+                        if atestado['data_aprovacao']:
+                            st.write(
+                                f"**Data aprovação:** {atestado['data_aprovacao'][:10]}")
 
-                            nova_data_hora = st.text_input(
-                                "Nova Data/Hora (YYYY-MM-DD HH:MM)",
-                                value=registro['data_hora']
-                            )
+                    if atestado['motivo']:
+                        st.write(f"**Motivo:** {atestado['motivo']}")
 
-                            nova_modalidade = st.selectbox(
-                                "Nova Modalidade",
-                                ["", "presencial", "home_office", "campo"],
-                                index=["", "presencial", "home_office", "campo"].index(
-                                    registro['modalidade'] or "")
-                            )
+                    if atestado['observacoes']:
+                        st.write(f"**Observações:** {atestado['observacoes']}")
 
-                            novo_projeto = st.selectbox(
-                                "Novo Projeto",
-                                [""] + obter_projetos_ativos(),
-                                index=[""] + obter_projetos_ativos().index(
-                                    registro['projeto']) if registro['projeto'] in obter_projetos_ativos() else 0
-                            )
-
-                            justificativa_edicao = st.text_area(
-                                "Justificativa da Correção",
-                                placeholder="Explique o motivo da correção..."
-                            )
-
-                            submitted = st.form_submit_button(
-                                "💾 Salvar Correção")
-
-                            if submitted:
-                                if not justificativa_edicao.strip():
-                                    st.error(
-                                        "❌ Justificativa obrigatória para correções")
-                                else:
-                                    resultado = corrigir_registro_ponto(
-                                        registro['id'],
-                                        novo_tipo,
-                                        nova_data_hora,
-                                        nova_modalidade if nova_modalidade else None,
-                                        novo_projeto if novo_projeto else None,
-                                        justificativa_edicao,
-                                        st.session_state.usuario
-                                    )
-
-                                    if resultado["success"]:
-                                        st.success(f"✅ {resultado['message']}")
-                                        st.rerun()
-                                    else:
-                                        st.error(f"❌ {resultado['message']}")
+                    if atestado['arquivo_comprovante']:
+                        st.write(
+                            f"📎 **Comprovante:** {atestado['arquivo_comprovante']}")
         else:
-            st.info(
-                f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
+            st.info("📋 Nenhum atestado de horas encontrado no período selecionado")
 
 
 def meus_registros_interface(calculo_horas_system):
@@ -1642,35 +1509,11 @@ def tela_gestor():
     """Interface principal para gestores"""
     atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system = init_systems()
 
-    # Verificar notificações pendentes
-    notificacoes = notification_manager.get_notifications(
-        st.session_state.usuario)
-    notificacoes_pendentes = [
-        n for n in notificacoes if n.get('requires_response', False)]
-
-    if notificacoes_pendentes:
-        for notificacao in notificacoes_pendentes:
-            with st.container():
-                st.warning(
-                    f"🔔 {notificacao['title']}: {notificacao['message']}")
-
-                col1, col2 = st.columns(2)
-                with col1:
-                    if st.button("✅ Responder", key=f"responder_{notificacao['solicitacao_id']}"):
-                        # Redirecionar para a tela de aprovação
-                        st.session_state.pagina_atual = "🕐 Aprovar Horas Extras"
-                        st.rerun()
-
-                with col2:
-                    if st.button("⏰ Lembrar Depois", key=f"lembrar_{notificacao['solicitacao_id']}"):
-                        # Manter notificação ativa
-                        pass
-
     # Header
     st.markdown(f"""
     <div class="main-header">
         <div class="user-welcome">👑 Olá, {st.session_state.nome_completo}</div>
-        <div class="user-info">Gestor • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
+        <div class="user-info">Gestor • {datetime.now().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
 
@@ -1688,7 +1531,6 @@ def tela_gestor():
                 "📁 Gerenciar Arquivos",
                 "🏢 Gerenciar Projetos",
                 "👤 Gerenciar Usuários",
-                "🔧 Corrigir Registros",
                 "⚙️ Sistema"
             ]
         )
@@ -1709,9 +1551,7 @@ def tela_gestor():
         aprovar_horas_extras_interface(horas_extras_system)
     elif opcao == "🏦 Banco de Horas Geral":
         banco_horas_gestor_interface(banco_horas_system)
-    elif opcao == "� Corrigir Registros":
-        corrigir_registros_interface()
-    elif opcao == "�📁 Gerenciar Arquivos":
+    elif opcao == "📁 Gerenciar Arquivos":
         gerenciar_arquivos_interface(upload_system)
     elif opcao == "🏢 Gerenciar Projetos":
         gerenciar_projetos_interface()
@@ -1730,68 +1570,37 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     </div>
     """, unsafe_allow_html=True)
 
-    # Métricas gerais com tratamento robusto de erros
-    conn = get_connection()
+    # Métricas gerais
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
 
     # Total de usuários ativos
-    total_usuarios = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
-        resultado = cursor.fetchone()
-        if resultado:
-            total_usuarios = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar total de usuários: {e}")
+    cursor.execute(
+        "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
+    total_usuarios = cursor.fetchone()[0]
 
     # Registros hoje
-    registros_hoje = 0
-    try:
-        hoje = date.today().strftime("%Y-%m-%d")
-        cursor.execute(
-            "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s", (hoje,))
-        resultado = cursor.fetchone()
-        if resultado:
-            registros_hoje = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar registros de hoje: {e}")
+    hoje = date.today().strftime("%Y-%m-%d")
+    cursor.execute(
+        "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = ?", (hoje,))
+    registros_hoje = cursor.fetchone()[0]
 
     # Ausências pendentes
-    ausencias_pendentes = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
-        resultado = cursor.fetchone()
-        if resultado:
-            ausencias_pendentes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar ausências pendentes: {e}")
+    cursor.execute("SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
+    ausencias_pendentes = cursor.fetchone()[0]
 
-    # Horas extras pendentes - corrigido
-    horas_extras_pendentes = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
-        resultado = cursor.fetchone()
-        if resultado:
-            horas_extras_pendentes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar horas extras pendentes: {e}")
+    # Horas extras pendentes
+    cursor.execute(
+        "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
+    horas_extras_pendentes = cursor.fetchone()[0]
 
     # Atestados do mês
-    atestados_mes = 0
-    try:
-        primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
-        cursor.execute("""
-            SELECT COUNT(*) FROM ausencias 
-            WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
-        """, (primeiro_dia_mes,))
-        resultado = cursor.fetchone()
-        if resultado:
-            atestados_mes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar atestados do mês: {e}")
+    primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+    cursor.execute("""
+        SELECT COUNT(*) FROM ausencias 
+        WHERE data_inicio >= ? AND tipo LIKE '%Atestado%'
+    """, (primeiro_dia_mes,))
+    atestados_mes = cursor.fetchone()[0]
 
     conn.close()
 
@@ -1827,10 +1636,10 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
 
         if calculo_dia["total_registros"] >= 2:
             # Verificar jornada prevista
-            conn = get_connection()
+            conn = sqlite3.connect("database/ponto_esa.db")
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s", (usuario,))
+                "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = ?", (usuario,))
             jornada = cursor.fetchone()
             conn.close()
 
@@ -2012,7 +1821,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
     """, unsafe_allow_html=True)
 
     # Buscar todas as solicitações pendentes
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
     cursor.execute("""
         SELECT * FROM solicitacoes_horas_extras 
@@ -2096,22 +1905,22 @@ def aprovar_atestados_interface(atestado_system):
         <p>Gerencie solicitações de atestados de horas dos funcionários</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Abas para diferentes status
     tab1, tab2, tab3, tab4 = st.tabs([
-        "⏳ Pendentes",
-        "✅ Aprovados",
-        "❌ Rejeitados",
+        "⏳ Pendentes", 
+        "✅ Aprovados", 
+        "❌ Rejeitados", 
         "📊 Todos"
     ])
-
+    
     with tab1:
         st.markdown("### ⏳ Solicitações Pendentes de Aprovação")
-
+        
         # Buscar atestados pendentes
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         cursor.execute("""
             SELECT a.id, a.usuario, a.data, a.total_horas, 
                    a.motivo, a.data_registro, a.arquivo_comprovante,
@@ -2123,55 +1932,49 @@ def aprovar_atestados_interface(atestado_system):
         """)
         pendentes = cursor.fetchall()
         conn.close()
-
+        
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
-
+            
             for atestado in pendentes:
                 atestado_id, usuario, data, horas, justificativa, data_solicitacao, arquivo_id, nome_completo = atestado
-
+                
                 with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     col1, col2 = st.columns([2, 1])
-
+                    
                     with col1:
-                        st.markdown(
-                            f"**Funcionário:** {nome_completo or usuario}")
-                        st.markdown(
-                            f"**Data do Atestado:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
-                        st.markdown(
-                            f"**Horas Trabalhadas:** {format_time_duration(horas)}")
-                        st.markdown(
-                            f"**Solicitado em:** {datetime.fromisoformat(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
-
+                        st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                        st.markdown(f"**Data do Atestado:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                        st.markdown(f"**Horas Trabalhadas:** {format_time_duration(horas)}")
+                        st.markdown(f"**Solicitado em:** {datetime.fromisoformat(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                        
                         st.markdown("---")
                         st.markdown("**Justificativa:**")
                         st.info(justificativa or "Sem justificativa")
-
+                        
                         # Arquivo anexo
                         if arquivo_id:
                             st.markdown("---")
                             st.markdown("**📎 Documento Anexado:**")
-
+                            
                             # Buscar informações do arquivo
-                            conn = get_connection()
+                            conn = sqlite3.connect("database/ponto_esa.db")
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT nome_original, tamanho, tipo_mime FROM uploads WHERE id = %s",
+                                "SELECT nome_original, tamanho, tipo_mime FROM uploads WHERE id = ?",
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
                             conn.close()
-
+                            
                             if arquivo_info:
                                 nome_arq, tamanho, tipo_mime = arquivo_info
-                                st.write(
-                                    f"{get_file_icon(tipo_mime)} **{nome_arq}** ({format_file_size(tamanho)})")
-
+                                st.write(f"{get_file_icon(tipo_mime)} **{nome_arq}** ({format_file_size(tamanho)})")
+                                
                                 # Botão de download
                                 from upload_system import UploadSystem
                                 upload_sys = UploadSystem()
-                                content = upload_sys.get_file_content(
-                                    arquivo_id, usuario)
+                                content = upload_sys.get_file_content(arquivo_id, usuario)
                                 if content:
                                     st.download_button(
                                         label="⬇️ Baixar Documento",
@@ -2180,15 +1983,14 @@ def aprovar_atestados_interface(atestado_system):
                                         mime=tipo_mime,
                                         key=f"download_{atestado_id}"
                                     )
-
+                                    
                                     # Visualização de imagem
                                     if is_image_file(tipo_mime):
-                                        st.image(
-                                            content, caption=nome_arq, width=400)
-
+                                        st.image(content, caption=nome_arq, width=400)
+                    
                     with col2:
                         st.markdown("### 🎯 Ações")
-
+                        
                         # Observações do gestor
                         observacoes = st.text_area(
                             "Observações:",
@@ -2196,12 +1998,12 @@ def aprovar_atestados_interface(atestado_system):
                             key=f"obs_{atestado_id}",
                             height=100
                         )
-
+                        
                         st.markdown("---")
-
+                        
                         # Botões de aprovação/rejeição
                         col_a, col_b = st.columns(2)
-
+                        
                         with col_a:
                             if st.button("✅ Aprovar", key=f"aprovar_{atestado_id}", use_container_width=True, type="primary"):
                                 resultado = atestado_system.aprovar_atestado(
@@ -2209,18 +2011,17 @@ def aprovar_atestados_interface(atestado_system):
                                     st.session_state.usuario,
                                     observacoes
                                 )
-
+                                
                                 if resultado['success']:
-                                    st.success(
-                                        "✅ Atestado aprovado com sucesso!")
+                                    st.success("✅ Atestado aprovado com sucesso!")
                                     st.rerun()
                                 else:
                                     st.error(f"❌ Erro: {resultado['message']}")
-
+                        
                         with col_b:
                             if st.button("❌ Rejeitar", key=f"rejeitar_{atestado_id}", use_container_width=True):
                                 st.session_state[f'confirm_reject_{atestado_id}'] = True
-
+                        
                         # Confirmação de rejeição
                         if st.session_state.get(f'confirm_reject_{atestado_id}'):
                             st.warning("⚠️ Confirmar rejeição?")
@@ -2229,7 +2030,7 @@ def aprovar_atestados_interface(atestado_system):
                                 key=f"motivo_{atestado_id}",
                                 placeholder="Explique o motivo (obrigatório)"
                             )
-
+                            
                             col_c, col_d = st.columns(2)
                             with col_c:
                                 if st.button("Sim, rejeitar", key=f"confirm_yes_{atestado_id}"):
@@ -2241,34 +2042,31 @@ def aprovar_atestados_interface(atestado_system):
                                             st.session_state.usuario,
                                             motivo
                                         )
-
+                                        
                                         if resultado['success']:
                                             st.success("❌ Atestado rejeitado")
                                             del st.session_state[f'confirm_reject_{atestado_id}']
                                             st.rerun()
                                         else:
-                                            st.error(
-                                                f"❌ Erro: {resultado['message']}")
-
+                                            st.error(f"❌ Erro: {resultado['message']}")
+                            
                             with col_d:
                                 if st.button("Cancelar", key=f"confirm_no_{atestado_id}"):
                                     del st.session_state[f'confirm_reject_{atestado_id}']
                                     st.rerun()
         else:
             st.success("✅ Nenhuma solicitação aguardando aprovação!")
-
+    
     with tab2:
         st.markdown("### ✅ Atestados Aprovados")
-
+        
         # Filtros
         col1, col2 = st.columns(2)
         with col1:
-            dias_filtro = st.selectbox("Período:", [
-                                       "Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias", "Todos"], key="filtro_aprovados")
+            dias_filtro = st.selectbox("Período:", ["Últimos 7 dias", "Últimos 30 dias", "Últimos 90 dias", "Todos"], key="filtro_aprovados")
         with col2:
-            busca_usuario = st.text_input(
-                "🔍 Buscar funcionário:", key="busca_aprovados")
-
+            busca_usuario = st.text_input("🔍 Buscar funcionário:", key="busca_aprovados")
+        
         # Determinar período
         if dias_filtro == "Últimos 7 dias":
             dias = 7
@@ -2278,87 +2076,81 @@ def aprovar_atestados_interface(atestado_system):
             dias = 90
         else:
             dias = None
-
+        
         # Buscar aprovados
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         query = """
-            SELECT a.id, a.usuario, a.data, a.total_horas, 
-                   a.motivo, a.data_aprovacao, a.aprovado_por,
+            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
+                   a.justificativa, a.data_aprovacao, a.aprovado_por,
                    a.observacoes, u.nome_completo, u2.nome_completo as aprovador_nome
-            FROM atestado_horas a
+            FROM atestados_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
             LEFT JOIN usuarios u2 ON a.aprovado_por = u2.usuario
             WHERE a.status = 'aprovado'
         """
         params = []
-
+        
         if dias:
             query += " AND DATE(a.data_aprovacao) >= CURRENT_DATE - INTERVAL '%s days'"
             params.append(dias)
-
+        
         if busca_usuario:
-            query += " AND (a.usuario LIKE %s OR u.nome_completo LIKE %s)"
+            query += " AND (a.usuario LIKE ? OR u.nome_completo LIKE ?)"
             params.extend([f'%{busca_usuario}%', f'%{busca_usuario}%'])
-
+        
         query += " ORDER BY a.data_aprovacao DESC"
-
+        
         cursor.execute(query, params)
         aprovados = cursor.fetchall()
         conn.close()
-
+        
         if aprovados:
             st.info(f"✅ {len(aprovados)} atestado(s) aprovado(s)")
-
+            
             for atestado in aprovados:
                 atestado_id, usuario, data, horas, justificativa, data_aprovacao, aprovado_por, observacoes, nome_completo, aprovador_nome = atestado
-
+                
                 with st.expander(f"✅ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     col1, col2 = st.columns([3, 1])
-
+                    
                     with col1:
-                        st.markdown(
-                            f"**Funcionário:** {nome_completo or usuario}")
-                        st.markdown(
-                            f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
-                        st.markdown(
-                            f"**Horas:** {format_time_duration(horas)}")
-                        st.markdown(
-                            f"**Justificativa:** {justificativa or 'N/A'}")
-
+                        st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                        st.markdown(f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                        st.markdown(f"**Horas:** {format_time_duration(horas)}")
+                        st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
+                        
                         st.markdown("---")
-                        st.success(
-                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
-
+                        st.success(f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
+                        
                         if observacoes:
                             st.info(f"💬 **Observações:** {observacoes}")
-
+                    
                     with col2:
                         # Opção de reverter aprovação
                         if st.button("🔄 Reverter", key=f"reverter_{atestado_id}", use_container_width=True):
                             st.session_state[f'confirm_reverter_{atestado_id}'] = True
-
+                        
                         if st.session_state.get(f'confirm_reverter_{atestado_id}'):
                             st.warning("⚠️ Reverter aprovação?")
-                            motivo_rev = st.text_input(
-                                "Motivo:", key=f"motivo_rev_{atestado_id}")
-
+                            motivo_rev = st.text_input("Motivo:", key=f"motivo_rev_{atestado_id}")
+                            
                             if st.button("Confirmar", key=f"conf_rev_{atestado_id}"):
                                 if motivo_rev:
-                                    conn = get_connection()
+                                    conn = sqlite3.connect("database/ponto_esa.db")
                                     cursor = conn.cursor()
                                     cursor.execute("""
                                         UPDATE atestados_horas 
                                         SET status = 'pendente', 
                                             data_aprovacao = NULL,
                                             aprovado_por = NULL,
-                                            observacoes = %s
-                                        WHERE id = %s
+                                            observacoes = ?
+                                        WHERE id = ?
                                     """, (f"Revertido: {motivo_rev}", atestado_id))
                                     conn.commit()
                                     conn.close()
-
+                                    
                                     st.success("🔄 Aprovação revertida!")
                                     del st.session_state[f'confirm_reverter_{atestado_id}']
                                     st.rerun()
@@ -2366,14 +2158,14 @@ def aprovar_atestados_interface(atestado_system):
                                     st.error("Motivo obrigatório!")
         else:
             st.info("📁 Nenhum atestado aprovado encontrado")
-
+    
     with tab3:
         st.markdown("### ❌ Atestados Rejeitados")
-
+        
         # Buscar rejeitados
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         cursor.execute("""
             SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
                    a.justificativa, a.data_rejeicao, a.rejeitado_por,
@@ -2387,65 +2179,59 @@ def aprovar_atestados_interface(atestado_system):
         """)
         rejeitados = cursor.fetchall()
         conn.close()
-
+        
         if rejeitados:
             st.warning(f"❌ {len(rejeitados)} atestado(s) rejeitado(s)")
-
+            
             for atestado in rejeitados:
                 atestado_id, usuario, data, horas, justificativa, data_rejeicao, rejeitado_por, motivo_rejeicao, nome_completo, rejeitador_nome = atestado
-
+                
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    st.markdown(
-                        f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                    st.markdown(f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
                     st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
-
+                    
                     st.markdown("---")
-                    st.error(
-                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
-
+                    st.error(f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                    
                     if motivo_rejeicao:
-                        st.warning(
-                            f"📝 **Motivo da Rejeição:** {motivo_rejeicao}")
+                        st.warning(f"📝 **Motivo da Rejeição:** {motivo_rejeicao}")
         else:
             st.info("📁 Nenhum atestado rejeitado")
-
+    
     with tab4:
         st.markdown("### 📊 Todos os Atestados")
-
+        
         # Estatísticas gerais
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         col1, col2, col3, col4 = st.columns(4)
-
+        
         with col1:
             cursor.execute("SELECT COUNT(*) FROM atestados_horas")
             total = cursor.fetchone()[0]
             st.metric("Total", total)
-
+        
         with col2:
-            cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'pendente'")
+            cursor.execute("SELECT COUNT(*) FROM atestados_horas WHERE status = 'pendente'")
             pendentes_count = cursor.fetchone()[0]
             st.metric("Pendentes", pendentes_count)
-
+        
         with col3:
-            cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'aprovado'")
+            cursor.execute("SELECT COUNT(*) FROM atestados_horas WHERE status = 'aprovado'")
             aprovados_count = cursor.fetchone()[0]
             st.metric("Aprovados", aprovados_count)
-
+        
         with col4:
-            cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'rejeitado'")
+            cursor.execute("SELECT COUNT(*) FROM atestados_horas WHERE status = 'rejeitado'")
             rejeitados_count = cursor.fetchone()[0]
             st.metric("Rejeitados", rejeitados_count)
-
+        
         # Listagem completa
         st.markdown("---")
-
+        
         cursor.execute("""
             SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
                    a.status, a.data_solicitacao, u.nome_completo
@@ -2456,32 +2242,30 @@ def aprovar_atestados_interface(atestado_system):
         """)
         todos = cursor.fetchall()
         conn.close()
-
+        
         if todos:
             # Criar DataFrame
             df = pd.DataFrame(todos, columns=[
                 'ID', 'Usuário', 'Data', 'Horas', 'Status', 'Data Solicitação', 'Nome'
             ])
-
+            
             df['Status'] = df['Status'].map({
                 'pendente': '⏳ Pendente',
                 'aprovado': '✅ Aprovado',
                 'rejeitado': '❌ Rejeitado'
             })
-
+            
             df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y')
-            df['Data Solicitação'] = pd.to_datetime(
-                df['Data Solicitação']).dt.strftime('%d/%m/%Y %H:%M')
-            df['Nome'] = df.apply(lambda row: row['Nome']
-                                  or row['Usuário'], axis=1)
-
+            df['Data Solicitação'] = pd.to_datetime(df['Data Solicitação']).dt.strftime('%d/%m/%Y %H:%M')
+            df['Nome'] = df.apply(lambda row: row['Nome'] or row['Usuário'], axis=1)
+            
             # Exibir apenas colunas relevantes
             st.dataframe(
                 df[['Nome', 'Data', 'Horas', 'Status', 'Data Solicitação']],
                 use_container_width=True,
                 hide_index=True
             )
-
+            
             # Exportar
             csv = df.to_csv(index=False).encode('utf-8-sig')
             st.download_button(
@@ -2502,107 +2286,104 @@ def todos_registros_interface(calculo_horas_system):
         <p>Visualize e analise os registros de ponto de todos os funcionários</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Filtros
     st.markdown("### 🔍 Filtros")
     col1, col2, col3, col4 = st.columns(4)
-
+    
     with col1:
         # Buscar lista de usuários
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
+        cursor.execute("SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
         usuarios_list = cursor.fetchall()
         conn.close()
-
-        usuario_options = ["Todos"] + \
-            [f"{u[1] or u[0]} ({u[0]})" for u in usuarios_list]
+        
+        usuario_options = ["Todos"] + [f"{u[1] or u[0]} ({u[0]})" for u in usuarios_list]
         usuario_filter = st.selectbox("👤 Funcionário:", usuario_options)
-
+    
     with col2:
         # Período padrão: últimos 30 dias
         data_inicio = st.date_input(
             "📅 Data Início:",
             value=datetime.now().date() - timedelta(days=30)
         )
-
+    
     with col3:
         data_fim = st.date_input(
             "📅 Data Fim:",
             value=datetime.now().date()
         )
-
+    
     with col4:
         tipo_registro = st.selectbox(
             "🕐 Tipo:",
             ["Todos", "Início", "Fim", "Intervalo"]
         )
-
+    
     # Buscar registros
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
-
+    
     query = """
         SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
                r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
                u.nome_completo
         FROM registros_ponto r
         LEFT JOIN usuarios u ON r.usuario = u.usuario
-        WHERE DATE(r.data_hora) BETWEEN %s AND %s
+        WHERE DATE(r.data_hora) BETWEEN ? AND ?
     """
     params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
-
+    
     # Aplicar filtro de usuário
     if usuario_filter != "Todos":
         usuario_login = usuario_filter.split("(")[1].rstrip(")")
-        query += " AND r.usuario = %s"
+        query += " AND r.usuario = ?"
         params.append(usuario_login)
-
+    
     # Aplicar filtro de tipo
     if tipo_registro != "Todos":
-        query += " AND r.tipo = %s"
+        query += " AND r.tipo = ?"
         params.append(tipo_registro)
-
+    
     query += " ORDER BY r.data_hora DESC LIMIT 500"
-
+    
     cursor.execute(query, params)
     registros = cursor.fetchall()
     conn.close()
-
+    
     # Estatísticas gerais
     st.markdown("### 📊 Estatísticas do Período")
     col1, col2, col3, col4, col5 = st.columns(5)
-
+    
     with col1:
         st.metric("Total de Registros", len(registros))
-
+    
     with col2:
         usuarios_unicos = len(set(r[1] for r in registros))
         st.metric("Funcionários", usuarios_unicos)
-
+    
     with col3:
         registros_inicio = sum(1 for r in registros if r[3] == "Início")
         st.metric("Registros de Início", registros_inicio)
-
+    
     with col4:
         registros_fim = sum(1 for r in registros if r[3] == "Fim")
         st.metric("Registros de Fim", registros_fim)
-
+    
     with col5:
         # Calcular média de registros por dia
         dias = (data_fim - data_inicio).days + 1
         media_dia = len(registros) / dias if dias > 0 else 0
         st.metric("Média/Dia", f"{media_dia:.1f}")
-
+    
     st.markdown("---")
-
+    
     # Botão de exportação
     if registros:
         col1, col2, col3 = st.columns([2, 1, 1])
         with col1:
-            st.markdown(
-                f"### 📋 Listagem de Registros ({len(registros)} encontrados)")
+            st.markdown(f"### 📋 Listagem de Registros ({len(registros)} encontrados)")
         with col2:
             # Preparar dados para exportação
             df_export = pd.DataFrame(registros, columns=[
@@ -2629,7 +2410,7 @@ def todos_registros_interface(calculo_horas_system):
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                 use_container_width=True
             )
-
+    
     # Agrupar por funcionário e data
     if registros:
         # Organizar registros por usuário e data
@@ -2638,7 +2419,7 @@ def todos_registros_interface(calculo_horas_system):
             reg_id, usuario, data_hora_str, tipo, modalidade, projeto, atividade, localizacao, lat, lng, nome_completo = registro
             data_hora = datetime.fromisoformat(data_hora_str)
             data_str = data_hora.strftime("%Y-%m-%d")
-
+            
             chave = f"{usuario}_{data_str}"
             if chave not in registros_agrupados:
                 registros_agrupados[chave] = {
@@ -2647,7 +2428,7 @@ def todos_registros_interface(calculo_horas_system):
                     'data': data_hora.date(),
                     'registros': []
                 }
-
+            
             registros_agrupados[chave]['registros'].append({
                 'id': reg_id,
                 'data_hora': data_hora,
@@ -2659,142 +2440,130 @@ def todos_registros_interface(calculo_horas_system):
                 'latitude': lat,
                 'longitude': lng
             })
-
+        
         # Exibir registros agrupados
         for chave, dados in sorted(registros_agrupados.items(), key=lambda x: (x[1]['data'], x[1]['usuario']), reverse=True):
             usuario = dados['usuario']
             nome_completo = dados['nome_completo']
             data = dados['data']
             regs = sorted(dados['registros'], key=lambda x: x['data_hora'])
-
+            
             # Calcular horas trabalhadas do dia
             horas_trabalhadas = "N/A"
             inicio = None
             fim = None
-
+            
             for r in regs:
                 if r['tipo'] == "Início" and not inicio:
                     inicio = r['data_hora']
                 elif r['tipo'] == "Fim":
                     fim = r['data_hora']
-
+            
             if inicio and fim:
                 delta = fim - inicio
                 horas = delta.total_seconds() / 3600
                 horas_trabalhadas = f"{int(horas)}h {int((horas % 1) * 60)}min"
-
+            
             # Exibir card do dia
             with st.expander(f"📅 {data.strftime('%d/%m/%Y')} - 👤 {nome_completo} - ⏱️ {horas_trabalhadas} - {len(regs)} registro(s)"):
                 # Informações do usuário
                 st.markdown(f"**Funcionário:** {nome_completo} ({usuario})")
                 st.markdown(f"**Data:** {data.strftime('%d/%m/%Y (%A)')}")
-
+                
                 if inicio and fim:
-                    st.markdown(
-                        f"**Jornada:** {inicio.strftime('%H:%M')} às {fim.strftime('%H:%M')} - **Total:** {horas_trabalhadas}")
-
+                    st.markdown(f"**Jornada:** {inicio.strftime('%H:%M')} às {fim.strftime('%H:%M')} - **Total:** {horas_trabalhadas}")
+                
                 st.markdown("---")
-
+                
                 # Tabela de registros do dia
                 for i, reg in enumerate(regs, 1):
                     col1, col2, col3 = st.columns([1, 2, 2])
-
+                    
                     with col1:
                         # Ícone baseado no tipo
                         icon = "🟢" if reg['tipo'] == "Início" else "🔴" if reg['tipo'] == "Fim" else "⏸️"
                         st.markdown(f"**{icon} {reg['tipo']}**")
                         st.caption(reg['data_hora'].strftime('%H:%M:%S'))
-
+                    
                     with col2:
-                        st.markdown(
-                            f"**Modalidade:** {reg['modalidade'] or 'N/A'}")
+                        st.markdown(f"**Modalidade:** {reg['modalidade'] or 'N/A'}")
                         st.markdown(f"**Projeto:** {reg['projeto'] or 'N/A'}")
                         if reg['atividade']:
                             st.caption(f"Atividade: {reg['atividade']}")
-
+                    
                     with col3:
                         if reg['latitude'] and reg['longitude']:
-                            st.markdown(
-                                f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                            st.markdown(f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
                             # Link para Google Maps
                             maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
                             st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
                         else:
                             st.markdown("📍 **GPS:** Não disponível")
-
+                    
                     if i < len(regs):
                         st.markdown("---")
-
+                
                 # Análise de discrepâncias
                 if inicio and fim:
                     # Buscar jornada prevista do usuário
-                    conn = get_connection()
+                    conn = sqlite3.connect("database/ponto_esa.db")
                     cursor = conn.cursor()
                     cursor.execute(
-                        "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s",
+                        "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = ?",
                         (usuario,)
                     )
                     jornada = cursor.fetchone()
                     conn.close()
-
+                    
                     if jornada and jornada[0] and jornada[1]:
                         jornada_inicio_str = jornada[0]
                         jornada_fim_str = jornada[1]
-
+                        
                         # Calcular horas previstas
-                        h_inicio, m_inicio = map(
-                            int, jornada_inicio_str.split(':'))
+                        h_inicio, m_inicio = map(int, jornada_inicio_str.split(':'))
                         h_fim, m_fim = map(int, jornada_fim_str.split(':'))
-
-                        inicio_previsto = inicio.replace(
-                            hour=h_inicio, minute=m_inicio, second=0)
-                        fim_previsto = fim.replace(
-                            hour=h_fim, minute=m_fim, second=0)
-
-                        horas_previstas = (
-                            fim_previsto - inicio_previsto).total_seconds() / 3600
+                        
+                        inicio_previsto = inicio.replace(hour=h_inicio, minute=m_inicio, second=0)
+                        fim_previsto = fim.replace(hour=h_fim, minute=m_fim, second=0)
+                        
+                        horas_previstas = (fim_previsto - inicio_previsto).total_seconds() / 3600
                         horas_reais = (fim - inicio).total_seconds() / 3600
                         diferenca = horas_reais - horas_previstas
-
+                        
                         st.markdown("### 📊 Análise da Jornada")
                         col1, col2, col3 = st.columns(3)
-
+                        
                         with col1:
-                            st.metric("Horas Previstas",
-                                      f"{horas_previstas:.2f}h")
+                            st.metric("Horas Previstas", f"{horas_previstas:.2f}h")
                         with col2:
-                            st.metric("Horas Trabalhadas",
-                                      f"{horas_reais:.2f}h")
+                            st.metric("Horas Trabalhadas", f"{horas_reais:.2f}h")
                         with col3:
-                            delta_color = "normal" if abs(
-                                diferenca) < 0.5 else "inverse"
+                            delta_color = "normal" if abs(diferenca) < 0.5 else "inverse"
                             st.metric(
-                                "Diferença",
+                                "Diferença", 
                                 f"{diferenca:+.2f}h",
                                 delta_color=delta_color
                             )
-
+                        
                         # Alertas
                         if diferenca > 1:
-                            st.success(
-                                f"✅ Horas extras potenciais: {diferenca:.2f}h")
+                            st.success(f"✅ Horas extras potenciais: {diferenca:.2f}h")
                         elif diferenca < -1:
-                            st.warning(
-                                f"⚠️ Jornada incompleta: {abs(diferenca):.2f}h a menos")
+                            st.warning(f"⚠️ Jornada incompleta: {abs(diferenca):.2f}h a menos")
     else:
         st.info("📁 Nenhum registro encontrado com os filtros aplicados")
-
+    
     # Análise por funcionário (resumo)
     if registros and usuario_filter == "Todos":
         st.markdown("---")
         st.markdown("### 📈 Resumo por Funcionário")
-
+        
         # Agrupar por usuário
         usuarios_stats = {}
         for registro in registros:
             usuario = registro[1]
             nome = registro[10] or usuario
-
+            
             if usuario not in usuarios_stats:
                 usuarios_stats[usuario] = {
                     'nome': nome,
@@ -2802,13 +2571,13 @@ def todos_registros_interface(calculo_horas_system):
                     'registros_inicio': 0,
                     'registros_fim': 0
                 }
-
+            
             usuarios_stats[usuario]['total_registros'] += 1
             if registro[3] == "Início":
                 usuarios_stats[usuario]['registros_inicio'] += 1
             elif registro[3] == "Fim":
                 usuarios_stats[usuario]['registros_fim'] += 1
-
+        
         # Criar DataFrame
         df_stats = pd.DataFrame([
             {
@@ -2820,7 +2589,7 @@ def todos_registros_interface(calculo_horas_system):
             }
             for usuario, dados in sorted(usuarios_stats.items(), key=lambda x: x[1]['nome'])
         ])
-
+        
         st.dataframe(df_stats, use_container_width=True, hide_index=True)
 
 
@@ -2832,26 +2601,26 @@ def gerenciar_arquivos_interface(upload_system):
         <p>Visualize e gerencie todos os arquivos enviados pelos funcionários</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Filtros
     col1, col2, col3 = st.columns(3)
-
+    
     with col1:
         categoria_filter = st.selectbox(
             "Categoria:",
             ["Todas", "Atestados Médicos", "Comprovantes de Ausência", "Documentos"]
         )
-
+    
     with col2:
         usuario_filter = st.text_input("� Buscar por usuário:")
-
+    
     with col3:
         data_filter = st.date_input("📅 Data específica:", value=None)
-
+    
     # Buscar arquivos
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
-
+    
     query = """
         SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
                u.data_upload, u.tamanho, u.tipo_arquivo as tipo_mime, 
@@ -2861,7 +2630,7 @@ def gerenciar_arquivos_interface(upload_system):
         WHERE u.status = 'ativo'
     """
     params = []
-
+    
     # Aplicar filtros
     if categoria_filter != "Todas":
         categoria_map = {
@@ -2869,77 +2638,74 @@ def gerenciar_arquivos_interface(upload_system):
             "Comprovantes de Ausência": "ausencia",
             "Documentos": "documento"
         }
-        query += " AND u.relacionado_a = %s"
+        query += " AND u.relacionado_a = ?"
         params.append(categoria_map[categoria_filter])
-
+    
     if usuario_filter:
         query += " AND (u.usuario LIKE ? OR us.nome_completo LIKE ?)"
         params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
-
+    
     if data_filter:
         query += " AND DATE(u.data_upload) = ?"
         params.append(data_filter.strftime("%Y-%m-%d"))
-
+    
     query += " ORDER BY u.data_upload DESC LIMIT 100"
-
+    
     cursor.execute(query, params)
     arquivos = cursor.fetchall()
     conn.close()
-
+    
     # Estatísticas
     st.markdown("### 📊 Estatísticas")
     col1, col2, col3, col4 = st.columns(4)
-
-    conn = get_connection()
+    
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
-
+    
     with col1:
         cursor.execute("SELECT COUNT(*) FROM uploads")
         total = cursor.fetchone()[0]
         st.metric("Total de Arquivos", total)
-
+    
     with col2:
         cursor.execute("SELECT COUNT(DISTINCT usuario) FROM uploads")
         usuarios = cursor.fetchone()[0]
         st.metric("Usuários com Uploads", usuarios)
-
+    
     with col3:
         cursor.execute("SELECT SUM(tamanho) FROM uploads")
         tamanho_total = cursor.fetchone()[0] or 0
         st.metric("Espaço Utilizado", format_file_size(tamanho_total))
-
+    
     with col4:
-        cursor.execute(
-            "SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = CURRENT_DATE")
+        cursor.execute("SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = CURRENT_DATE")
         hoje = cursor.fetchone()[0]
         st.metric("Uploads Hoje", hoje)
-
+    
     conn.close()
-
+    
     # Listagem de arquivos
     st.markdown("### 📋 Arquivos")
-
+    
     if arquivos:
         st.info(f"Exibindo {len(arquivos)} arquivo(s)")
-
+        
         for arquivo in arquivos:
             arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_mime, nome_completo = arquivo
-
+            
             with st.expander(f"{get_file_icon(tipo_mime)} {nome} - {nome_completo or usuario}"):
                 col1, col2 = st.columns([3, 1])
-
+                
                 with col1:
                     st.write(f"**Usuário:** {nome_completo or usuario}")
                     st.write(f"**Tipo:** {tipo_arquivo or 'N/A'}")
-                    st.write(
-                        f"**Data:** {datetime.fromisoformat(data).strftime('%d/%m/%Y às %H:%M')}")
+                    st.write(f"**Data:** {datetime.fromisoformat(data).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
                     st.write(f"**Formato:** {tipo_mime}")
-
+                
                 with col2:
                     # Botão de download
-                    content = upload_system.get_file_content(
-                        arquivo_id, usuario)
+                    content = upload_system.get_file_content(arquivo_id, usuario)
                     if content:
                         st.download_button(
                             label="⬇️ Baixar",
@@ -2948,11 +2714,11 @@ def gerenciar_arquivos_interface(upload_system):
                             mime=tipo_mime,
                             use_container_width=True
                         )
-
+                    
                     # Botão de exclusão (com confirmação)
                     if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", use_container_width=True):
                         st.session_state[f"confirm_delete_{arquivo_id}"] = True
-
+                    
                     if st.session_state.get(f"confirm_delete_{arquivo_id}"):
                         st.warning("Confirmar exclusão?")
                         col_a, col_b = st.columns(2)
@@ -2966,11 +2732,10 @@ def gerenciar_arquivos_interface(upload_system):
                             if st.button("❌ Não", key=f"no_{arquivo_id}"):
                                 del st.session_state[f"confirm_delete_{arquivo_id}"]
                                 st.rerun()
-
+                
                 # Visualização de imagens
                 if is_image_file(tipo_mime):
-                    content = upload_system.get_file_content(
-                        arquivo_id, usuario)
+                    content = upload_system.get_file_content(arquivo_id, usuario)
                     if content:
                         st.image(content, caption=nome, width=400)
     else:
@@ -2985,43 +2750,42 @@ def gerenciar_projetos_interface():
         <p>Cadastre e gerencie os projetos da empresa</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Abas
     tab1, tab2 = st.tabs(["📋 Lista de Projetos", "➕ Novo Projeto"])
-
+    
     with tab1:
         st.markdown("### 📋 Projetos Cadastrados")
-
+        
         # Filtro
         col1, col2 = st.columns(2)
         with col1:
-            status_filter = st.selectbox(
-                "Status:", ["Todos", "Ativos", "Inativos"])
+            status_filter = st.selectbox("Status:", ["Todos", "Ativos", "Inativos"])
         with col2:
             busca = st.text_input("🔍 Buscar projeto:")
-
+        
         # Buscar projetos
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         query = "SELECT id, nome, descricao, ativo FROM projetos WHERE 1=1"
         params = []
-
+        
         if status_filter == "Ativos":
             query += " AND ativo = 1"
         elif status_filter == "Inativos":
             query += " AND ativo = 0"
-
+        
         if busca:
             query += " AND nome LIKE ?"
             params.append(f"%{busca}%")
-
+        
         query += " ORDER BY nome"
-
+        
         cursor.execute(query, params)
         projetos = cursor.fetchall()
         conn.close()
-
+        
         # Estatísticas
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -3032,105 +2796,100 @@ def gerenciar_projetos_interface():
         with col3:
             inativos = len(projetos) - ativos
             st.metric("Projetos Inativos", inativos)
-
+        
         st.markdown("---")
-
+        
         # Listagem
         if projetos:
             for projeto_id, nome, descricao, ativo in projetos:
                 with st.expander(f"{'✅' if ativo else '❌'} {nome}"):
                     col1, col2 = st.columns([3, 1])
-
+                    
                     with col1:
                         # Edição inline
                         novo_nome = st.text_input(
-                            "Nome do Projeto:",
-                            value=nome,
+                            "Nome do Projeto:", 
+                            value=nome, 
                             key=f"nome_{projeto_id}"
                         )
                         nova_descricao = st.text_area(
-                            "Descrição:",
-                            value=descricao or "",
+                            "Descrição:", 
+                            value=descricao or "", 
                             key=f"desc_{projeto_id}"
                         )
                         novo_status = st.checkbox(
-                            "Projeto Ativo",
-                            value=bool(ativo),
+                            "Projeto Ativo", 
+                            value=bool(ativo), 
                             key=f"status_{projeto_id}"
                         )
-
+                    
                     with col2:
                         st.write("")
                         st.write("")
-
+                        
                         # Botão de salvar
                         if st.button("💾 Salvar", key=f"save_{projeto_id}", use_container_width=True):
-                            conn = get_connection()
+                            conn = sqlite3.connect("database/ponto_esa.db")
                             cursor = conn.cursor()
-
+                            
                             cursor.execute("""
                                 UPDATE projetos 
                                 SET nome = ?, descricao = ?, ativo = ?
                                 WHERE id = ?
                             """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
-
+                            
                             conn.commit()
                             conn.close()
-
+                            
                             st.success("✅ Projeto atualizado!")
                             st.rerun()
-
+                        
                         # Botão de excluir
                         if st.button("🗑️ Excluir", key=f"del_{projeto_id}", use_container_width=True):
                             st.session_state[f"confirm_del_proj_{projeto_id}"] = True
-
+                        
                         if st.session_state.get(f"confirm_del_proj_{projeto_id}"):
                             st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{projeto_id}"):
-                                conn = get_connection()
+                                conn = sqlite3.connect("database/ponto_esa.db")
                                 cursor = conn.cursor()
-                                cursor.execute(
-                                    "DELETE FROM projetos WHERE id = ?", (projeto_id,))
+                                cursor.execute("DELETE FROM projetos WHERE id = ?", (projeto_id,))
                                 conn.commit()
                                 conn.close()
-
+                                
                                 del st.session_state[f"confirm_del_proj_{projeto_id}"]
                                 st.success("✅ Projeto excluído!")
                                 st.rerun()
         else:
             st.info("📁 Nenhum projeto encontrado")
-
+    
     with tab2:
         st.markdown("### ➕ Cadastrar Novo Projeto")
-
+        
         with st.form("novo_projeto"):
-            nome_novo = st.text_input(
-                "Nome do Projeto:", placeholder="Ex: Sistema de Controle de Ponto")
-            descricao_nova = st.text_area(
-                "Descrição (opcional):", placeholder="Descreva o projeto...")
+            nome_novo = st.text_input("Nome do Projeto:", placeholder="Ex: Sistema de Controle de Ponto")
+            descricao_nova = st.text_area("Descrição (opcional):", placeholder="Descreva o projeto...")
             ativo_novo = st.checkbox("Projeto Ativo", value=True)
-
-            submitted = st.form_submit_button(
-                "➕ Cadastrar Projeto", use_container_width=True)
-
+            
+            submitted = st.form_submit_button("➕ Cadastrar Projeto", use_container_width=True)
+            
             if submitted:
                 if not nome_novo:
                     st.error("❌ O nome do projeto é obrigatório!")
                 else:
                     try:
-                        conn = get_connection()
+                        conn = sqlite3.connect("database/ponto_esa.db")
                         cursor = conn.cursor()
-
+                        
                         cursor.execute("""
                             INSERT INTO projetos (nome, descricao, ativo)
                             VALUES (?, ?, ?)
                         """, (nome_novo, descricao_nova, int(ativo_novo)))
-
+                        
                         conn.commit()
                         conn.close()
-
-                        st.success(
-                            f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
+                        
+                        st.success(f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
                         st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("❌ Já existe um projeto com este nome!")
@@ -3144,55 +2903,53 @@ def gerenciar_usuarios_interface():
         <p>Cadastre e gerencie funcionários e gestores do sistema</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Abas
     tab1, tab2 = st.tabs(["👥 Lista de Usuários", "➕ Novo Usuário"])
-
+    
     with tab1:
         st.markdown("### � Usuários Cadastrados")
-
+        
         # Filtros
         col1, col2, col3 = st.columns(3)
         with col1:
-            tipo_filter = st.selectbox(
-                "Tipo:", ["Todos", "Funcionários", "Gestores"])
+            tipo_filter = st.selectbox("Tipo:", ["Todos", "Funcionários", "Gestores"])
         with col2:
-            status_filter = st.selectbox(
-                "Status:", ["Todos", "Ativos", "Inativos"])
+            status_filter = st.selectbox("Status:", ["Todos", "Ativos", "Inativos"])
         with col3:
             busca = st.text_input("🔍 Buscar:")
-
+        
         # Buscar usuários
-        conn = get_connection()
+        conn = sqlite3.connect("database/ponto_esa.db")
         cursor = conn.cursor()
-
+        
         query = """
             SELECT id, usuario, nome_completo, tipo, ativo, 
                    jornada_inicio_previsto, jornada_fim_previsto
             FROM usuarios WHERE 1=1
         """
         params = []
-
+        
         if tipo_filter == "Funcionários":
             query += " AND tipo = 'funcionario'"
         elif tipo_filter == "Gestores":
             query += " AND tipo = 'gestor'"
-
+        
         if status_filter == "Ativos":
             query += " AND ativo = 1"
         elif status_filter == "Inativos":
             query += " AND ativo = 0"
-
+        
         if busca:
             query += " AND (usuario LIKE ? OR nome_completo LIKE ?)"
             params.extend([f"%{busca}%", f"%{busca}%"])
-
+        
         query += " ORDER BY nome_completo"
-
+        
         cursor.execute(query, params)
         usuarios = cursor.fetchall()
         conn.close()
-
+        
         # Estatísticas
         col1, col2, col3, col4 = st.columns(4)
         with col1:
@@ -3206,180 +2963,169 @@ def gerenciar_usuarios_interface():
         with col4:
             ativos = sum(1 for u in usuarios if u[4] == 1)
             st.metric("Ativos", ativos)
-
+        
         st.markdown("---")
-
+        
         # Listagem
         if usuarios:
             for usuario_id, usuario, nome_completo, tipo, ativo, jornada_inicio, jornada_fim in usuarios:
                 status_emoji = "✅" if ativo else "❌"
                 tipo_emoji = "👤" if tipo == 'funcionario' else "👑"
-
+                
                 with st.expander(f"{status_emoji} {tipo_emoji} {nome_completo or usuario}"):
                     col1, col2 = st.columns([3, 1])
-
+                    
                     with col1:
                         # Edição
                         novo_usuario = st.text_input(
-                            "Login:",
-                            value=usuario,
+                            "Login:", 
+                            value=usuario, 
                             key=f"user_{usuario_id}",
                             disabled=True  # Login não pode ser alterado
                         )
                         novo_nome = st.text_input(
-                            "Nome Completo:",
-                            value=nome_completo or "",
+                            "Nome Completo:", 
+                            value=nome_completo or "", 
                             key=f"nome_{usuario_id}"
                         )
-
+                        
                         col_a, col_b = st.columns(2)
                         with col_a:
                             novo_tipo = st.selectbox(
-                                "Tipo:",
+                                "Tipo:", 
                                 ["funcionario", "gestor"],
                                 index=0 if tipo == 'funcionario' else 1,
                                 key=f"tipo_{usuario_id}"
                             )
                         with col_b:
                             novo_ativo = st.checkbox(
-                                "Usuário Ativo",
-                                value=bool(ativo),
+                                "Usuário Ativo", 
+                                value=bool(ativo), 
                                 key=f"ativo_{usuario_id}"
                             )
-
+                        
                         # Jornada de trabalho
                         st.markdown("**Jornada de Trabalho:**")
                         col_c, col_d = st.columns(2)
                         with col_c:
                             nova_jornada_inicio = st.time_input(
-                                "Início:",
-                                value=datetime.strptime(jornada_inicio or "08:00", "%H:%M").time(
-                                ) if jornada_inicio else time(8, 0),
+                                "Início:", 
+                                value=datetime.strptime(jornada_inicio or "08:00", "%H:%M").time() if jornada_inicio else time(8, 0),
                                 key=f"inicio_{usuario_id}"
                             )
                         with col_d:
                             nova_jornada_fim = st.time_input(
-                                "Fim:",
-                                value=datetime.strptime(jornada_fim or "17:00", "%H:%M").time(
-                                ) if jornada_fim else time(17, 0),
+                                "Fim:", 
+                                value=datetime.strptime(jornada_fim or "17:00", "%H:%M").time() if jornada_fim else time(17, 0),
                                 key=f"fim_{usuario_id}"
                             )
-
-                        # Alteração de senha - Corrigido: removido expander aninhado
-                        st.markdown("**🔑 Alterar Senha:**")
-                        nova_senha = st.text_input(
-                            "Nova Senha:",
-                            type="password",
-                            key=f"senha_{usuario_id}"
-                        )
-                        confirmar_senha = st.text_input(
-                            "Confirmar Senha:",
-                            type="password",
-                            key=f"conf_senha_{usuario_id}"
-                        )
-
-                        if st.button("🔑 Alterar Senha", key=f"btn_senha_{usuario_id}"):
-                            if not nova_senha:
-                                st.error("❌ Digite uma senha!")
-                            elif nova_senha != confirmar_senha:
-                                st.error("❌ As senhas não conferem!")
-                            else:
-                                conn = get_connection()
-                                cursor = conn.cursor()
-
-                                senha_hash = hashlib.sha256(
-                                    nova_senha.encode()).hexdigest()
-                                cursor.execute(
-                                    "UPDATE usuarios SET senha = %s WHERE id = %s",
-                                    (senha_hash, usuario_id)
-                                )
-
-                                conn.commit()
-                                conn.close()
-
-                                st.success("✅ Senha alterada com sucesso!")
-
+                        
+                        # Alteração de senha
+                        with st.expander("🔑 Alterar Senha"):
+                            nova_senha = st.text_input(
+                                "Nova Senha:", 
+                                type="password", 
+                                key=f"senha_{usuario_id}"
+                            )
+                            confirmar_senha = st.text_input(
+                                "Confirmar Senha:", 
+                                type="password", 
+                                key=f"conf_senha_{usuario_id}"
+                            )
+                            
+                            if st.button("🔑 Alterar Senha", key=f"btn_senha_{usuario_id}"):
+                                if not nova_senha:
+                                    st.error("❌ Digite uma senha!")
+                                elif nova_senha != confirmar_senha:
+                                    st.error("❌ As senhas não conferem!")
+                                else:
+                                    conn = sqlite3.connect("database/ponto_esa.db")
+                                    cursor = conn.cursor()
+                                    
+                                    senha_hash = hashlib.sha256(nova_senha.encode()).hexdigest()
+                                    cursor.execute(
+                                        "UPDATE usuarios SET senha = ? WHERE id = ?",
+                                        (senha_hash, usuario_id)
+                                    )
+                                    
+                                    conn.commit()
+                                    conn.close()
+                                    
+                                    st.success("✅ Senha alterada com sucesso!")
+                    
                     with col2:
                         st.write("")
                         st.write("")
-
+                        
                         # Botão de salvar
                         if st.button("💾 Salvar", key=f"save_{usuario_id}", use_container_width=True):
-                            conn = get_connection()
+                            conn = sqlite3.connect("database/ponto_esa.db")
                             cursor = conn.cursor()
-
+                            
                             cursor.execute("""
                                 UPDATE usuarios 
                                 SET nome_completo = ?, tipo = ?, ativo = ?,
                                     jornada_inicio_previsto = ?, jornada_fim_previsto = ?
                                 WHERE id = ?
                             """, (
-                                novo_nome,
-                                novo_tipo,
+                                novo_nome, 
+                                novo_tipo, 
                                 int(novo_ativo),
                                 nova_jornada_inicio.strftime("%H:%M"),
                                 nova_jornada_fim.strftime("%H:%M"),
                                 usuario_id
                             ))
-
+                            
                             conn.commit()
                             conn.close()
-
+                            
                             st.success("✅ Usuário atualizado!")
                             st.rerun()
-
+                        
                         # Botão de excluir
                         if st.button("🗑️ Excluir", key=f"del_{usuario_id}", use_container_width=True):
                             st.session_state[f"confirm_del_user_{usuario_id}"] = True
-
+                        
                         if st.session_state.get(f"confirm_del_user_{usuario_id}"):
                             st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{usuario_id}"):
-                                conn = get_connection()
+                                conn = sqlite3.connect("database/ponto_esa.db")
                                 cursor = conn.cursor()
-                                cursor.execute(
-                                    "DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+                                cursor.execute("DELETE FROM usuarios WHERE id = ?", (usuario_id,))
                                 conn.commit()
                                 conn.close()
-
+                                
                                 del st.session_state[f"confirm_del_user_{usuario_id}"]
                                 st.success("✅ Usuário excluído!")
                                 st.rerun()
         else:
             st.info("👤 Nenhum usuário encontrado")
-
+    
     with tab2:
         st.markdown("### ➕ Cadastrar Novo Usuário")
-
+        
         with st.form("novo_usuario"):
             col1, col2 = st.columns(2)
-
+            
             with col1:
-                novo_login = st.text_input(
-                    "Login:*", placeholder="Ex: joao.silva")
-                novo_nome = st.text_input(
-                    "Nome Completo:*", placeholder="Ex: João Silva")
+                novo_login = st.text_input("Login:*", placeholder="Ex: joao.silva")
+                novo_nome = st.text_input("Nome Completo:*", placeholder="Ex: João Silva")
                 nova_senha = st.text_input("Senha:*", type="password")
-
+            
             with col2:
-                confirmar_senha = st.text_input(
-                    "Confirmar Senha:*", type="password")
-                novo_tipo = st.selectbox(
-                    "Tipo de Usuário:*", ["funcionario", "gestor"])
+                confirmar_senha = st.text_input("Confirmar Senha:*", type="password")
+                novo_tipo = st.selectbox("Tipo de Usuário:*", ["funcionario", "gestor"])
                 novo_ativo = st.checkbox("Usuário Ativo", value=True)
-
+            
             st.markdown("**Jornada de Trabalho:**")
             col3, col4 = st.columns(2)
             with col3:
-                jornada_inicio = st.time_input(
-                    "Início da Jornada:", value=time(8, 0))
+                jornada_inicio = st.time_input("Início da Jornada:", value=time(8, 0))
             with col4:
-                jornada_fim = st.time_input(
-                    "Fim da Jornada:", value=time(17, 0))
-
-            submitted = st.form_submit_button(
-                "➕ Cadastrar Usuário", use_container_width=True)
-
+                jornada_fim = st.time_input("Fim da Jornada:", value=time(17, 0))
+            
+            submitted = st.form_submit_button("➕ Cadastrar Usuário", use_container_width=True)
+            
             if submitted:
                 # Validações
                 if not novo_login or not novo_nome or not nova_senha:
@@ -3388,32 +3134,30 @@ def gerenciar_usuarios_interface():
                     st.error("❌ As senhas não conferem!")
                 else:
                     try:
-                        conn = get_connection()
+                        conn = sqlite3.connect("database/ponto_esa.db")
                         cursor = conn.cursor()
-
-                        senha_hash = hashlib.sha256(
-                            nova_senha.encode()).hexdigest()
-
+                        
+                        senha_hash = hashlib.sha256(nova_senha.encode()).hexdigest()
+                        
                         cursor.execute("""
                             INSERT INTO usuarios 
                             (usuario, senha, tipo, nome_completo, ativo, 
                              jornada_inicio_previsto, jornada_fim_previsto)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            novo_login,
-                            senha_hash,
-                            novo_tipo,
-                            novo_nome,
+                            novo_login, 
+                            senha_hash, 
+                            novo_tipo, 
+                            novo_nome, 
                             int(novo_ativo),
                             jornada_inicio.strftime("%H:%M"),
                             jornada_fim.strftime("%H:%M")
                         ))
-
+                        
                         conn.commit()
                         conn.close()
-
-                        st.success(
-                            f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
+                        
+                        st.success(f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
                         st.rerun()
                     except sqlite3.IntegrityError:
                         st.error("❌ Já existe um usuário com este login!")
@@ -3427,11 +3171,11 @@ def sistema_interface():
         <p>Configure parâmetros gerais do sistema de ponto</p>
     </div>
     """, unsafe_allow_html=True)
-
+    
     # Criar tabela de configurações se não existir
-    conn = get_connection()
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
-
+    
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
@@ -3440,54 +3184,47 @@ def sistema_interface():
             data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     """)
-
+    
     # Configurações padrão
     configs_padrao = [
         ('jornada_inicio_padrao', '08:00', 'Horário padrão de início da jornada'),
         ('jornada_fim_padrao', '17:00', 'Horário padrão de fim da jornada'),
         ('tolerancia_atraso_minutos', '10', 'Tolerância de atraso em minutos'),
-        ('horas_extras_automatico', '1',
-         'Calcular horas extras automaticamente (1=sim, 0=não)'),
-        ('notificacao_fim_jornada', '1',
-         'Notificar funcionário ao fim da jornada (1=sim, 0=não)'),
+        ('horas_extras_automatico', '1', 'Calcular horas extras automaticamente (1=sim, 0=não)'),
+        ('notificacao_fim_jornada', '1', 'Notificar funcionário ao fim da jornada (1=sim, 0=não)'),
         ('backup_automatico', '1', 'Realizar backup automático diário (1=sim, 0=não)'),
         ('gps_obrigatorio', '0', 'Exigir GPS ao registrar ponto (1=sim, 0=não)'),
-        ('max_distancia_metros', '1000',
-         'Distância máxima permitida do local de trabalho (metros)'),
-        ('aprovacao_automatica_atestado', '0',
-         'Aprovar atestados automaticamente (1=sim, 0=não)'),
+        ('max_distancia_metros', '1000', 'Distância máxima permitida do local de trabalho (metros)'),
+        ('aprovacao_automatica_atestado', '0', 'Aprovar atestados automaticamente (1=sim, 0=não)'),
         ('dias_historico_padrao', '30', 'Dias de histórico exibidos por padrão'),
     ]
-
+    
     for chave, valor, descricao in configs_padrao:
         cursor.execute("""
-            INSERT INTO configuracoes (chave, valor, descricao)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (chave) DO NOTHING
+            INSERT OR IGNORE INTO configuracoes (chave, valor, descricao)
+            VALUES (?, ?, ?)
         """, (chave, valor, descricao))
-
+    
     conn.commit()
-
+    
     # Buscar configurações atuais
-    cursor.execute(
-        "SELECT chave, valor, descricao FROM configuracoes ORDER BY chave")
+    cursor.execute("SELECT chave, valor, descricao FROM configuracoes ORDER BY chave")
     configs = cursor.fetchall()
     conn.close()
-
+    
     # Organizar por categorias
     st.markdown("### ⏰ Configurações de Jornada")
-
+    
     with st.form("config_jornada"):
         col1, col2 = st.columns(2)
-
+        
         # Obter valores atuais
         config_dict = {c[0]: c[1] for c in configs}
-
+        
         with col1:
             jornada_inicio = st.time_input(
                 "Horário Padrão de Início:",
-                value=datetime.strptime(config_dict.get(
-                    'jornada_inicio_padrao', '08:00'), "%H:%M").time()
+                value=datetime.strptime(config_dict.get('jornada_inicio_padrao', '08:00'), "%H:%M").time()
             )
             tolerancia = st.number_input(
                 "Tolerância de Atraso (minutos):",
@@ -3495,12 +3232,11 @@ def sistema_interface():
                 max_value=60,
                 value=int(config_dict.get('tolerancia_atraso_minutos', '10'))
             )
-
+        
         with col2:
             jornada_fim = st.time_input(
                 "Horário Padrão de Fim:",
-                value=datetime.strptime(config_dict.get(
-                    'jornada_fim_padrao', '17:00'), "%H:%M").time()
+                value=datetime.strptime(config_dict.get('jornada_fim_padrao', '17:00'), "%H:%M").time()
             )
             dias_historico = st.number_input(
                 "Dias de Histórico Padrão:",
@@ -3508,85 +3244,83 @@ def sistema_interface():
                 max_value=365,
                 value=int(config_dict.get('dias_historico_padrao', '30'))
             )
-
+        
         if st.form_submit_button("💾 Salvar Configurações de Jornada", use_container_width=True):
-            conn = get_connection()
+            conn = sqlite3.connect("database/ponto_esa.db")
             cursor = conn.cursor()
-
+            
             configs_jornada = [
                 ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
                 ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
                 ('tolerancia_atraso_minutos', str(tolerancia)),
                 ('dias_historico_padrao', str(dias_historico)),
             ]
-
+            
             for chave, valor in configs_jornada:
                 cursor.execute("""
                     UPDATE configuracoes 
                     SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
                     WHERE chave = ?
                 """, (valor, chave))
-
+            
             conn.commit()
             conn.close()
-
+            
             st.success("✅ Configurações de jornada salvas!")
             st.rerun()
-
+    
     st.markdown("---")
     st.markdown("### 🕐 Configurações de Horas Extras")
-
+    
     with st.form("config_horas_extras"):
         col1, col2 = st.columns(2)
-
+        
         with col1:
             horas_extras_auto = st.checkbox(
                 "Calcular Horas Extras Automaticamente",
-                value=bool(
-                    int(config_dict.get('horas_extras_automatico', '1')))
+                value=bool(int(config_dict.get('horas_extras_automatico', '1')))
             )
-
+        
         with col2:
             notificar_fim_jornada = st.checkbox(
                 "Notificar ao Fim da Jornada",
-                value=bool(
-                    int(config_dict.get('notificacao_fim_jornada', '1')))
+                value=bool(int(config_dict.get('notificacao_fim_jornada', '1')))
             )
-
+        
         if st.form_submit_button("💾 Salvar Configurações de Horas Extras", use_container_width=True):
-            conn = get_connection()
+            conn = sqlite3.connect("database/ponto_esa.db")
             cursor = conn.cursor()
-
+            
             configs_he = [
                 ('horas_extras_automatico', '1' if horas_extras_auto else '0'),
                 ('notificacao_fim_jornada', '1' if notificar_fim_jornada else '0'),
             ]
-
+            
             for chave, valor in configs_he:
                 cursor.execute("""
                     UPDATE configuracoes 
                     SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
                     WHERE chave = ?
                 """, (valor, chave))
-
+            
             conn.commit()
             conn.close()
-
+            
             st.success("✅ Configurações de horas extras salvas!")
             st.rerun()
-
+    
     st.markdown("---")
     st.markdown("### 📍 Configurações de GPS")
-
+    
     with st.form("config_gps"):
         col1, col2 = st.columns(2)
-
+        
         with col1:
             gps_obrigatorio = st.checkbox(
                 "Exigir GPS ao Registrar Ponto",
                 value=bool(int(config_dict.get('gps_obrigatorio', '0')))
             )
-
+        
         with col2:
             max_distancia = st.number_input(
                 "Distância Máxima Permitida (metros):",
@@ -3595,140 +3329,114 @@ def sistema_interface():
                 value=int(config_dict.get('max_distancia_metros', '1000')),
                 step=100
             )
-
+        
         st.info("💡 Quando GPS obrigatório está ativado, o sistema não permitirá registro de ponto sem localização válida.")
-
+        
         if st.form_submit_button("💾 Salvar Configurações de GPS", use_container_width=True):
-            conn = get_connection()
+            conn = sqlite3.connect("database/ponto_esa.db")
             cursor = conn.cursor()
-
+            
             configs_gps = [
                 ('gps_obrigatorio', '1' if gps_obrigatorio else '0'),
                 ('max_distancia_metros', str(max_distancia)),
             ]
-
+            
             for chave, valor in configs_gps:
                 cursor.execute("""
                     UPDATE configuracoes 
                     SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
                     WHERE chave = ?
                 """, (valor, chave))
-
+            
             conn.commit()
             conn.close()
-
+            
             st.success("✅ Configurações de GPS salvas!")
             st.rerun()
-
+    
     st.markdown("---")
     st.markdown("### 🔧 Configurações Gerais")
-
+    
     with st.form("config_gerais"):
         col1, col2 = st.columns(2)
-
+        
         with col1:
             backup_auto = st.checkbox(
-                "Backup Automático Diário"
+                "Backup Automático Diário",
+                value=bool(int(config_dict.get('backup_automatico', '1')))
             )
-
+        
+        with col2:
+            aprovacao_auto = st.checkbox(
+                "Aprovação Automática de Atestados",
+                value=bool(int(config_dict.get('aprovacao_automatica_atestado', '0')))
+            )
+        
+        st.warning("⚠️ Aprovação automática de atestados não é recomendada para ambientes de produção.")
+        
         if st.form_submit_button("💾 Salvar Configurações Gerais", use_container_width=True):
-            conn = get_connection()
+            conn = sqlite3.connect("database/ponto_esa.db")
             cursor = conn.cursor()
-
+            
             configs_gerais = [
                 ('backup_automatico', '1' if backup_auto else '0'),
+                ('aprovacao_automatica_atestado', '1' if aprovacao_auto else '0'),
             ]
-
+            
             for chave, valor in configs_gerais:
                 cursor.execute("""
                     UPDATE configuracoes 
                     SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
                     WHERE chave = ?
                 """, (valor, chave))
-
+            
             conn.commit()
             conn.close()
-            st.success("✅ Configurações salvas!")
+            
+            st.success("✅ Configurações gerais salvas!")
             st.rerun()
-
-
-# Rodapé unificado
-st.markdown("""
-<div class="footer-left">
-    Sistema de ponto exclusivo da empresa Expressão Socioambiental Pesquisa e Projetos 
-</div>
-<div class="footer-right">
-    feito por Pâmella SAR
-</div>
-""", unsafe_allow_html=True)
-
-
-def buscar_registros_dia(usuario, data):
-    """Busca todos os registros de ponto de um usuário em uma data específica"""
-    conn = get_connection()
+    
+    st.markdown("---")
+    st.markdown("### 📊 Informações do Sistema")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    conn = sqlite3.connect("database/ponto_esa.db")
     cursor = conn.cursor()
-
-    try:
-        cursor.execute("""
-            SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
-            FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) = ?
-            ORDER BY data_hora
-        """, (usuario, data))
-
-        registros = []
-        for row in cursor.fetchall():
-            registros.append({
-                'id': row[0],
-                'usuario': row[1],
-                'data_hora': row[2],
-                'tipo': row[3],
-                'modalidade': row[4],
-                'projeto': row[5],
-                'atividade': row[6]
-            })
-
-        return registros
-    finally:
-        conn.close()
-
-
-def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor):
-    """Corrige um registro de ponto existente"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    try:
-        # Verificar se o registro existe
-        cursor.execute(
-            f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
-        if not cursor.fetchone():
-            return {"success": False, "message": "Registro não encontrado"}
-
-        # Atualizar registro
-        cursor.execute(f"""
-            UPDATE registros_ponto 
-            SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
-            WHERE id = {SQL_PLACEHOLDER}
-        """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
-
-        # Registrar auditoria da correção
-        cursor.execute(f"""
-            INSERT INTO auditoria_correcoes 
-            (registro_id, gestor, justificativa, data_correcao)
-            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
-        """, (registro_id, gestor, justificativa))
-
-        conn.commit()
-        return {"success": True, "message": "Registro corrigido com sucesso"}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
-    finally:
-        conn.close()
-
+    
+    with col1:
+        cursor.execute("SELECT COUNT(*) FROM usuarios WHERE ativo = 1")
+        usuarios_ativos = cursor.fetchone()[0]
+        st.metric("Usuários Ativos", usuarios_ativos)
+    
+    with col2:
+        cursor.execute("SELECT COUNT(*) FROM projetos WHERE ativo = 1")
+        projetos_ativos = cursor.fetchone()[0]
+        st.metric("Projetos Ativos", projetos_ativos)
+    
+    with col3:
+        cursor.execute("SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = CURRENT_DATE")
+        registros_hoje = cursor.fetchone()[0]
+        st.metric("Registros Hoje", registros_hoje)
+    
+    conn.close()
+    
+    # Informações do banco de dados
+    st.markdown("### 💾 Banco de Dados")
+    db_path = "database/ponto_esa.db"
+    if os.path.exists(db_path):
+        db_size = os.path.getsize(db_path)
+        st.info(f"📁 Tamanho do banco de dados: {format_file_size(db_size)}")
+        
+        if st.button("🔄 Criar Backup Manual"):
+            import shutil
+            backup_name = f"database/backup_manual_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+            shutil.copy(db_path, backup_name)
+            st.success(f"✅ Backup criado: {backup_name}")
 
 # Função principal
+
+
 def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
@@ -3749,16 +3457,17 @@ def main():
     else:
         tela_login()
 
-    # Rodapé unificado
-    st.markdown("""
-    <div class="footer-left">
-        Sistema de ponto exclusivo da empresa Expressão Socioambiental Pesquisa e Projetos 
-    </div>
-    <div class="footer-right">
-        feito por Pâmella SAR
-    </div>
-    """, unsafe_allow_html=True)
 
+# Rodapé unificado
+st.markdown("""
+<div class="footer-left">
+    Sistema de ponto exclusivo da empresa Expressão Socioambiental Pesquisa e Projetos 
+</div>
+<div class="footer-right">
+    feito por Pâmella SAR
+</div>
+""", unsafe_allow_html=True)
 
-# Executar aplicação
-main()
+if __name__ == '__main__':
+    init_db()
+    main()

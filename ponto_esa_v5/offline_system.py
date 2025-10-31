@@ -316,7 +316,7 @@ class OfflineSystem:
         
         cursor.execute('''
             SELECT valor FROM cache_dados 
-            WHERE chave = ? AND expires_at > datetime('now')
+            WHERE chave = ? AND expires_at > CURRENT_TIMESTAMP
         ''', (chave,))
         
         result = cursor.fetchone()
@@ -331,7 +331,7 @@ class OfflineSystem:
         conn = sqlite3.connect(self.offline_db_path)
         cursor = conn.cursor()
         
-        cursor.execute("DELETE FROM cache_dados WHERE expires_at <= datetime('now')")
+        cursor.execute("DELETE FROM cache_dados WHERE expires_at <= CURRENT_TIMESTAMP")
         
         conn.commit()
         conn.close()
