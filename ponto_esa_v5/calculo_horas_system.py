@@ -25,6 +25,20 @@ def safe_time_parse(time_value):
     return time_value
 
 
+def safe_datetime_parse(dt_value):
+    """Converte valor de data/hora de forma segura (PostgreSQL retorna datetime, SQLite string)."""
+    if dt_value is None:
+        return None
+    if isinstance(dt_value, datetime):
+        return dt_value
+    if isinstance(dt_value, str):
+        try:
+            return datetime.fromisoformat(dt_value)
+        except ValueError:
+            return datetime.strptime(dt_value, "%Y-%m-%d %H:%M:%S")
+    return dt_value
+
+
 class CalculoHorasSystem:
     def __init__(self):
         pass
@@ -68,10 +82,13 @@ class CalculoHorasSystem:
             eh_feriado = self._eh_feriado(data_obj)
 
             # Calcular horas entre primeiro e último registro
-            primeiro = datetime.strptime(registros[0][0], "%Y-%m-%d %H:%M:%S")
-            ultimo = datetime.strptime(registros[-1][0], "%Y-%m-%d %H:%M:%S")
+            primeiro = safe_datetime_parse(registros[0][0])
+            ultimo = safe_datetime_parse(registros[-1][0])
 
-            horas_trabalhadas = (ultimo - primeiro).total_seconds() / 3600
+            if primeiro is None or ultimo is None:
+                horas_trabalhadas = 0
+            else:
+                horas_trabalhadas = (ultimo - primeiro).total_seconds() / 3600
 
             # Aplicar desconto de almoço se > 6 horas
             desconto_almoco = 1 if horas_trabalhadas > 6 else 0
@@ -92,6 +109,9 @@ class CalculoHorasSystem:
 
             horas_finais = max(0, horas_finais - total_atestados)
 
+            primeiro_fmt = primeiro.strftime("%H:%M") if isinstance(primeiro, datetime) else "00:00"
+            ultimo_fmt = ultimo.strftime("%H:%M") if isinstance(ultimo, datetime) else "00:00"
+
             return {
                 "horas_trabalhadas": horas_trabalhadas,
                 "horas_liquidas": horas_liquidas,
@@ -101,8 +121,8 @@ class CalculoHorasSystem:
                 "eh_domingo": eh_domingo,
                 "eh_feriado": eh_feriado,
                 "multiplicador": multiplicador,
-                "primeiro_registro": primeiro.strftime("%H:%M"),
-                "ultimo_registro": ultimo.strftime("%H:%M"),
+                "primeiro_registro": primeiro_fmt,
+                "ultimo_registro": ultimo_fmt,
                 "total_registros": len(registros)
             }
         finally:
