@@ -1285,13 +1285,25 @@ def atestado_horas_interface(atestado_system, upload_system):
                     motivo = st.text_area("📝 Motivo da Ausência",
                                           placeholder="Descreva o motivo da ausência...")
 
-                    # Upload de comprovante (opcional)
-                    st.markdown("📎 **Comprovante (Opcional)**")
-                    uploaded_file = st.file_uploader(
-                        "Anexe um comprovante (atestado médico, declaração, etc.)",
-                        type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
-                        help="Tamanho máximo: 10MB"
+                    st.markdown("📎 **Comprovante:**")
+                    nao_possui_comprovante = st.checkbox(
+                        "❌ Não possuo atestado físico",
+                        help="Marque caso ainda não tenha o documento para anexar"
                     )
+
+                    if nao_possui_comprovante:
+                        st.warning(
+                            "⚠️ O atestado será registrado sem documento e poderá gerar desconto temporário no banco de horas até a apresentação do comprovante.")
+                        uploaded_file = None
+                    else:
+                        uploaded_file = st.file_uploader(
+                            "Anexe um comprovante (atestado médico, declaração, etc.)",
+                            type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+                            help="Tamanho máximo: 10MB"
+                        )
+
+                    st.caption(
+                        "Nota: É obrigatório anexar o comprovante ou marcar que não o possui. Você poderá regularizar posteriormente com o gestor.")
 
                     submitted = st.form_submit_button(
                         "✅ Registrar Atestado", use_container_width=True)
@@ -1302,31 +1314,17 @@ def atestado_horas_interface(atestado_system, upload_system):
                     elif hora_inicio >= hora_fim:
                         st.error(
                             "❌ Horário de início deve ser anterior ao horário de fim")
+                    elif not nao_possui_comprovante and uploaded_file is None:
+                        st.error(
+                            "❌ Anexe o comprovante ou marque a opção 'Não possuo atestado físico'.")
                     else:
                         arquivo_comprovante = None
 
-                        # Checkbox para indicar que não possui atestado físico
-                        nao_possui_comprovante = st.checkbox(
-                            "❌ Não possuo atestado físico",
-                            help="Marque se não houver documento a anexar"
-                        )
-
-                        # Nota explicativa (exibida sempre, antes da submissão)
-                        st.caption(
-                            "Nota: Ao marcar 'Não possuo atestado físico' o atestado será registrado sem documento. "
-                            "O gestor será notificado e as horas poderão ser lançadas como débito no banco de horas até a apresentação do comprovante."
-                        )
-
-                        if nao_possui_comprovante:
-                            # Aviso visível ao usuário quando opta por não anexar o atestado físico.
-                            st.warning(
-                                "⚠️ Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
-                            uploaded_file = None
-
-                        # Processar upload se houver e se não marcou nao_possui_comprovante
-                        if uploaded_file and not nao_possui_comprovante:
+                        # Processar upload se houver arquivo
+                        if uploaded_file is not None:
+                            file_bytes = uploaded_file.read()
                             upload_result = upload_system.save_file(
-                                file_content=uploaded_file.read(),
+                                file_content=file_bytes,
                                 usuario=st.session_state.usuario,
                                 original_filename=uploaded_file.name,
                                 categoria='atestado_horas'
@@ -1348,8 +1346,7 @@ def atestado_horas_interface(atestado_system, upload_system):
                             hora_fim=hora_fim.strftime("%H:%M"),
                             motivo=motivo,
                             arquivo_comprovante=arquivo_comprovante,
-                            nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
-                            ) and nao_possui_comprovante else 0
+                            nao_possui_comprovante=1 if nao_possui_comprovante else 0
                         )
 
                         if resultado["success"]:
