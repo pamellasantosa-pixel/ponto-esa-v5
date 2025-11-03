@@ -10,8 +10,8 @@ load_dotenv()
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
 if USE_POSTGRESQL:
-    import psycopg2
-    import psycopg2.extras
+    import psycopg2  # type: ignore[import-not-found]
+    import psycopg2.extras  # type: ignore[import-not-found]
     DB_CONFIG = {
         'host': os.getenv('DB_HOST', 'localhost'),
         'database': os.getenv('DB_NAME', 'ponto_esa'),
@@ -124,6 +124,21 @@ def init_db():
             observacoes TEXT
         )
     ''')
+
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_ajuste_ponto (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            aprovador_solicitado TEXT NOT NULL,
+            dados_solicitados TEXT NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            respondido_por TEXT,
+            data_resposta TIMESTAMP,
+            observacoes TEXT
+        )
+    '''))
 
     # Tabela para atestado de horas (schema antigo - manter para compatibilidade)
     c.execute('''

@@ -12,6 +12,21 @@ import uuid
 import json
 
 
+def _parse_datetime(value):
+    """Converte valores retornados do banco para datetime (aceita datetime ou string)."""
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            try:
+                return datetime.strptime(value, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return datetime.strptime(value.split(".")[0], "%Y-%m-%d %H:%M:%S")
+    return None
+
+
 class AtestadoHorasSystem:
     def __init__(self):
         self.init_database()
@@ -130,7 +145,7 @@ class AtestadoHorasSystem:
 
         # Converter para lista de dicionários
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'total_horas',
-                   'motivo', 'arquivo_comprovante', 'status', 'data_registro',
+                   'motivo', 'arquivo_comprovante', 'nao_possui_comprovante', 'status', 'data_registro',
                    'aprovado_por', 'data_aprovacao', 'observacoes']
 
         return [dict(zip(colunas, atestado)) for atestado in atestados]
@@ -154,7 +169,7 @@ class AtestadoHorasSystem:
         conn.close()
 
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'total_horas',
-                   'motivo', 'arquivo_comprovante', 'status', 'data_registro',
+                   'motivo', 'arquivo_comprovante', 'nao_possui_comprovante', 'status', 'data_registro',
                    'aprovado_por', 'data_aprovacao', 'observacoes']
 
         return [dict(zip(colunas, atestado)) for atestado in atestados]
@@ -223,15 +238,22 @@ class AtestadoHorasSystem:
         # Calcular horas trabalhadas pelos registros de ponto
         horas_trabalhadas = 0
         if len(registros_ponto) >= 2:
-            # Lógica simplificada: diferença entre primeiro e último registro
-            primeiro = datetime.strptime(
-                registros_ponto[0][0], "%Y-%m-%d %H:%M:%S").time()
-            ultimo = datetime.strptime(
-                registros_ponto[-1][0], "%Y-%m-%d %H:%M:%S").time()
+            primeiro_dt = _parse_datetime(registros_ponto[0][0])
+            ultimo_dt = _parse_datetime(registros_ponto[-1][0])
 
-            # Convertendo para datetime para calcular a diferença
-            primeiro_dt = datetime.combine(datetime.min, primeiro)
-            ultimo_dt = datetime.combine(datetime.min, ultimo)
+            if not primeiro_dt or not ultimo_dt:
+                return {
+                    "horas_registradas": 0,
+                    "horas_atestado": 0,
+                    "horas_liquidas": 0
+                }
+
+            # Lógica simplificada: diferença entre primeiro e último registro
+            primeiro_time = primeiro_dt.time()
+            ultimo_time = ultimo_dt.time()
+
+            primeiro_dt = datetime.combine(datetime.min, primeiro_time)
+            ultimo_dt = datetime.combine(datetime.min, ultimo_time)
 
             if ultimo_dt < primeiro_dt:
                 ultimo_dt += timedelta(days=1)
@@ -334,10 +356,12 @@ class AtestadoHorasSystem:
         conflitos = []
         for registro in registros:
             # Extrair apenas a parte da hora do registro de ponto
-            hora_registro_str = datetime.strptime(
-                registro[0], "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
-            hora_registro = datetime.strptime(
-                hora_registro_str, "%H:%M").time()
+            registro_dt = _parse_datetime(registro[0])
+            if not registro_dt:
+                continue
+
+            hora_registro = registro_dt.time()
+            hora_registro_str = hora_registro.strftime("%H:%M")
 
             if inicio_atestado <= hora_registro <= fim_atestado:
                 conflitos.append(hora_registro_str)

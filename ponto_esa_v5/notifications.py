@@ -7,15 +7,29 @@ de registrar ponto e controlar horas extras.
 import threading
 import time
 from datetime import datetime, timedelta
-import sqlite3
 import json
 import os
+import sqlite3
+from database_postgresql import get_connection
+
+def _load_default_interval():
+    raw_value = os.getenv("NOTIFICATION_REMINDER_INTERVAL", "60")
+    try:
+        parsed = int(raw_value)
+        return parsed if parsed > 0 else 60
+    except ValueError:
+        return 60
+
+
+DEFAULT_REMINDER_INTERVAL = _load_default_interval()
 
 class NotificationManager:
     def __init__(self):
         self.active_notifications = {}
         self.notification_threads = {}
         self.running = True
+        self.repeating_jobs = {}
+        self.default_reminder_interval = DEFAULT_REMINDER_INTERVAL
         
     def start_notification_system(self, user_id, horario_inicio, horario_fim):
         """
@@ -41,29 +55,16 @@ class NotificationManager:
         self.notification_threads[user_id] = thread
         thread.start()
     
-    def _notification_worker(self, user_id, meio_expediente, fim_expediente):
+    def _notification_worker(self, user_id, meio_expediente, fim):
         """
-        Worker thread que gerencia as notificações para um usuário
+        Worker thread que gerencia as notificações ao longo do dia
         """
+        hoje = datetime.now().date()
+        meio_hoje = datetime.combine(hoje, meio_expediente.time())
+        fim_hoje = datetime.combine(hoje, fim.time())
+        
+        # Notificação no meio do expediente
         agora = datetime.now()
-        
-        # Calcular quando enviar notificação do meio do expediente
-        meio_hoje = agora.replace(
-            hour=meio_expediente.hour,
-            minute=meio_expediente.minute,
-            second=meio_expediente.second,
-            microsecond=0
-        )
-        
-        # Calcular quando enviar notificação do fim do expediente
-        fim_hoje = agora.replace(
-            hour=fim_expediente.hour,
-            minute=fim_expediente.minute,
-            second=fim_expediente.second,
-            microsecond=0
-        )
-        
-        # Se já passou do meio do expediente, não notificar
         if agora < meio_hoje:
             tempo_ate_meio = (meio_hoje - agora).total_seconds()
             if tempo_ate_meio > 0:
@@ -71,12 +72,13 @@ class NotificationManager:
                 if self.running and user_id in self.notification_threads:
                     self._send_notification(
                         user_id,
-                        "⏰ Lembrete de Ponto Intermediário",
-                        "Não se esqueça de registrar sua atividade atual!",
-                        "intermediate"
+                        "⏰ Lembrete de Registro",
+                        "Não esqueça de registrar seu ponto intermediário!",
+                        "midshift"
                     )
         
-        # Notificação do fim do expediente
+        # Notificação no fim do expediente
+        agora = datetime.now()
         if agora < fim_hoje:
             tempo_ate_fim = (fim_hoje - agora).total_seconds()
             if tempo_ate_fim > 0:
@@ -97,7 +99,8 @@ class NotificationManager:
             
             if agora < proxima_notificacao:
                 tempo_ate_proxima = (proxima_notificacao - agora).total_seconds()
-                time.sleep(tempo_ate_proxima)
+                if tempo_ate_proxima > 0:
+                    time.sleep(tempo_ate_proxima)
             
             if self.running and user_id in self.notification_threads:
                 # Verificar se o usuário ainda não finalizou o expediente
@@ -119,6 +122,8 @@ class NotificationManager:
         """
         Envia uma notificação para o usuário
         """
+        base_extra = extra_data or {}
+
         notification = {
             "id": f"{user_id}_{int(time.time())}",
             "user_id": user_id,
@@ -127,8 +132,13 @@ class NotificationManager:
             "type": notification_type,
             "timestamp": datetime.now().isoformat(),
             "read": False,
-            "extra_data": extra_data or {}
+            "extra_data": base_extra,
+            "requires_response": base_extra.get("requires_response", False)
         }
+
+        for key, value in base_extra.items():
+            if key not in notification:
+                notification[key] = value
         
         # Salvar notificação no banco de dados
         self._save_notification_to_db(notification)
@@ -142,62 +152,158 @@ class NotificationManager:
         # Manter apenas as últimas 10 notificações por usuário
         if len(self.active_notifications[user_id]) > 10:
             self.active_notifications[user_id] = self.active_notifications[user_id][-10:]
-    
+
+    def add_notification(self, user_id, payload):
+        """Adiciona uma notificação a partir de um payload flexível."""
+        if not isinstance(payload, dict):
+            raise ValueError("payload deve ser um dicionário")
+
+        title = payload.get("title", "Notificação")
+        message = payload.get("message", "")
+        notification_type = payload.get("type", "general")
+
+        extra_data = payload.copy()
+        extra_data.pop("title", None)
+        extra_data.pop("message", None)
+        extra_data.pop("type", None)
+
+        self._send_notification(user_id, title, message, notification_type, extra_data)
+
+    def start_repeating_notification(self, job_id, user_id, payload, interval_seconds=None, stop_condition=None):
+        """Inicia uma notificação repetitiva até que a condição de parada seja atendida."""
+        if job_id in self.repeating_jobs:
+            # Já existe um job ativo para este identificador
+            return
+
+        job_control = {"active": True}
+        self.repeating_jobs[job_id] = job_control
+
+        interval = interval_seconds if interval_seconds is not None else self.default_reminder_interval
+
+        def worker():
+            try:
+                while self.running and job_control.get("active", False):
+                    time.sleep(interval)
+
+                    if stop_condition and stop_condition():
+                        break
+
+                    self.add_notification(user_id, payload)
+            finally:
+                # Remover job ao finalizar
+                self.repeating_jobs.pop(job_id, None)
+
+        thread = threading.Thread(target=worker, daemon=True)
+        job_control["thread"] = thread
+        thread.start()
+
+    def stop_repeating_notification(self, job_id):
+        """Solicita a parada de um job de notificações repetitivas."""
+        job = self.repeating_jobs.get(job_id)
+        if job:
+            job["active"] = False
+
     def _save_notification_to_db(self, notification):
-        """
-        Salva a notificação no banco de dados
-        """
+        """Persiste notificações em PostgreSQL ou SQLite, conforme disponível."""
+        conn = None
+        driver = 'unknown'
+
         try:
-            conn = sqlite3.connect("database/ponto_esa.db")
-            c = conn.cursor()
-            
-            # Criar tabela de notificações se não existir
-            c.execute("""
-                CREATE TABLE IF NOT EXISTS Notificacoes (
-                    id TEXT PRIMARY KEY,
-                    user_id INTEGER,
-                    title TEXT,
-                    message TEXT,
-                    type TEXT,
-                    timestamp TEXT,
-                    read BOOLEAN DEFAULT FALSE,
-                    extra_data TEXT,
-                    FOREIGN KEY (user_id) REFERENCES Funcionarios (id)
+            # Tentar conexão via camada compartilhada
+            try:
+                conn = get_connection()
+            except Exception:
+                conn = None
+
+            if conn is None:
+                # Fallback explícito para SQLite local
+                os.makedirs('database', exist_ok=True)
+                conn = sqlite3.connect('database/ponto_esa.db')
+
+            driver = type(conn).__module__
+            cursor = conn.cursor()
+
+            if 'psycopg2' in driver:
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS notificacoes (
+                        id TEXT PRIMARY KEY,
+                        user_id VARCHAR(255),
+                        title TEXT,
+                        message TEXT,
+                        type TEXT,
+                        timestamp TEXT,
+                        read BOOLEAN DEFAULT FALSE,
+                        extra_data JSON
+                    )
+                ''')
+
+                cursor.execute(
+                    '''INSERT INTO notificacoes
+                       (id, user_id, title, message, type, timestamp, read, extra_data)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
+                    (
+                        notification['id'],
+                        notification['user_id'],
+                        notification['title'],
+                        notification['message'],
+                        notification['type'],
+                        notification['timestamp'],
+                        int(bool(notification['read'])),
+                        json.dumps(notification.get('extra_data', {}))
+                    )
                 )
-            """)
-            
-            c.execute("""
-                INSERT INTO Notificacoes 
-                (id, user_id, title, message, type, timestamp, read, extra_data)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                notification["id"],
-                notification["user_id"],
-                notification["title"],
-                notification["message"],
-                notification["type"],
-                notification["timestamp"],
-                notification["read"],
-                json.dumps(notification["extra_data"])
-            ))
-            
+            else:
+                cursor.execute('''
+                    CREATE TABLE IF NOT EXISTS Notificacoes (
+                        id TEXT PRIMARY KEY,
+                        user_id TEXT,
+                        title TEXT,
+                        message TEXT,
+                        type TEXT,
+                        timestamp TEXT,
+                        read INTEGER DEFAULT 0,
+                        extra_data TEXT
+                    )
+                ''')
+
+                cursor.execute(
+                    '''INSERT INTO Notificacoes
+                       (id, user_id, title, message, type, timestamp, read, extra_data)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                    (
+                        notification['id'],
+                        notification['user_id'],
+                        notification['title'],
+                        notification['message'],
+                        notification['type'],
+                        notification['timestamp'],
+                        int(bool(notification['read'])),
+                        json.dumps(notification.get('extra_data', {}))
+                    )
+                )
+
             conn.commit()
-            conn.close()
-        except Exception as e:
-            print(f"Erro ao salvar notificação: {e}")
+        except Exception as exc:
+            print(f"Erro ao salvar notificação (driver={driver}): {exc}")
+        finally:
+            if conn is not None:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
     
     def _check_shift_ended(self, user_id):
         """
         Verifica se o usuário já finalizou o expediente do dia
         """
         try:
-            conn = sqlite3.connect("database/ponto_esa.db")
+            conn = get_connection()
             c = conn.cursor()
             
             hoje = datetime.now().strftime("%Y-%m-%d")
             c.execute("""
-                SELECT COUNT(*) FROM RegistrosPonto 
-                WHERE id_funcionario = ? AND data_registro = ? AND tipo = 'FIM'
+                SELECT COUNT(*) FROM registros_ponto 
+                WHERE usuario = %s AND DATE(data_hora) = %s AND tipo = 'Fim'
             """, (user_id, hoje))
             
             result = c.fetchone()[0]
@@ -218,11 +324,11 @@ class NotificationManager:
         Marca uma notificação como lida
         """
         try:
-            conn = sqlite3.connect("database/ponto_esa.db")
+            conn = get_connection()
             c = conn.cursor()
             
             c.execute("""
-                UPDATE Notificacoes SET read = TRUE WHERE id = ?
+                UPDATE notificacoes SET read = TRUE WHERE id = %s
             """, (notification_id,))
             
             conn.commit()
@@ -254,6 +360,9 @@ class NotificationManager:
         self.running = False
         self.notification_threads.clear()
         self.active_notifications.clear()
+        for job in self.repeating_jobs.values():
+            job["active"] = False
+        self.repeating_jobs.clear()
 
 # Instância global do gerenciador de notificações
 notification_manager = NotificationManager()

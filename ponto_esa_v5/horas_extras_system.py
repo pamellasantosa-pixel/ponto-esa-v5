@@ -119,6 +119,31 @@ class HorasExtrasSystem:
                 }
             )
 
+            # Iniciar lembrete contínuo para o aprovador selecionado
+            job_id = f"horas_extras_{solicitacao_id}"
+
+            def stop_condition():
+                return self._is_solicitacao_finalizada(solicitacao_id)
+
+            reminder_payload = {
+                "type": "horas_extras_lembrete",
+                "title": "Lembrete: aprovação pendente",
+                "message": f"Solicitação #{solicitacao_id} de {usuario} aguarda sua decisão.",
+                "solicitacao_id": solicitacao_id,
+                "usuario": usuario,
+                "data": data,
+                "total_horas": total_horas,
+                "requires_response": True
+            }
+
+            # Mantém lembretes recorrentes até aprovação ou rejeição
+            notification_manager.start_repeating_notification(
+                job_id,
+                aprovador_solicitado,
+                reminder_payload,
+                stop_condition=stop_condition
+            )
+
             return {
                 "success": True,
                 "message": "Solicitação de horas extras enviada com sucesso",
@@ -218,6 +243,9 @@ class HorasExtrasSystem:
             )
 
             conn.commit()
+            notification_manager.stop_repeating_notification(
+                f"horas_extras_{solicitacao_id}"
+            )
             return {"success": True, "message": "Solicitação aprovada com sucesso"}
 
         except Exception as e:
@@ -254,6 +282,9 @@ class HorasExtrasSystem:
             """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
 
             conn.commit()
+            notification_manager.stop_repeating_notification(
+                f"horas_extras_{solicitacao_id}"
+            )
             return {"success": True, "message": "Solicitação rejeitada"}
 
         except Exception as e:
@@ -307,6 +338,28 @@ class HorasExtrasSystem:
         conn.close()
 
         return count
+
+    def _is_solicitacao_finalizada(self, solicitacao_id):
+        """Verifica se a solicitação de horas extras foi tratada."""
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute(
+            """
+            SELECT status FROM solicitacoes_horas_extras
+            WHERE id = %s
+            """,
+            (solicitacao_id,)
+        )
+
+        result = cursor.fetchone()
+        conn.close()
+
+        if not result:
+            return True
+
+        status = result[0]
+        return status and status.lower() != "pendente"
 
 # Funções utilitárias
 

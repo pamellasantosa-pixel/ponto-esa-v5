@@ -9,6 +9,39 @@ from datetime import datetime, timedelta, date, time as time_type
 import calendar
 
 
+def safe_datetime_parse(dt_value):
+    """Converte para datetime de forma segura entre PostgreSQL e SQLite."""
+    if dt_value is None:
+        return None
+    if isinstance(dt_value, datetime):
+        return dt_value
+    if isinstance(dt_value, str):
+        try:
+            return datetime.fromisoformat(dt_value)
+        except ValueError:
+            try:
+                return datetime.strptime(dt_value, "%Y-%m-%d %H:%M:%S")
+            except ValueError:
+                return datetime.strptime(dt_value.split(".")[0], "%Y-%m-%d %H:%M:%S")
+    return dt_value
+
+
+def safe_date_parse(date_value):
+    """Converte para date de forma segura entre PostgreSQL e SQLite."""
+    if date_value is None:
+        return None
+    if isinstance(date_value, date):
+        return date_value
+    if isinstance(date_value, datetime):
+        return date_value.date()
+    if isinstance(date_value, str):
+        try:
+            return datetime.strptime(date_value, "%Y-%m-%d").date()
+        except ValueError:
+            return datetime.fromisoformat(date_value).date()
+    return date_value
+
+
 def safe_time_parse(time_value):
     """
     Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
@@ -101,25 +134,19 @@ class BancoHorasSystem:
         
         # Processar registros de ponto
         for registro in registros_por_dia:
-            data_reg = registro[0]
-            # PostgreSQL retorna datetime, SQLite retorna string
-            if isinstance(registro[1], datetime):
-                primeiro = registro[1]
-            else:
-                primeiro = datetime.strptime(registro[1], "%Y-%m-%d %H:%M:%S")
-            
-            if isinstance(registro[2], datetime):
-                ultimo = registro[2]
-            else:
-                ultimo = datetime.strptime(registro[2], "%Y-%m-%d %H:%M:%S")
-            
-            # Verificar se é domingo ou feriado
-            if isinstance(data_reg, date):
-                data_obj = data_reg
-            elif isinstance(data_reg, datetime):
-                data_obj = data_reg.date()
-            else:
-                data_obj = datetime.strptime(data_reg, "%Y-%m-%d").date()
+            data_reg_date = safe_date_parse(registro[0])
+            if data_reg_date is None:
+                continue
+
+            data_reg = data_reg_date.strftime("%Y-%m-%d")
+
+            primeiro = safe_datetime_parse(registro[1])
+            ultimo = safe_datetime_parse(registro[2])
+
+            if primeiro is None or ultimo is None:
+                continue
+
+            data_obj = data_reg_date
             eh_domingo = data_obj.weekday() == 6
             eh_feriado = self._eh_feriado(data_obj)
             
@@ -188,7 +215,11 @@ class BancoHorasSystem:
         
         # Processar horas extras aprovadas
         for he in horas_extras_aprovadas:
-            data_he = he[0]
+            data_he_date = safe_date_parse(he[0])
+            if data_he_date is None:
+                continue
+
+            data_he = data_he_date.strftime("%Y-%m-%d")
             inicio = safe_time_parse(he[1])
             fim = safe_time_parse(he[2])
             if fim <= inicio:
@@ -207,8 +238,11 @@ class BancoHorasSystem:
         
         # Processar ausências sem comprovante
         for ausencia in ausencias_sem_comprovante:
-            data_inicio_aus = datetime.strptime(ausencia[0], "%Y-%m-%d").date()
-            data_fim_aus = datetime.strptime(ausencia[1], "%Y-%m-%d").date()
+            data_inicio_aus = safe_date_parse(ausencia[0])
+            data_fim_aus = safe_date_parse(ausencia[1])
+
+            if not data_inicio_aus or not data_fim_aus:
+                continue
             
             # Calcular dias úteis da ausência
             dias_ausencia = []
@@ -232,7 +266,11 @@ class BancoHorasSystem:
         
         # Processar atestados de horas aprovados (desconto)
         for atestado in atestados_aprovados:
-            data_at = atestado[0]
+            data_at_date = safe_date_parse(atestado[0])
+            if data_at_date is None:
+                continue
+
+            data_at = data_at_date.strftime("%Y-%m-%d")
             horas_atestado = atestado[1]
             
             extrato.append({

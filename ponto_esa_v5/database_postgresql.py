@@ -16,8 +16,8 @@ USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
 # Importar psycopg2 se necessário
 if USE_POSTGRESQL:
-    import psycopg2
-    import psycopg2.extras
+    import psycopg2  # type: ignore[import-not-found]
+    import psycopg2.extras  # type: ignore[import-not-found]
 
 
 def get_connection():
@@ -130,6 +130,21 @@ def init_db_postgresql():
             data_solicitacao TIMESTAMP DEFAULT NOW(),
             aprovado_por VARCHAR(255),
             data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    ''')
+
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_ajuste_ponto (
+            id SERIAL PRIMARY KEY,
+            usuario VARCHAR(255) NOT NULL,
+            aprovador_solicitado VARCHAR(255) NOT NULL,
+            dados_solicitados JSON NOT NULL,
+            justificativa TEXT NOT NULL,
+            status VARCHAR(50) DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            respondido_por VARCHAR(255),
+            data_resposta TIMESTAMP,
             observacoes TEXT
         )
     ''')
@@ -277,7 +292,4 @@ def init_db():
 
 if __name__ == '__main__':
     print(f"🔧 Modo: {'PostgreSQL' if USE_POSTGRESQL else 'SQLite'}")
-    if USE_POSTGRESQL:
-        print(
-            f"📊 Conectando em: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
     init_db()
