@@ -1,4 +1,3 @@
-
 """
 Sistema de Atestado de Horas - Ponto ExSA v3.0
 Permite registro de ausências parciais com controle de horas específicas
@@ -6,10 +5,13 @@ Permite registro de ausências parciais com controle de horas específicas
 
 import sqlite3
 import os
-from database_postgresql import get_connection
+from database_postgresql import get_connection, USE_POSTGRESQL
 from datetime import datetime, timedelta
 import uuid
 import json
+
+# SQL Placeholder para compatibilidade SQLite/PostgreSQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
 
 def _parse_datetime(value):
@@ -105,10 +107,10 @@ class AtestadoHorasSystem:
 
         try:
             # Persistir o indicador nao_possui_comprovante conforme informado pela UI
-            cursor.execute("""
+            cursor.execute(f"""
                 INSERT INTO atestado_horas 
                 (usuario, data, hora_inicio, hora_fim, total_horas, motivo, arquivo_comprovante, nao_possui_comprovante)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
             """, (usuario, data, hora_inicio, hora_fim, total_horas, motivo, arquivo_comprovante, 1 if nao_possui_comprovante else 0))
 
             atestado_id = cursor.lastrowid
@@ -130,7 +132,7 @@ class AtestadoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM atestado_horas WHERE usuario = %s"
+        query = f"SELECT * FROM atestado_horas WHERE usuario = {SQL_PLACEHOLDER}"
         params = [usuario]
 
         if data_inicio and data_fim:
@@ -159,7 +161,7 @@ class AtestadoHorasSystem:
         params = []
 
         if status:
-            query += " WHERE status = %s"
+            query += f" WHERE status = {SQL_PLACEHOLDER}"
             params.append(status)
 
         query += " ORDER BY data_registro DESC"
@@ -180,10 +182,10 @@ class AtestadoHorasSystem:
         cursor = conn.cursor()
 
         try:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE atestado_horas 
-                SET status = 'aprovado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
-                WHERE id = %s
+                SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = {SQL_PLACEHOLDER}, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
             """, (aprovado_por, datetime.now().isoformat(), observacoes, atestado_id))
 
             conn.commit()
@@ -199,10 +201,10 @@ class AtestadoHorasSystem:
         cursor = conn.cursor()
 
         try:
-            cursor.execute("""
+            cursor.execute(f"""
                 UPDATE atestado_horas 
-                SET status = 'rejeitado', aprovado_por = %s, data_aprovacao = %s, observacoes = %s
-                WHERE id = %s
+                SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = {SQL_PLACEHOLDER}, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
             """, (rejeitado_por, datetime.now().isoformat(), observacoes, atestado_id))
 
             conn.commit()
@@ -219,17 +221,17 @@ class AtestadoHorasSystem:
         cursor = conn.cursor()
 
         # Registros de ponto
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data_hora, tipo FROM registros_ponto 
-            WHERE usuario = %s AND DATE(data_hora) = %s 
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
             ORDER BY data_hora
         """, (usuario, data))
         registros_ponto = cursor.fetchall()
 
         # Atestados de horas aprovados
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT total_horas FROM atestado_horas 
-            WHERE usuario = %s AND data = %s AND status = 'aprovado'
+            WHERE usuario = {SQL_PLACEHOLDER} AND data = {SQL_PLACEHOLDER} AND status = 'aprovado'
         """, (usuario, data))
         atestados = cursor.fetchall()
 
@@ -283,12 +285,12 @@ class AtestadoHorasSystem:
         query = """
             SELECT usuario, data, hora_inicio, hora_fim, total_horas, motivo, status
             FROM atestado_horas 
-            WHERE data BETWEEN %s AND %s
+            WHERE data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
         """
         params = [data_inicio, data_fim]
 
         if usuario:
-            query += " AND usuario = %s"
+            query += f" AND usuario = {SQL_PLACEHOLDER}"
             params.append(usuario)
 
         query += " ORDER BY data DESC, usuario ASC"
@@ -338,9 +340,9 @@ class AtestadoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data_hora FROM registros_ponto 
-            WHERE usuario = %s AND DATE(data_hora) = %s 
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
             ORDER BY data_hora
         """, (usuario, data))
         registros = cursor.fetchall()
@@ -406,3 +408,4 @@ def get_status_emoji(status):
         "rejeitado": "❌"
     }
     return emojis.get(status, "📄")
+

@@ -6,10 +6,13 @@ Permite upload seguro de documentos e comprovantes
 import os
 import uuid
 import sqlite3
-from database_postgresql import get_connection
+from database_postgresql import get_connection, USE_POSTGRESQL
 from datetime import datetime
 import mimetypes
 import hashlib
+
+# SQL Placeholder para compatibilidade SQLite/PostgreSQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 from pathlib import Path
 
 
@@ -104,7 +107,7 @@ class UploadSystem:
             errors.append("Nome do arquivo inválido")
 
         # Verificar caracteres perigosos
-        dangerous_chars = ['<', '>', ':', '"', '|', '%s', '*', '\\', '/']
+        dangerous_chars = ['<', '>', ':', '"', '|', f'{SQL_PLACEHOLDER}', '*', '\\', '/']
         if any(char in filename for char in dangerous_chars):
             errors.append("Nome do arquivo contém caracteres não permitidos")
 
@@ -214,7 +217,7 @@ class UploadSystem:
             cursor.execute('''
                 INSERT INTO uploads 
                 (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
             ''', (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
 
             upload_id = cursor.lastrowid
@@ -231,9 +234,9 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute('''
+        cursor.execute(f'''
             SELECT id, nome_original, caminho FROM uploads 
-            WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
+            WHERE hash_arquivo = {SQL_PLACEHOLDER} AND usuario = {SQL_PLACEHOLDER} AND status = 'ativo'
         ''', (file_hash, usuario))
 
         result = cursor.fetchone()
@@ -252,7 +255,7 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM uploads WHERE usuario = %s AND status = 'ativo'"
+        query = f"SELECT * FROM uploads WHERE usuario = {SQL_PLACEHOLDER} AND status = 'ativo'"
         params = [usuario]
 
         if categoria:
@@ -266,7 +269,7 @@ class UploadSystem:
             params.append(relacionado_a)
 
         if relacionado_id:
-            query += " AND relacionado_id = %s"
+            query += f" AND relacionado_id = {SQL_PLACEHOLDER}"
             params.append(relacionado_id)
 
         query += " ORDER BY data_upload DESC"
@@ -287,11 +290,11 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM uploads WHERE id = %s"
+        query = f"SELECT * FROM uploads WHERE id = {SQL_PLACEHOLDER}"
         params = [upload_id]
 
         if usuario:
-            query += " AND usuario = %s"
+            query += f" AND usuario = {SQL_PLACEHOLDER}"
             params.append(usuario)
 
         cursor.execute(query, params)

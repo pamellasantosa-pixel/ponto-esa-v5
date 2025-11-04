@@ -2370,7 +2370,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
         primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
         cursor.execute("""
             SELECT COUNT(*) FROM ausencias 
-            WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
+            WHERE data_inicio >= {SQL_PLACEHOLDER} AND tipo LIKE '%%Atestado%%'
         """, (primeiro_dia_mes,))
         resultado = cursor.fetchone()
         if resultado:
@@ -2879,11 +2879,11 @@ def aprovar_atestados_interface(atestado_system):
         params = []
 
         if dias:
-            query += " AND DATE(a.data_aprovacao) >= CURRENT_DATE - INTERVAL '%s days'"
+            query += " AND DATE(a.data_aprovacao) >= CURRENT_DATE - INTERVAL f'{SQL_PLACEHOLDER} days'"
             params.append(dias)
 
         if busca_usuario:
-            query += " AND (a.usuario LIKE %s OR u.nome_completo LIKE %s)"
+            query += f" AND (a.usuario LIKE {SQL_PLACEHOLDER} OR u.nome_completo LIKE {SQL_PLACEHOLDER})"
             params.extend([f'%{busca_usuario}%', f'%{busca_usuario}%'])
 
         query += " ORDER BY a.data_aprovacao DESC"
@@ -2937,8 +2937,8 @@ def aprovar_atestados_interface(atestado_system):
                                         SET status = 'pendente', 
                                             data_aprovacao = NULL,
                                             aprovado_por = NULL,
-                                            observacoes = %s
-                                        WHERE id = %s
+                                            observacoes = {SQL_PLACEHOLDER}
+                                        WHERE id = {SQL_PLACEHOLDER}
                                     """, (f"Revertido: {motivo_rev}", atestado_id))
                                     conn.commit()
                                     conn.close()
@@ -3134,19 +3134,19 @@ def todos_registros_interface(calculo_horas_system):
                u.nome_completo
         FROM registros_ponto r
         LEFT JOIN usuarios u ON r.usuario = u.usuario
-        WHERE DATE(r.data_hora) BETWEEN %s AND %s
+        WHERE DATE(r.data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
     """
     params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
 
     # Aplicar filtro de usuário
     if usuario_filter != "Todos":
         usuario_login = usuario_filter.split("(")[1].rstrip(")")
-        query += " AND r.usuario = %s"
+        query += f" AND r.usuario = {SQL_PLACEHOLDER}"
         params.append(usuario_login)
 
     # Aplicar filtro de tipo
     if tipo_registro != "Todos":
-        query += " AND r.tipo = %s"
+        query += f" AND r.tipo = {SQL_PLACEHOLDER}"
         params.append(tipo_registro)
 
     query += " ORDER BY r.data_hora DESC LIMIT 500"
@@ -3455,7 +3455,7 @@ def gerenciar_arquivos_interface(upload_system):
             "Comprovantes de Ausência": "ausencia",
             "Documentos": "documento"
         }
-        query += " AND u.relacionado_a = %s"
+        query += f" AND u.relacionado_a = {SQL_PLACEHOLDER}"
         params.append(categoria_map[categoria_filter])
 
     if usuario_filter:
@@ -4046,7 +4046,7 @@ def sistema_interface():
     for chave, valor, descricao in configs_padrao:
         cursor.execute("""
             INSERT INTO configuracoes (chave, valor, descricao)
-            VALUES (%s, %s, %s)
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
             ON CONFLICT (chave) DO NOTHING
         """, (chave, valor, descricao))
 

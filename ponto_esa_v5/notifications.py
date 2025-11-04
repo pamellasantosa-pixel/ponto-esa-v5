@@ -10,7 +10,10 @@ from datetime import datetime, timedelta
 import json
 import os
 import sqlite3
-from database_postgresql import get_connection
+from database_postgresql import get_connection, USE_POSTGRESQL
+
+# SQL Placeholder para compatibilidade SQLite/PostgreSQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
 def _load_default_interval():
     raw_value = os.getenv("NOTIFICATION_REMINDER_INTERVAL", "60")
@@ -240,7 +243,7 @@ class NotificationManager:
                 cursor.execute(
                     '''INSERT INTO notificacoes
                        (id, user_id, title, message, type, timestamp, read, extra_data)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, %s)''',
+                       VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})''',
                     (
                         notification['id'],
                         notification['user_id'],
@@ -301,9 +304,9 @@ class NotificationManager:
             c = conn.cursor()
             
             hoje = datetime.now().strftime("%Y-%m-%d")
-            c.execute("""
+            c.execute(f"""
                 SELECT COUNT(*) FROM registros_ponto 
-                WHERE usuario = %s AND DATE(data_hora) = %s AND tipo = 'Fim'
+                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} AND tipo = 'Fim'
             """, (user_id, hoje))
             
             result = c.fetchone()[0]
@@ -327,8 +330,8 @@ class NotificationManager:
             conn = get_connection()
             c = conn.cursor()
             
-            c.execute("""
-                UPDATE notificacoes SET read = TRUE WHERE id = %s
+            c.execute(f"""
+                UPDATE notificacoes SET read = TRUE WHERE id = {SQL_PLACEHOLDER}
             """, (notification_id,))
             
             conn.commit()
@@ -390,4 +393,5 @@ def stop_user_notifications(user_id):
     Função helper para parar notificações de um usuário
     """
     notification_manager.stop_notifications(user_id)
+
 

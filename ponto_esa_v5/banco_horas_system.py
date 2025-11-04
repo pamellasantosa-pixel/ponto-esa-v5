@@ -4,7 +4,10 @@ Gerencia o saldo de horas dos funcionários
 """
 
 import sqlite3
-from database_postgresql import get_connection
+from database_postgresql import get_connection, USE_POSTGRESQL
+
+# SQL Placeholder para compatibilidade SQLite/PostgreSQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 from datetime import datetime, timedelta, date, time as time_type
 import calendar
 
@@ -53,8 +56,11 @@ def safe_time_parse(time_value):
         # PostgreSQL retorna datetime.time - converter para datetime
         return datetime.combine(date.today(), time_value)
     if isinstance(time_value, str):
-        # SQLite retorna string
-        return datetime.strptime(time_value, "%H:%M")
+        # SQLite retorna string - pode ser HH:MM ou HH:MM:SS
+        try:
+            return datetime.strptime(time_value, "%H:%M:%S")
+        except ValueError:
+            return datetime.strptime(time_value, "%H:%M")
     return time_value
 
 
@@ -69,9 +75,9 @@ class BancoHorasSystem:
         cursor = conn.cursor()
         
         # Buscar jornada prevista do usuário
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT jornada_inicio_previsto, jornada_fim_previsto 
-            FROM usuarios WHERE usuario = %s
+            FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}
         """, (usuario,))
         
         jornada = cursor.fetchone()
@@ -90,11 +96,11 @@ class BancoHorasSystem:
             horas_previstas_dia -= 1  # Desconto do almoço
         
         # Buscar todos os registros do período
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT DATE(data_hora) as data, MIN(data_hora) as primeiro, MAX(data_hora) as ultimo,
                    COUNT(*) as total_registros
             FROM registros_ponto 
-            WHERE usuario = %s AND DATE(data_hora) BETWEEN %s AND %s
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
             GROUP BY DATE(data_hora)
             ORDER BY data
         """, (usuario, data_inicio, data_fim))
@@ -102,26 +108,26 @@ class BancoHorasSystem:
         registros_por_dia = cursor.fetchall()
         
         # Buscar horas extras aprovadas
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data, hora_inicio, hora_fim FROM solicitacoes_horas_extras 
-            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
+            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'aprovado' AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
         """, (usuario, data_inicio, data_fim))
         
         horas_extras_aprovadas = cursor.fetchall()
         
         # Buscar ausências sem comprovante
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data_inicio, data_fim FROM ausencias 
-            WHERE usuario = %s AND nao_possui_comprovante = 1 
-            AND data_inicio <= %s AND data_fim >= %s
+            WHERE usuario = {SQL_PLACEHOLDER} AND nao_possui_comprovante = 1 
+            AND data_inicio <= {SQL_PLACEHOLDER} AND data_fim >= {SQL_PLACEHOLDER}
         """, (usuario, data_fim, data_inicio))
         
         ausencias_sem_comprovante = cursor.fetchall()
         
         # Buscar atestados de horas aprovados
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data, total_horas FROM atestado_horas 
-            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
+            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'aprovado' AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
         """, (usuario, data_inicio, data_fim))
         
         atestados_aprovados = cursor.fetchall()
@@ -316,7 +322,7 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT usuario, nome_completo FROM usuarios 
             WHERE ativo = 1 AND tipo = 'funcionario'
             ORDER BY nome_completo
@@ -341,9 +347,9 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT COUNT(*) FROM feriados 
-            WHERE data = %s
+            WHERE data = {SQL_PLACEHOLDER}
         """, (data.strftime("%Y-%m-%d"),))
         
         eh_feriado = cursor.fetchone()[0] > 0
@@ -387,3 +393,4 @@ def format_saldo_display(saldo):
         return f"❌ {format_time_duration(saldo)}"
     else:
         return "⚖️ 0h"
+
