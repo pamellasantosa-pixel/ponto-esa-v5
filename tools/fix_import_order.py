@@ -35,28 +35,26 @@ def fix_import_order(filepath):
         lines = content.split('\n')
         last_import_idx = 0
         
-        for i, line in enumerate(lines):
-            stripped = line.strip()
-            if stripped.startswith('import ') or stripped.startswith('from '):
-                last_import_idx = i
-        
-        # Inserir SQL_PLACEHOLDER após últim
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith('import ') or stripped.startswith('from '):
+            last_import_idx = i
 
-o import
-        lines.insert(last_import_idx + 1, '')
-        lines.insert(last_import_idx + 2, '# SQL Placeholder para compatibilidade SQLite/PostgreSQL')
-        lines.insert(last_import_idx + 3, 'SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"')
-        
-        content = '\n'.join(lines)
-        
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(content)
-        
-        print(f"  ✅ {filename} corrigido")
-        return True
-    else:
-        print(f"  ℹ️  {filename} não precisa de correção")
-        return False
+    # Inserir SQL_PLACEHOLDER após último import
+    lines.insert(last_import_idx + 1, '')
+    lines.insert(last_import_idx + 2, '# SQL Placeholder para compatibilidade SQLite/PostgreSQL')
+    lines.insert(last_import_idx + 3, 'SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"')
+
+    content = '\n'.join(lines)
+
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    print(f"  ✅ {filename} corrigido")
+    return True
+else:
+    print(f"  ℹ️  {filename} não precisa de correção")
+    return False
 
 def main():
     print("="*80)

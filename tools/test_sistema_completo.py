@@ -254,10 +254,10 @@ def test_ajuste_registros_criacao():
     try:
         # Solicitar criação de registro
         dados_solicitados = {
-            'tipo': 'criar',
-            'tipo_registro': 'entrada',
+            'acao': 'criar',
             'data': ontem.strftime('%Y-%m-%d'),
             'hora': '08:00:00',
+            'tipo': 'entrada',
             'modalidade': 'presencial'
         }
         
@@ -270,7 +270,7 @@ def test_ajuste_registros_criacao():
         
         all_passed &= print_result(
             resultado.get('success', False),
-            f"Solicitação de criação: {resultado.get('message', '')} (ID: {resultado.get('id', 'N/A')})"
+            f"Solicitação: {resultado.get('message', '')} (ID: {resultado.get('id', 'N/A')})"
         )
         
         # Verificar se foi salva
@@ -315,10 +315,11 @@ def test_ajuste_registros_correcao():
             
             # Solicitar correção (entrada era 08:00, mudar para 07:30)
             dados_solicitados = {
-                'tipo': 'corrigir',
+                'acao': 'corrigir',
                 'registro_id': registro_id,
-                'hora_original': '08:00:00',
-                'hora_nova': '07:30:00'
+                'nova_data': hoje.strftime('%Y-%m-%d'),
+                'nova_hora': '07:30',
+                'novo_tipo': 'entrada'
             }
             
             resultado = ajuste_system.solicitar_ajuste(
@@ -330,7 +331,7 @@ def test_ajuste_registros_correcao():
             
             all_passed &= print_result(
                 resultado.get('success', False),
-                f"Solicitação de correção: {resultado.get('message', '')} (ID: {resultado.get('id', 'N/A')})"
+                f"Correção: {resultado.get('message', '')} (ID: {resultado.get('id', 'N/A')})"
             )
         else:
             all_passed &= print_result(False, "Registro de entrada não encontrado")
