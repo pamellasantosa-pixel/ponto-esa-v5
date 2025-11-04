@@ -25,9 +25,12 @@ class AjusteRegistrosSystem:
     def _load_json(self, payload: Optional[str]) -> Dict[str, Any]:
         if not payload:
             return {}
+        # PostgreSQL pode retornar dict diretamente (tipo JSON/JSONB)
+        if isinstance(payload, dict):
+            return payload
         try:
             return json.loads(payload)
-        except json.JSONDecodeError:
+        except (json.JSONDecodeError, TypeError):
             return {}
 
     def _now(self) -> datetime:

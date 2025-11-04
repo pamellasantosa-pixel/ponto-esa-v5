@@ -940,10 +940,12 @@ def horas_extras_interface(horas_extras_system):
         # Aplicar filtro de período
         if periodo != "Todos":
             dias = 7 if periodo == "Últimos 7 dias" else 30
-            data_limite = (get_datetime_br() - timedelta(days=dias)
-                           ).strftime("%Y-%m-%d")
+            data_limite = (get_datetime_br() - timedelta(days=dias)).date()
             solicitacoes = [
-                s for s in solicitacoes if s["data"] >= data_limite]
+                s for s in solicitacoes if (
+                    s["data"] if isinstance(s["data"], date) 
+                    else datetime.strptime(str(s["data"]), "%Y-%m-%d").date()
+                ) >= data_limite]
 
         if solicitacoes:
             for solicitacao in solicitacoes:
@@ -2231,20 +2233,20 @@ def tela_gestor():
         n for n in notificacoes if n.get('requires_response', False)]
 
     if notificacoes_pendentes:
-        for notificacao in notificacoes_pendentes:
+        for idx, notificacao in enumerate(notificacoes_pendentes):
             with st.container():
                 st.warning(
                     f"🔔 {notificacao['title']}: {notificacao['message']}")
 
                 col1, col2 = st.columns(2)
                 with col1:
-                    if st.button("✅ Responder", key=f"responder_{notificacao['solicitacao_id']}"):
+                    if st.button("✅ Responder", key=f"responder_{notificacao.get('solicitacao_id', '')}_{idx}"):
                         # Redirecionar para a tela de aprovação
                         st.session_state.pagina_atual = "🕐 Aprovar Horas Extras"
                         st.rerun()
 
                 with col2:
-                    if st.button("⏰ Lembrar Depois", key=f"lembrar_{notificacao['solicitacao_id']}"):
+                    if st.button("⏰ Lembrar Depois", key=f"lembrar_{notificacao.get('solicitacao_id', '')}_{idx}"):
                         # Manter notificação ativa
                         pass
 
@@ -2368,10 +2370,13 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     atestados_mes = 0
     try:
         primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
-        cursor.execute("""
+        cursor.execute(
+            f"""
             SELECT COUNT(*) FROM ausencias 
             WHERE data_inicio >= {SQL_PLACEHOLDER} AND tipo LIKE '%%Atestado%%'
-        """, (primeiro_dia_mes,))
+        """,
+            (primeiro_dia_mes,)
+        )
         resultado = cursor.fetchone()
         if resultado:
             atestados_mes = resultado[0]
@@ -2598,7 +2603,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
     # Buscar todas as solicitações pendentes
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("""
+    cursor.execute(f"""
         SELECT * FROM solicitacoes_horas_extras 
         WHERE status = 'pendente'
         ORDER BY data_solicitacao ASC
@@ -2696,7 +2701,7 @@ def aprovar_atestados_interface(atestado_system):
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT a.id, a.usuario, a.data, a.total_horas, 
                    a.motivo, a.data_registro, a.arquivo_comprovante,
                    u.nome_completo
@@ -2879,11 +2884,16 @@ def aprovar_atestados_interface(atestado_system):
         params = []
 
         if dias:
-            query += " AND DATE(a.data_aprovacao) >= CURRENT_DATE - INTERVAL f'{SQL_PLACEHOLDER} days'"
-            params.append(dias)
+            if USE_POSTGRESQL:
+                query += f" AND DATE(a.data_aprovacao) >= CURRENT_DATE - INTERVAL '{dias} days'"
+            else:
+                query += f" AND DATE(a.data_aprovacao) >= DATE('now', '-{dias} days')"
 
         if busca_usuario:
-            query += f" AND (a.usuario LIKE {SQL_PLACEHOLDER} OR u.nome_completo LIKE {SQL_PLACEHOLDER})"
+            if USE_POSTGRESQL:
+                query += " AND (a.usuario LIKE %s OR u.nome_completo LIKE %s)"
+            else:
+                query += " AND (a.usuario LIKE ? OR u.nome_completo LIKE ?)"
             params.extend([f'%{busca_usuario}%', f'%{busca_usuario}%'])
 
         query += " ORDER BY a.data_aprovacao DESC"
@@ -2932,7 +2942,7 @@ def aprovar_atestados_interface(atestado_system):
                                 if motivo_rev:
                                     conn = get_connection()
                                     cursor = conn.cursor()
-                                    cursor.execute("""
+                                    cursor.execute(f"""
                                         UPDATE atestados_horas 
                                         SET status = 'pendente', 
                                             data_aprovacao = NULL,
@@ -2958,7 +2968,7 @@ def aprovar_atestados_interface(atestado_system):
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT a.id, a.usuario, a.data, a.total_horas, 
                    a.motivo, a.data_aprovacao, a.aprovado_por,
                    a.observacoes, u.nome_completo, u2.nome_completo as aprovador_nome
@@ -3141,12 +3151,18 @@ def todos_registros_interface(calculo_horas_system):
     # Aplicar filtro de usuário
     if usuario_filter != "Todos":
         usuario_login = usuario_filter.split("(")[1].rstrip(")")
-        query += f" AND r.usuario = {SQL_PLACEHOLDER}"
+        if USE_POSTGRESQL:
+            query += " AND r.usuario = %s"
+        else:
+            query += " AND r.usuario = ?"
         params.append(usuario_login)
 
     # Aplicar filtro de tipo
     if tipo_registro != "Todos":
-        query += f" AND r.tipo = {SQL_PLACEHOLDER}"
+        if USE_POSTGRESQL:
+            query += " AND r.tipo = %s"
+        else:
+            query += " AND r.tipo = ?"
         params.append(tipo_registro)
 
     query += " ORDER BY r.data_hora DESC LIMIT 500"
@@ -3654,7 +3670,7 @@ def gerenciar_projetos_interface():
                             conn = get_connection()
                             cursor = conn.cursor()
 
-                            cursor.execute("""
+                            cursor.execute(f"""
                                 UPDATE projetos 
                                 SET nome = ?, descricao = ?, ativo = ?
                                 WHERE id = ?
@@ -3707,7 +3723,7 @@ def gerenciar_projetos_interface():
                         conn = get_connection()
                         cursor = conn.cursor()
 
-                        cursor.execute("""
+                        cursor.execute(f"""
                             INSERT INTO projetos (nome, descricao, ativo)
                             VALUES (?, ?, ?)
                         """, (nome_novo, descricao_nova, int(ativo_novo)))
@@ -3892,7 +3908,7 @@ def gerenciar_usuarios_interface():
                             conn = get_connection()
                             cursor = conn.cursor()
 
-                            cursor.execute("""
+                            cursor.execute(f"""
                                 UPDATE usuarios 
                                 SET nome_completo = ?, tipo = ?, ativo = ?,
                                     jornada_inicio_previsto = ?, jornada_fim_previsto = ?
@@ -3978,7 +3994,7 @@ def gerenciar_usuarios_interface():
                         senha_hash = hashlib.sha256(
                             nova_senha.encode()).hexdigest()
 
-                        cursor.execute("""
+                        cursor.execute(f"""
                             INSERT INTO usuarios 
                             (usuario, senha, tipo, nome_completo, ativo, 
                              jornada_inicio_previsto, jornada_fim_previsto)
@@ -4016,7 +4032,7 @@ def sistema_interface():
     conn = get_connection()
     cursor = conn.cursor()
 
-    cursor.execute("""
+    cursor.execute(f"""
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
             valor TEXT,
@@ -4044,11 +4060,17 @@ def sistema_interface():
     ]
 
     for chave, valor, descricao in configs_padrao:
-        cursor.execute("""
-            INSERT INTO configuracoes (chave, valor, descricao)
-            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-            ON CONFLICT (chave) DO NOTHING
-        """, (chave, valor, descricao))
+        if USE_POSTGRESQL:
+            cursor.execute("""
+                INSERT INTO configuracoes (chave, valor, descricao)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chave) DO NOTHING
+            """, (chave, valor, descricao))
+        else:
+            cursor.execute("""
+                INSERT OR IGNORE INTO configuracoes (chave, valor, descricao)
+                VALUES (?, ?, ?)
+            """, (chave, valor, descricao))
 
     conn.commit()
 
@@ -4349,3 +4371,5 @@ def main():
 
 # Executar aplicação
 main()
+
+
