@@ -16,6 +16,7 @@ def safe_time_parse(time_value):
     """
     Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
     PostgreSQL retorna time objects, SQLite retorna strings.
+    Suporta formatos HH:MM e HH:MM:SS.
     """
     if time_value is None:
         return datetime.strptime("08:00", "%H:%M")
@@ -23,8 +24,11 @@ def safe_time_parse(time_value):
         # PostgreSQL retorna datetime.time - converter para datetime
         return datetime.combine(date.today(), time_value)
     if isinstance(time_value, str):
-        # SQLite retorna string
-        return datetime.strptime(time_value, "%H:%M")
+        # SQLite retorna string - tentar HH:MM:SS primeiro, depois HH:MM
+        try:
+            return datetime.strptime(time_value, "%H:%M:%S")
+        except ValueError:
+            return datetime.strptime(time_value, "%H:%M")
     return time_value
 
 

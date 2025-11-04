@@ -151,6 +151,7 @@ def init_db():
             total_horas REAL NOT NULL,
             motivo TEXT,
             arquivo_comprovante TEXT,
+            nao_possui_comprovante INTEGER DEFAULT 0,
             status TEXT DEFAULT 'pendente',
             data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             aprovado_por TEXT,

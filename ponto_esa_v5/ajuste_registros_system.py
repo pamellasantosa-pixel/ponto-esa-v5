@@ -259,9 +259,15 @@ class AjusteRegistrosSystem:
                 if not nova_data or not nova_hora:
                     return {"success": False, "message": "Nova data e hora são obrigatórias."}
 
-                nova_data_hora = datetime.strptime(
-                    f"{nova_data} {nova_hora}", "%Y-%m-%d %H:%M"
-                )
+                # Suportar tanto HH:MM quanto HH:MM:SS
+                try:
+                    nova_data_hora = datetime.strptime(
+                        f"{nova_data} {nova_hora}", "%Y-%m-%d %H:%M:%S"
+                    )
+                except ValueError:
+                    nova_data_hora = datetime.strptime(
+                        f"{nova_data} {nova_hora}", "%Y-%m-%d %H:%M"
+                    )
                 novo_tipo = dados_para_aplicar.get("novo_tipo")
                 nova_modalidade = dados_para_aplicar.get("modalidade")
                 novo_projeto = dados_para_aplicar.get("projeto")
@@ -304,9 +310,15 @@ class AjusteRegistrosSystem:
                 if not data_nova or not hora_nova:
                     return {"success": False, "message": "Data e hora são obrigatórias."}
 
-                data_hora_nova = datetime.strptime(
-                    f"{data_nova} {hora_nova}", "%Y-%m-%d %H:%M"
-                )
+                # Suportar tanto HH:MM quanto HH:MM:SS
+                try:
+                    data_hora_nova = datetime.strptime(
+                        f"{data_nova} {hora_nova}", "%Y-%m-%d %H:%M:%S"
+                    )
+                except ValueError:
+                    data_hora_nova = datetime.strptime(
+                        f"{data_nova} {hora_nova}", "%Y-%m-%d %H:%M"
+                    )
                 tipo = dados_para_aplicar.get("tipo")
                 modalidade = dados_para_aplicar.get("modalidade")
                 projeto = dados_para_aplicar.get("projeto")
@@ -368,7 +380,7 @@ class AjusteRegistrosSystem:
             cursor.execute(
                 f"""
                 UPDATE solicitacoes_ajuste_ponto
-                SET status = 'aprovado', respondido_por = {SQL_PLACEHOLDER},
+                SET status = 'aplicado', respondido_por = {SQL_PLACEHOLDER},
                     data_resposta = {SQL_PLACEHOLDER}, observacoes = {SQL_PLACEHOLDER},
                     dados_solicitados = {SQL_PLACEHOLDER}
                 WHERE id = {SQL_PLACEHOLDER}
@@ -395,10 +407,10 @@ class AjusteRegistrosSystem:
             usuario,
             {
                 "type": "ajuste_registro_resposta",
-                "title": "Ajuste aprovado",
-                "message": "Seu pedido de ajuste foi aprovado e aplicado.",
+                "title": "Ajuste aplicado",
+                "message": "Seu pedido de ajuste foi aprovado e aplicado com sucesso.",
                 "solicitacao_id": solicitacao_id,
-                "status": "aprovado",
+                "status": "aplicado",
             },
         )
 
