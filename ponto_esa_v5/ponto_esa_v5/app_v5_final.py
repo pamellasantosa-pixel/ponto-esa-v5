@@ -1334,7 +1334,7 @@ def horas_extras_interface(horas_extras_system):
                         st.write(
                             f"**Status:** {solicitacao['status'].title()}")
                         st.write(
-                            f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                            f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
                         if solicitacao['aprovado_por']:
                             st.write(
                                 f"**Processado por:** {solicitacao['aprovado_por']}")
@@ -1720,7 +1720,7 @@ def notificacoes_interface(horas_extras_system):
                     st.write(
                         f"**Justificativa:** {solicitacao['justificativa']}")
                     st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -2901,7 +2901,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                     st.write(
                         f"**Aprovador Solicitado:** {solicitacao['aprovador_solicitado']}")
                     st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -3404,14 +3404,24 @@ def todos_registros_interface(calculo_horas_system):
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = """
-        SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
-               r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
-               u.nome_completo
-        FROM registros_ponto r
-        LEFT JOIN usuarios u ON r.usuario = u.usuario
-        WHERE DATE(r.data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
-    """
+    if USE_POSTGRESQL:
+        query = """
+            SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
+                   r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
+                   u.nome_completo
+            FROM registros_ponto r
+            LEFT JOIN usuarios u ON r.usuario = u.usuario
+            WHERE DATE(r.data_hora) BETWEEN %s AND %s
+        """
+    else:
+        query = """
+            SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
+                   r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
+                   u.nome_completo
+            FROM registros_ponto r
+            LEFT JOIN usuarios u ON r.usuario = u.usuario
+            WHERE DATE(r.data_hora) BETWEEN ? AND ?
+        """
     params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
 
     # Aplicar filtro de usuário
