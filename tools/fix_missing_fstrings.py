@@ -93,6 +93,7 @@ def main():
     print()
     
     files_to_check = [
+        "app_v5_final.py",
         "horas_extras_system.py",
         "atestado_horas_system.py",
         "ajuste_registros_system.py",
