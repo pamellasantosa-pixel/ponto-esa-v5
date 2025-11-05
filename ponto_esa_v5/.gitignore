@@ -4,9 +4,6 @@ __pycache__/
 *$py.class
 *.so
 .Python
-venv/
-env/
-ENV/
 build/
 develop-eggs/
 dist/
@@ -22,13 +19,22 @@ wheels/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+ENV/
+env/
+.venv/
 
 # Database
 *.db
 *.db-journal
-*.sqbpro
+*.db.sqbpro
+database/
+!ponto_esa_v5/database/.gitkeep
 
-# Environment
+# Environment variables
 .env
 .env.local
 
@@ -44,28 +50,29 @@ wheels/
 Thumbs.db
 desktop.ini
 
-# Uploads (contém dados sensíveis)
-uploads/*/
-!uploads/.gitkeep
-
 # Logs
-logs/
 *.log
+logs/
+*.log.*
 
-# Build artifacts
+# Uploads e arquivos temporários
+uploads/
+temp/
+*.tmp
+
+# Executáveis
 *.exe
 *.spec
 dist/
 build/
 
-# Temporary files
-temp/
-tmp/
-*.tmp
+# Docker
+.dockerignore
 
-# Documentation artifacts
+# Documentos temporários
 *.docx
-*.pdf
+~$*.docx
 
-# Cogito todo
-.cogitotodo
+# Backups
+*.bak
+backup/
