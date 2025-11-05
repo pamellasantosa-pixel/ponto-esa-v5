@@ -1,0 +1,50 @@
+
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <title>Ponto ExSA - Offline</title>
+        <meta charset="utf-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+        <style>
+            body {
+                font-family: Arial, sans-serif;
+                text-align: center;
+                padding: 50px;
+                background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%);
+                min-height: 100vh;
+                margin: 0;
+            }
+            .offline-container {
+                background: white;
+                border-radius: 20px;
+                padding: 40px;
+                max-width: 500px;
+                margin: 0 auto;
+                box-shadow: 0 15px 35px rgba(0,0,0,0.1);
+            }
+            .logo {
+                width: 80px;
+                height: 80px;
+                background: linear-gradient(45deg, #3498DB, #2980B9);
+                border-radius: 50%;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                margin: 0 auto 20px;
+                color: white;
+                font-size: 24px;
+                font-weight: bold;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="offline-container">
+            <div class="logo">ESA</div>
+            <h1>Modo Offline</h1>
+            <p>Você está sem conexão com a internet.</p>
+            <p>O sistema continuará funcionando offline e sincronizará automaticamente quando a conexão for restaurada.</p>
+            <button onclick="location.reload()">Tentar Novamente</button>
+        </div>
+    </body>
+    </html>
+    
