@@ -947,7 +947,7 @@ def horas_extras_interface(horas_extras_system):
                         st.write(
                             f"**Status:** {solicitacao['status'].title()}")
                         st.write(
-                            f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                            f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
                         if solicitacao['aprovado_por']:
                             st.write(
                                 f"**Processado por:** {solicitacao['aprovado_por']}")
@@ -1641,7 +1641,7 @@ def meus_arquivos_interface(upload_system):
                 with col1:
                     st.write(
                         f"**Categoria:** {get_category_name(upload.get('relacionado_a', 'documento'))}")
-                    st.write(f"**Upload em:** {upload['data_upload'][:19]}")
+                    st.write(f"**Upload em:** {safe_datetime_parse(upload['data_upload']).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tipo:** {upload['tipo_arquivo']}")
 
                 with col2:
@@ -1882,9 +1882,8 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 jornada_fim = jornada[1] or "17:00"
 
                 # Calcular discrepâncias
-                inicio_previsto = datetime.strptime(
-                    jornada_inicio, "%H:%M").time()
-                fim_previsto = datetime.strptime(jornada_fim, "%H:%M").time()
+                inicio_previsto = ensure_time(jornada_inicio, default=time(8, 0))
+                fim_previsto = ensure_time(jornada_fim, default=time(17, 0))
 
                 inicio_real = datetime.strptime(
                     calculo_dia["primeiro_registro"], "%H:%M").time()
@@ -2089,7 +2088,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                     st.write(
                         f"**Aprovador Solicitado:** {solicitacao['aprovador_solicitado']}")
                     st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -2364,8 +2363,8 @@ def aprovar_atestados_interface(atestado_system):
                     with col1:
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
-                        st.markdown(
-                            f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                        st.markdown(f"**Data:** {data_fmt}")
                         st.markdown(
                             f"**Horas:** {format_time_duration(horas)}")
                         st.markdown(
@@ -2373,7 +2372,7 @@ def aprovar_atestados_interface(atestado_system):
 
                         st.markdown("---")
                         st.success(
-                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {datetime.fromisoformat(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
 
                         if observacoes:
                             st.info(f"💬 **Observações:** {observacoes}")
@@ -2440,14 +2439,14 @@ def aprovar_atestados_interface(atestado_system):
 
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    st.markdown(
-                        f"**Data:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                    st.markdown(f"**Data:** {data_fmt}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
                     st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
 
                     st.markdown("---")
                     st.error(
-                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {datetime.fromisoformat(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
 
                     if motivo_rejeicao:
                         st.warning(
@@ -2976,7 +2975,7 @@ def gerenciar_arquivos_interface(upload_system):
                     st.write(f"**Usuário:** {nome_completo or usuario}")
                     st.write(f"**Tipo:** {tipo_arquivo or 'N/A'}")
                     st.write(
-                        f"**Data:** {datetime.fromisoformat(data).strftime('%d/%m/%Y às %H:%M')}")
+                        f"**Data:** {safe_datetime_parse(data).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
                     st.write(f"**Formato:** {tipo_mime}")
 
