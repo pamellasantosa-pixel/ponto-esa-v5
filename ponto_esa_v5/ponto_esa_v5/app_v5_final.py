@@ -3279,25 +3279,25 @@ def aprovar_atestados_interface(atestado_system):
         col1, col2, col3, col4 = st.columns(4)
 
         with col1:
-            cursor.execute("SELECT COUNT(*) FROM atestados_horas")
+            cursor.execute("SELECT COUNT(*) FROM atestado_horas")
             total = cursor.fetchone()[0]
             st.metric("Total", total)
 
         with col2:
             cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'pendente'")
+                "SELECT COUNT(*) FROM atestado_horas WHERE status = 'pendente'")
             pendentes_count = cursor.fetchone()[0]
             st.metric("Pendentes", pendentes_count)
 
         with col3:
             cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'aprovado'")
+                "SELECT COUNT(*) FROM atestado_horas WHERE status = 'aprovado'")
             aprovados_count = cursor.fetchone()[0]
             st.metric("Aprovados", aprovados_count)
 
         with col4:
             cursor.execute(
-                "SELECT COUNT(*) FROM atestados_horas WHERE status = 'rejeitado'")
+                "SELECT COUNT(*) FROM atestado_horas WHERE status = 'rejeitado'")
             rejeitados_count = cursor.fetchone()[0]
             st.metric("Rejeitados", rejeitados_count)
 
@@ -3307,7 +3307,7 @@ def aprovar_atestados_interface(atestado_system):
         cursor.execute(f"""
             SELECT a.id, a.usuario, a.data, a.total_horas,
                    a.status, a.data_registro, u.nome_completo
-            FROM atestados_horas a
+            FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
             ORDER BY a.data_registro DESC
             LIMIT 100
