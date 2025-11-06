@@ -3156,10 +3156,7 @@ def aprovar_atestados_interface(atestado_system):
                 query += f" AND DATE(a.data_aprovacao) >= DATE('now', '-{dias} days')"
 
         if busca_usuario:
-            if USE_POSTGRESQL:
-                query += " AND (a.usuario LIKE %s OR u.nome_completo LIKE %s)"
-            else:
-                query += " AND (a.usuario LIKE ? OR u.nome_completo LIKE ?)"
+            query += f" AND (a.usuario LIKE {SQL_PLACEHOLDER} OR u.nome_completo LIKE {SQL_PLACEHOLDER})"
             params.extend([f'%{busca_usuario}%', f'%{busca_usuario}%'])
 
         query += " ORDER BY a.data_aprovacao DESC"
@@ -3209,7 +3206,7 @@ def aprovar_atestados_interface(atestado_system):
                                     conn = get_connection()
                                     cursor = conn.cursor()
                                     cursor.execute(f"""
-                                        UPDATE atestados_horas 
+                                        UPDATE atestado_horas 
                                         SET status = 'pendente', 
                                             data_aprovacao = NULL,
                                             aprovado_por = NULL,
@@ -3238,7 +3235,7 @@ def aprovar_atestados_interface(atestado_system):
             SELECT a.id, a.usuario, a.data, a.total_horas, 
                    a.motivo, a.data_aprovacao, a.aprovado_por,
                    a.observacoes, u.nome_completo, u2.nome_completo as aprovador_nome
-            FROM atestados_horas a
+            FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
             LEFT JOIN usuarios u2 ON a.aprovado_por = u2.usuario
             WHERE a.status = 'rejeitado'
@@ -4062,7 +4059,7 @@ def gerenciar_usuarios_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND (usuario LIKE ? OR nome_completo LIKE ?)"
+            query += f" AND (usuario LIKE {SQL_PLACEHOLDER} OR nome_completo LIKE {SQL_PLACEHOLDER})"
             params.extend([f"%{busca}%", f"%{busca}%"])
 
         query += " ORDER BY nome_completo"
@@ -4186,9 +4183,9 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute(f"""
                                 UPDATE usuarios 
-                                SET nome_completo = ?, tipo = ?, ativo = ?,
-                                    jornada_inicio_previsto = ?, jornada_fim_previsto = ?
-                                WHERE id = ?
+                                SET nome_completo = {SQL_PLACEHOLDER}, tipo = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER},
+                                    jornada_inicio_previsto = {SQL_PLACEHOLDER}, jornada_fim_previsto = {SQL_PLACEHOLDER}
+                                WHERE id = {SQL_PLACEHOLDER}
                             """, (
                                 novo_nome,
                                 novo_tipo,
@@ -4214,7 +4211,7 @@ def gerenciar_usuarios_interface():
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+                                    f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}", (usuario_id,))
                                 conn.commit()
                                 conn.close()
 
@@ -4274,7 +4271,7 @@ def gerenciar_usuarios_interface():
                             INSERT INTO usuarios 
                             (usuario, senha, tipo, nome_completo, ativo, 
                              jornada_inicio_previsto, jornada_fim_previsto)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                         """, (
                             novo_login,
                             senha_hash,
@@ -4291,8 +4288,13 @@ def gerenciar_usuarios_interface():
                         st.success(
                             f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("❌ Já existe um usuário com este login!")
+                    except Exception as e:
+                        # Tratamento genérico para violação de unicidade ou outros erros
+                        msg = str(e)
+                        if 'unique' in msg.lower() or 'duplic' in msg.lower():
+                            st.error("❌ Já existe um usuário com este login!")
+                        else:
+                            st.error(f"❌ Erro ao cadastrar usuário: {msg}")
 
 
 def sistema_interface():
