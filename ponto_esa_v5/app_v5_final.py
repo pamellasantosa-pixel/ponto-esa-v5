@@ -2338,8 +2338,10 @@ def aprovar_atestados_interface(atestado_system):
         params = []
 
         if dias:
-            query += " AND DATE(a.data_aprovacao) >= DATE('now', %s)"
-            params.append(f'-{dias} days')
+            # Compatível com PostgreSQL e SQLite: passamos a data limite via parâmetro
+            data_limite = (date.today() - timedelta(days=dias)).strftime("%Y-%m-%d")
+            query += " AND DATE(a.data_aprovacao) >= %s"
+            params.append(data_limite)
 
         if busca_usuario:
             query += " AND (a.usuario LIKE %s OR u.nome_completo LIKE %s)"
@@ -2916,11 +2918,11 @@ def gerenciar_arquivos_interface(upload_system):
         params.append(categoria_map[categoria_filter])
 
     if usuario_filter:
-        query += " AND (u.usuario LIKE ? OR us.nome_completo LIKE ?)"
+        query += " AND (u.usuario LIKE %s OR us.nome_completo LIKE %s)"
         params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
 
     if data_filter:
-        query += " AND DATE(u.data_upload) = ?"
+        query += " AND DATE(u.data_upload) = %s"
         params.append(data_filter.strftime("%Y-%m-%d"))
 
     query += " ORDER BY u.data_upload DESC LIMIT 100"
@@ -2952,8 +2954,10 @@ def gerenciar_arquivos_interface(upload_system):
         st.metric("Espaço Utilizado", format_file_size(tamanho_total))
 
     with col4:
+        # Evitar funções específicas de SQLite (DATE('now')) e usar parâmetro
+        hoje_str = date.today().strftime("%Y-%m-%d")
         cursor.execute(
-            "SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = DATE('now')")
+            "SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = %s", (hoje_str,))
         hoje = cursor.fetchone()[0]
         st.metric("Uploads Hoje", hoje)
 

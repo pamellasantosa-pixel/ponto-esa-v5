@@ -13,6 +13,21 @@ from notifications import notification_manager
 class HorasExtrasSystem:
     def __init__(self):
         pass
+    
+    # Utilitário interno: converte str|time|datetime em time
+    def _ensure_time(self, value):
+        if isinstance(value, time):
+            return value
+        if isinstance(value, datetime):
+            return value.time()
+        if isinstance(value, str):
+            for fmt in ("%H:%M:%S", "%H:%M"):
+                try:
+                    return datetime.strptime(value, fmt).time()
+                except Exception:
+                    pass
+        # fallback seguro
+        return datetime.strptime("00:00", "%H:%M").time()
         
     def verificar_fim_jornada(self, usuario):
         """Verifica se o usuário chegou no horário de fim da jornada prevista"""
@@ -83,9 +98,9 @@ class HorasExtrasSystem:
             if cursor.fetchone():
                 return {"success": False, "message": "Já existe uma solicitação pendente para esta data"}
 
-            # Calcular total de horas
-            inicio = datetime.strptime(hora_inicio, "%H:%M")
-            fim = datetime.strptime(hora_fim, "%H:%M")
+            # Calcular total de horas (aceita str|time)
+            inicio = datetime.combine(datetime.today(), self._ensure_time(hora_inicio))
+            fim = datetime.combine(datetime.today(), self._ensure_time(hora_fim))
 
             if fim <= inicio:
                 # Assumir que passou para o próximo dia
@@ -263,9 +278,9 @@ class HorasExtrasSystem:
             conn.close()
 
     def _calcular_horas_extras(self, hora_inicio, hora_fim):
-        """Calcula o total de horas extras"""
-        inicio = datetime.strptime(hora_inicio, "%H:%M")
-        fim = datetime.strptime(hora_fim, "%H:%M")
+        """Calcula o total de horas extras; aceita str|time|datetime."""
+        inicio = datetime.combine(datetime.today(), self._ensure_time(hora_inicio))
+        fim = datetime.combine(datetime.today(), self._ensure_time(hora_fim))
 
         if fim <= inicio:
             fim += timedelta(days=1)

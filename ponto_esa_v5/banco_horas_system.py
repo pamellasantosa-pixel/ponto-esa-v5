@@ -313,13 +313,24 @@ class BancoHorasSystem:
         """Verifica se uma data é feriado"""
         conn = get_connection()
         cursor = conn.cursor()
-        
-        cursor.execute("""
-            SELECT COUNT(*) FROM feriados 
-            WHERE data = %s AND ativo = 1
-        """, (data.strftime("%Y-%m-%d"),))
-        
-        eh_feriado = cursor.fetchone()[0] > 0
+        data_str = data.strftime("%Y-%m-%d")
+        try:
+            # Tenta com coluna 'ativo' (compatível com alguns bancos legados)
+            cursor.execute(
+                """
+                SELECT COUNT(*) FROM feriados 
+                WHERE data = %s AND ativo = 1
+                """,
+                (data_str,)
+            )
+            eh_feriado = cursor.fetchone()[0] > 0
+        except Exception:
+            # Fallback: considera feriado se houver qualquer linha na data
+            cursor.execute(
+                "SELECT COUNT(*) FROM feriados WHERE data = %s",
+                (data_str,)
+            )
+            eh_feriado = cursor.fetchone()[0] > 0
         conn.close()
         
         return eh_feriado
