@@ -347,13 +347,27 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         
-        cursor.execute(f"""
-            SELECT COUNT(*) FROM feriados 
-            WHERE data = {SQL_PLACEHOLDER}
-        """, (data.strftime("%Y-%m-%d"),))
-        
-        eh_feriado = cursor.fetchone()[0] > 0
-        conn.close()
+        try:
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM feriados 
+                WHERE data = {SQL_PLACEHOLDER} AND ativo = 1
+            """, (data.strftime("%Y-%m-%d"),))
+            
+            eh_feriado = cursor.fetchone()[0] > 0
+        except Exception:
+            # Fallback: se coluna ativo não existe, tenta sem ela
+            try:
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM feriados 
+                    WHERE data = {SQL_PLACEHOLDER}
+                """, (data.strftime("%Y-%m-%d"),))
+                
+                eh_feriado = cursor.fetchone()[0] > 0
+            except Exception:
+                # Se falhar completamente, assume que não é feriado
+                eh_feriado = False
+        finally:
+            conn.close()
         
         return eh_feriado
     
