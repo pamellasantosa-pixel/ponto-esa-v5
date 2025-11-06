@@ -2394,7 +2394,7 @@ def aprovar_atestados_interface(atestado_system):
                                     conn = get_connection()
                                     cursor = conn.cursor()
                                     cursor.execute("""
-                                        UPDATE atestados_horas 
+                                        UPDATE atestado_horas 
                                         SET status = 'pendente', 
                                             data_aprovacao = NULL,
                                             aprovado_por = NULL,
@@ -2419,15 +2419,15 @@ def aprovar_atestados_interface(atestado_system):
         conn = get_connection()
         cursor = conn.cursor()
 
+        # Tabela e colunas alinhadas ao schema atual (ver AtestadoHorasSystem)
         cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
-                   a.justificativa, a.data_rejeicao, a.rejeitado_por,
-                   a.motivo_rejeicao, u.nome_completo, u2.nome_completo as rejeitador_nome
-            FROM atestados_horas a
+            SELECT a.id, a.usuario, a.data, a.total_horas, 
+                   a.motivo, a.data_aprovacao, a.aprovado_por,
+                   a.observacoes, u.nome_completo
+            FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
-            LEFT JOIN usuarios u2 ON a.rejeitado_por = u2.usuario
             WHERE a.status = 'rejeitado'
-            ORDER BY a.data_rejeicao DESC
+            ORDER BY a.data_aprovacao DESC
             LIMIT 50
         """)
         rejeitados = cursor.fetchall()
@@ -2437,22 +2437,24 @@ def aprovar_atestados_interface(atestado_system):
             st.warning(f"❌ {len(rejeitados)} atestado(s) rejeitado(s)")
 
             for atestado in rejeitados:
-                atestado_id, usuario, data, horas, justificativa, data_rejeicao, rejeitado_por, motivo_rejeicao, nome_completo, rejeitador_nome = atestado
+                atestado_id, usuario, data, horas, motivo, data_rejeicao, rejeitado_por, observacoes, nome_completo = atestado
 
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
                     st.markdown(f"**Data:** {data_fmt}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
-                    st.markdown(f"**Justificativa:** {justificativa or 'N/A'}")
+                    st.markdown(f"**Motivo:** {motivo or 'N/A'}")
 
                     st.markdown("---")
+                    # No schema atual, rejeição usa as colunas aprovado_por/data_aprovacao
+                    rejeitador_display = rejeitado_por or 'gestor'
                     st.error(
-                        f"❌ Rejeitado por **{rejeitador_nome or rejeitado_por}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                        f"❌ Rejeitado por **{rejeitador_display}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
 
-                    if motivo_rejeicao:
+                    if observacoes:
                         st.warning(
-                            f"📝 **Motivo da Rejeição:** {motivo_rejeicao}")
+                            f"📝 **Observações:** {observacoes}")
         else:
             st.info("📁 Nenhum atestado rejeitado")
 
@@ -2492,9 +2494,9 @@ def aprovar_atestados_interface(atestado_system):
         st.markdown("---")
 
         cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.horas_trabalhadas, 
-                   a.status, a.data_solicitacao, u.nome_completo
-            FROM atestados_horas a
+            SELECT a.id, a.usuario, a.data, a.total_horas, 
+                   a.status, a.data_registro, u.nome_completo
+            FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
             ORDER BY a.data_solicitacao DESC
             LIMIT 100
@@ -2505,7 +2507,7 @@ def aprovar_atestados_interface(atestado_system):
         if todos:
             # Criar DataFrame
             df = pd.DataFrame(todos, columns=[
-                'ID', 'Usuário', 'Data', 'Horas', 'Status', 'Data Solicitação', 'Nome'
+                'ID', 'Usuário', 'Data', 'Horas', 'Status', 'Data Registro', 'Nome'
             ])
 
             df['Status'] = df['Status'].map({
@@ -2515,14 +2517,14 @@ def aprovar_atestados_interface(atestado_system):
             })
 
             df['Data'] = pd.to_datetime(df['Data']).dt.strftime('%d/%m/%Y')
-            df['Data Solicitação'] = pd.to_datetime(
-                df['Data Solicitação']).dt.strftime('%d/%m/%Y %H:%M')
+            df['Data Registro'] = pd.to_datetime(
+                df['Data Registro']).dt.strftime('%d/%m/%Y %H:%M')
             df['Nome'] = df.apply(lambda row: row['Nome']
                                   or row['Usuário'], axis=1)
 
             # Exibir apenas colunas relevantes
             st.dataframe(
-                df[['Nome', 'Data', 'Horas', 'Status', 'Data Solicitação']],
+                df[['Nome', 'Data', 'Horas', 'Status', 'Data Registro']],
                 use_container_width=True,
                 hide_index=True
             )

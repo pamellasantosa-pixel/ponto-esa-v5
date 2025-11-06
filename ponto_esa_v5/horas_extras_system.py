@@ -219,18 +219,7 @@ class HorasExtrasSystem:
                 WHERE id = %s
             """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
 
-            # Registrar no banco de horas
-            self._registrar_banco_horas(
-                cursor,
-                solicitacao[0],  # usuario
-                solicitacao[1],  # data
-                "horas_extras_aprovadas",
-                f"Horas extras aprovadas ({solicitacao[2]} às {solicitacao[3]})",
-                self._calcular_horas_extras(solicitacao[2], solicitacao[3]),
-                0,
-                solicitacao_id,
-                "solicitacoes_horas_extras"
-            )
+            # Não inserir em banco_horas: o cálculo consolida a partir de solicitacoes_horas_extras aprovadas
 
             conn.commit()
             return {"success": True, "message": "Solicitação aprovada com sucesso"}
@@ -289,24 +278,8 @@ class HorasExtrasSystem:
 
     def _registrar_banco_horas(self, cursor, usuario, data, tipo, descricao, credito, debito, relacionado_id, relacionado_tabela):
         """Registra movimentação no banco de horas"""
-        # Buscar saldo anterior
-        cursor.execute("""
-            SELECT saldo_atual FROM banco_horas 
-            WHERE usuario = %s 
-            ORDER BY data_registro DESC 
-            LIMIT 1
-        """, (usuario,))
-
-        result = cursor.fetchone()
-        saldo_anterior = result[0] if result else 0
-        saldo_atual = saldo_anterior + credito - debito
-
-        # Inserir registro
-        cursor.execute("""
-            INSERT INTO banco_horas 
-            (usuario, data, tipo, descricao, credito, debito, saldo_anterior, saldo_atual, relacionado_id, relacionado_tabela)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-        """, (usuario, data, tipo, descricao, credito, debito, saldo_anterior, saldo_atual, relacionado_id, relacionado_tabela))
+        # Mantido por compatibilidade com versões antigas — não utilizado no Postgres atual
+        return
 
     def contar_notificacoes_pendentes(self, aprovador):
         """Conta quantas solicitações estão pendentes para um aprovador"""
