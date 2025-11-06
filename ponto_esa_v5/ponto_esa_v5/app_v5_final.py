@@ -4007,8 +4007,12 @@ def gerenciar_projetos_interface():
                         st.success(
                             f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("❌ Já existe um projeto com este nome!")
+                    except Exception as e:
+                        msg = str(e)
+                        if 'unique' in msg.lower() or 'duplic' in msg.lower():
+                            st.error("❌ Já existe um projeto com este nome!")
+                        else:
+                            st.error(f"❌ Erro ao cadastrar projeto: {msg}")
 
 
 def gerenciar_usuarios_interface():
