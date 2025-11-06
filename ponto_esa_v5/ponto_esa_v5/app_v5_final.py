@@ -3751,11 +3751,11 @@ def gerenciar_arquivos_interface(upload_system):
         params.append(categoria_map[categoria_filter])
 
     if usuario_filter:
-        query += " AND (u.usuario LIKE ? OR us.nome_completo LIKE ?)"
+        query += f" AND (u.usuario LIKE {SQL_PLACEHOLDER} OR us.nome_completo LIKE {SQL_PLACEHOLDER})"
         params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
 
     if data_filter:
-        query += " AND DATE(u.data_upload) = ?"
+        query += f" AND DATE(u.data_upload) = {SQL_PLACEHOLDER}"
         params.append(data_filter.strftime("%Y-%m-%d"))
 
     query += " ORDER BY u.data_upload DESC LIMIT 100"
@@ -3891,7 +3891,7 @@ def gerenciar_projetos_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND nome LIKE ?"
+            query += f" AND nome LIKE {SQL_PLACEHOLDER}"
             params.append(f"%{busca}%")
 
         query += " ORDER BY nome"
@@ -3948,8 +3948,8 @@ def gerenciar_projetos_interface():
 
                             cursor.execute(f"""
                                 UPDATE projetos 
-                                SET nome = ?, descricao = ?, ativo = ?
-                                WHERE id = ?
+                                SET nome = {SQL_PLACEHOLDER}, descricao = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER}
+                                WHERE id = {SQL_PLACEHOLDER}
                             """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
 
                             conn.commit()
@@ -3968,7 +3968,7 @@ def gerenciar_projetos_interface():
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM projetos WHERE id = ?", (projeto_id,))
+                                    f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}", (projeto_id,))
                                 conn.commit()
                                 conn.close()
 
@@ -4001,7 +4001,7 @@ def gerenciar_projetos_interface():
 
                         cursor.execute(f"""
                             INSERT INTO projetos (nome, descricao, ativo)
-                            VALUES (?, ?, ?)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                         """, (nome_novo, descricao_nova, int(ativo_novo)))
 
                         conn.commit()
