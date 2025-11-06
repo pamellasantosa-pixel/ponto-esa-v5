@@ -355,6 +355,9 @@ class BancoHorasSystem:
             
             eh_feriado = cursor.fetchone()[0] > 0
         except Exception:
+            # Rollback para limpar o estado de erro da transação
+            conn.rollback()
+            
             # Fallback: se coluna ativo não existe, tenta sem ela
             try:
                 cursor.execute(f"""
