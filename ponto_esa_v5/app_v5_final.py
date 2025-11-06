@@ -1,38 +1,269 @@
-"""
-Ponto ExSA v5.0 - Sistema de Controle de Ponto
-Versão com Horas Extras, Banco de Horas, GPS Real e Melhorias  
-Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
-Última atualização: 24/10/2025 16:45 - TIMEZONE BRASÍLIA CORRIGIDO (get_datetime_br)
-Deploy: Render.com | Banco: PostgreSQL
-"""
-
-from notifications import notification_manager
-from calculo_horas_system import CalculoHorasSystem
-from banco_horas_system import BancoHorasSystem, format_saldo_display, safe_datetime_parse, safe_date_parse, safe_time_parse
-from horas_extras_system import HorasExtrasSystem
-from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
-from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
-from ajuste_registros_system import AjusteRegistrosSystem
-from database_postgresql import get_connection, init_db, USE_POSTGRESQL
-import streamlit as st
-import pytz
+# coding: utf-8
 import os
+import base64
 import hashlib
 import sqlite3
-from datetime import datetime, timedelta, date, time
-import pandas as pd
-import base64
-import json
-import uuid
+import time as time_module
 from io import BytesIO
 
-# Configurar timezone e helpers
-TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
+import streamlit as st
+import pandas as pd
+from datetime import datetime, date, time, timedelta
+from pytz import timezone
+
+from ajuste_registros_system import AjusteRegistrosSystem
+from atestado_horas_system import AtestadoHorasSystem
+from banco_horas_system import BancoHorasSystem
+from calculo_horas_system import CalculoHorasSystem
+from horas_extras_system import HorasExtrasSystem
+from notifications import NotificationManager
+from upload_system import UploadSystem
+USE_POSTGRESQL = os.getenv("USE_POSTGRESQL", "0").lower() in {"1", "true", "yes"}
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "ponto_esa.db")
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+TIMEZONE_BR = timezone("America/Sao_Paulo")
 
 def get_datetime_br():
-    """Retorna datetime atual no timezone de Brasília"""
+    """Retorna a data e hora atual no fuso horário de Brasília."""
     return datetime.now(TIMEZONE_BR)
+
+if USE_POSTGRESQL:
+    try:
+        import importlib
+
+        spec = importlib.util.find_spec("psycopg2")
+        if spec is None:
+            raise ImportError("No module named 'psycopg2'")
+        psycopg2 = importlib.import_module("psycopg2")
+    except ImportError as exc:
+        raise RuntimeError("psycopg2 is required when USE_POSTGRESQL is enabled.") from exc
+else:
+    psycopg2 = None
+
+try:
+    import importlib
+    st_autorefresh = getattr(importlib.import_module("streamlit_autorefresh"), "st_autorefresh")
+except (ModuleNotFoundError, AttributeError):
+    def st_autorefresh(*args, **kwargs):
+        """Fallback when streamlit_autorefresh is unavailable."""
+        return None
+
+
+def get_connection():
+    """Retorna uma conexão com o banco de dados configurado."""
+    if USE_POSTGRESQL:
+        if psycopg2 is None:
+            raise RuntimeError("psycopg2 não está disponível para conexão PostgreSQL.")
+        connection_params = {
+            "dbname": os.getenv("POSTGRES_DB", "ponto_esa"),
+            "user": os.getenv("POSTGRES_USER", "postgres"),
+            "password": os.getenv("POSTGRES_PASSWORD", ""),
+            "host": os.getenv("POSTGRES_HOST", "localhost"),
+            "port": os.getenv("POSTGRES_PORT", "5432"),
+        }
+        return psycopg2.connect(**connection_params)
+
+    conn = sqlite3.connect(
+        SQLITE_DB_PATH,
+        detect_types=sqlite3.PARSE_DECLTYPES | sqlite3.PARSE_COLNAMES,
+    )
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def init_db():
+    """Inicializa a base de dados garantindo que a conexão esteja disponível."""
+    conn = get_connection()
+    conn.close()
+
+
+def safe_datetime_parse(value):
+    """Converte diferentes formatos de data/hora para um datetime consciente de fuso horário."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.to_pydatetime()
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return datetime.combine(value, time())
+    if isinstance(value, (int, float)):
+        try:
+            return datetime.fromtimestamp(value, tz=TIMEZONE_BR)
+        except (OSError, OverflowError, ValueError):
+            return None
+    if isinstance(value, str):
+        value = value.strip()
+        parse_attempts = (
+            datetime.fromisoformat,
+            lambda v: datetime.strptime(v, "%Y-%m-%d %H:%M:%S"),
+            lambda v: datetime.strptime(v, "%Y-%m-%d %H:%M"),
+            lambda v: datetime.strptime(v, "%d/%m/%Y %H:%M:%S"),
+            lambda v: datetime.strptime(v, "%d/%m/%Y %H:%M"),
+            lambda v: datetime.strptime(v, "%Y-%m-%d"),
+            lambda v: datetime.strptime(v, "%d/%m/%Y"),
+        )
+        for parser in parse_attempts:
+            try:
+                dt = parser(value)
+                break
+            except (ValueError, TypeError):
+                continue
+        else:
+            return None
+        if isinstance(dt, datetime):
+            if dt.tzinfo is not None:
+                return dt.astimezone(TIMEZONE_BR)
+            return TIMEZONE_BR.localize(dt)
+    return None
+
+
+def safe_date_parse(value):
+    """Retorna apenas a data de um valor fornecido."""
+    dt = safe_datetime_parse(value)
+    return dt.date() if dt else None
+
+
+def safe_time_parse(value):
+    """Converte diferentes representações de horário para time."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, time):
+        return value
+    if isinstance(value, datetime):
+        return value.time()
+    if isinstance(value, pd.Timestamp):
+        if pd.isna(value):
+            return None
+        return value.to_pydatetime().time()
+    if isinstance(value, str):
+        value = value.strip()
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(value, fmt).time()
+            except ValueError:
+                continue
+    return None
+
+def format_time_duration(value):
+    """Formata uma duração em horas para uma string legível."""
+    if value is None:
+        return "0h00m"
+    if isinstance(value, timedelta):
+        total_minutos = int(round(value.total_seconds() / 60))
+    else:
+        try:
+            total_minutos = int(round(float(value) * 60))
+        except (TypeError, ValueError):
+            valor_str = str(value).strip() if value is not None else ""
+            if not valor_str:
+                return "0h00m"
+            for fmt in ("%H:%M:%S", "%H:%M"):
+                try:
+                    parsed = datetime.strptime(valor_str, fmt)
+                    total_minutos = parsed.hour * 60 + parsed.minute + parsed.second // 60
+                    break
+                except ValueError:
+                    continue
+            else:
+                return valor_str
+    sinal = "-" if total_minutos < 0 else ""
+    total_minutos = abs(total_minutos)
+    horas, minutos = divmod(total_minutos, 60)
+    return f"{sinal}{horas:02d}h{minutos:02d}m"
+
+
+def format_saldo_display(value):
+    """Formata o saldo do banco de horas com sinal explícito."""
+    if value is None:
+        return "0h00m"
+    try:
+        formatted = format_time_duration(value)
+        if isinstance(value, timedelta):
+            is_positive = value.total_seconds() > 0
+        else:
+            is_positive = float(value) > 0
+        if is_positive and not formatted.startswith("+"):
+            return f"+{formatted}"
+        return formatted
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def format_file_size(size_bytes):
+    """Converte um tamanho de arquivo em bytes para uma string legível."""
+    if size_bytes is None:
+        return "0 B"
+    try:
+        size = float(size_bytes)
+    except (TypeError, ValueError):
+        return str(size_bytes)
+    units = ["B", "KB", "MB", "GB", "TB"]
+    index = 0
+    while size >= 1024 and index < len(units) - 1:
+        size /= 1024
+        index += 1
+    if index == 0:
+        return f"{int(size)} {units[index]}"
+    return f"{size:.2f} {units[index]}"
+
+
+def is_image_file(value):
+    """Verifica se o valor informado representa um arquivo de imagem."""
+    if not value:
+        return False
+    value = str(value).lower()
+    if value.startswith("image/"):
+        return True
+    _, ext = os.path.splitext(value)
+    return ext in {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".tiff", ".webp"}
+
+
+def get_file_icon(file_type):
+    """Retorna um ícone representativo para o tipo de arquivo informado."""
+    if not file_type:
+        return "📄"
+    file_type = str(file_type).lower()
+    if file_type.startswith("image/"):
+        return "🖼️"
+    if file_type.startswith("application/pdf") or file_type.endswith(".pdf"):
+        return "📕"
+    if any(file_type.endswith(ext) for ext in (".doc", ".docx")) or file_type.startswith("application/msword"):
+        return "📝"
+    if any(file_type.endswith(ext) for ext in (".xls", ".xlsx")) or "spreadsheet" in file_type:
+        return "📊"
+    if "zip" in file_type or file_type.endswith(".rar"):
+        return "🗜️"
+    return "📄"
+
+
+def get_category_name(category_key):
+    """Retorna um nome amigável para a categoria de arquivos."""
+    mapping = {
+        "ausencia": "Ausência",
+        "ausencias": "Ausência",
+        "atestado_horas": "Atestado de Horas",
+        "atestado": "Atestado Médico",
+        "documento": "Documento",
+        "documentos": "Documento",
+    }
+    return mapping.get(str(category_key).lower(), "Documento")
+
+
+def get_status_emoji(status):
+    """Retorna um emoji representando o status informado."""
+    mapping = {
+        "pendente": "⏳",
+        "aprovado": "✅",
+        "rejeitado": "❌",
+        "em análise": "🔍",
+        "atrasado": "⚠️",
+    }
+    if status is None:
+        return "ℹ️"
+    return mapping.get(str(status).lower(), "ℹ️")
 
 st.markdown("""
 <style>
@@ -314,6 +545,7 @@ def init_systems():
     banco_horas_system = BancoHorasSystem()
     calculo_horas_system = CalculoHorasSystem()
     ajuste_registros_system = AjusteRegistrosSystem()
+    notification_manager = NotificationManager()
     return (
         atestado_system,
         upload_system,
@@ -321,6 +553,7 @@ def init_systems():
         banco_horas_system,
         calculo_horas_system,
         ajuste_registros_system,
+        notification_manager,
     )
 
 # Funções de banco de dados
@@ -513,6 +746,7 @@ def tela_funcionario():
         banco_horas_system,
         calculo_horas_system,
         ajuste_registros_system,
+        notification_manager,
     ) = init_systems()
 
     # Header
@@ -788,19 +1022,156 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.metric(
                     "✅ Horas Finais", f"{format_time_duration(calculo_dia['horas_finais'])} {multiplicador_text}")
 
-        df_dia = pd.DataFrame(registros_dia, columns=[
-            'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Registro'
-        ])
-        df_dia['Hora'] = pd.to_datetime(
-            df_dia['Data/Hora']).dt.strftime('%H:%M')
-        st.dataframe(
-            df_dia[['Hora', 'Tipo', 'Modalidade',
-                    'Projeto', 'Atividade', 'Localização']],
-            use_container_width=True
-        )
+            df_dia = pd.DataFrame(registros_dia, columns=[
+                'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Registro'
+            ])
+            df_dia['Hora'] = pd.to_datetime(
+                df_dia['Data/Hora']).dt.strftime('%H:%M')
+            st.dataframe(
+                df_dia[['Hora', 'Tipo', 'Modalidade',
+                        'Projeto', 'Atividade', 'Localização']],
+                use_container_width=True
+            )
     else:
         st.info(
             f"📋 Nenhum registro encontrado para {data_selecionada.strftime('%d/%m/%Y')}")
+
+
+def registrar_ausencia_interface(upload_system):
+    """Interface para registro de ausências com anexos opcionais."""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🏥 Registrar Ausência</h3>
+        <p>Informe o período e envie comprovantes quando disponíveis</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    with st.form("form_registro_ausencia"):
+        col1, col2 = st.columns(2)
+
+        with col1:
+            data_inicio = st.date_input(
+                "📅 Data de início",
+                value=date.today(),
+                max_value=date.today(),
+            )
+
+            tipo_ausencia = st.selectbox(
+                "🏷️ Tipo de ausência",
+                [
+                    "Atestado médico",
+                    "Consulta",
+                    "Afastamento",
+                    "Férias",
+                    "Outro",
+                ],
+            )
+
+        with col2:
+            data_fim = st.date_input(
+                "📅 Data de término",
+                value=date.today(),
+                min_value=date.today() - timedelta(days=30),
+                max_value=date.today() + timedelta(days=30),
+            )
+
+            nao_possui_comprovante = st.checkbox(
+                "❌ Não possuo comprovante",
+                help="Marque caso ainda não tenha o documento para anexar",
+            )
+
+        motivo = st.text_area(
+            "📝 Motivo da ausência",
+            placeholder="Descreva o motivo da ausência...",
+        )
+
+        uploaded_file = None
+        if not nao_possui_comprovante:
+            uploaded_file = st.file_uploader(
+                "📎 Anexe um comprovante (opcional)",
+                type=["pdf", "jpg", "jpeg", "png", "doc", "docx"],
+                help="Tamanho máximo: 10MB",
+            )
+
+        submitted = st.form_submit_button(
+            "✅ Registrar Ausência", use_container_width=True
+        )
+
+    if not submitted:
+        return
+
+    if data_inicio > data_fim:
+        st.error("❌ A data de término deve ser posterior à data de início")
+        return
+
+    if not motivo.strip():
+        st.error("❌ Informe o motivo da ausência")
+        return
+
+    if not nao_possui_comprovante and uploaded_file is None:
+        st.error("❌ Anexe um comprovante ou marque a opção sem comprovante")
+        return
+
+    arquivo_comprovante: str | None = None
+    if uploaded_file is not None:
+        try:
+            upload_result = upload_system.save_file(
+                file_content=uploaded_file.read(),
+                usuario=st.session_state.usuario,
+                original_filename=uploaded_file.name,
+                categoria="ausencias",
+            )
+        except Exception as exc:  # noqa: BLE001
+            st.error(f"❌ Falha ao salvar o arquivo: {exc}")
+            return
+
+        if not upload_result.get("success"):
+            st.error(f"❌ Erro no upload: {upload_result.get('message', 'desconhecido')}")
+            return
+
+        arquivo_comprovante = upload_result.get("filename")
+        if arquivo_comprovante:
+            st.success(f"📎 Arquivo recebido: {uploaded_file.name}")
+
+    conn = None
+    cursor = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+                INSERT INTO ausencias 
+                (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+            """,
+            (
+                st.session_state.usuario,
+                data_inicio.strftime("%Y-%m-%d"),
+                data_fim.strftime("%Y-%m-%d"),
+                tipo_ausencia,
+                motivo.strip(),
+                arquivo_comprovante,
+                1 if nao_possui_comprovante else 0,
+            ),
+        )
+        conn.commit()
+
+        st.success("✅ Ausência registrada com sucesso!")
+        if nao_possui_comprovante:
+            st.info(
+                "💡 Regularize o comprovante com o RH assim que possível para evitar ajustes no banco de horas."
+            )
+        time_module.sleep(2)
+        st.rerun()
+    except Exception as exc:  # noqa: BLE001
+        if conn:
+            conn.rollback()
+        st.error(f"❌ Erro ao registrar ausência: {exc}")
+    finally:
+        if cursor is not None:
+            cursor.close()
+        if conn is not None:
+            conn.close()
 
 
 def horas_extras_interface(horas_extras_system):
@@ -963,7 +1334,7 @@ def horas_extras_interface(horas_extras_system):
                         st.write(
                             f"**Status:** {solicitacao['status'].title()}")
                         st.write(
-                            f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                            f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
                         if solicitacao['aprovado_por']:
                             st.write(
                                 f"**Processado por:** {solicitacao['aprovado_por']}")
@@ -1144,10 +1515,12 @@ def solicitar_ajuste_interface(ajuste_system):
                 aprovador_preselecionado = st.session_state.get("aprovador_ajuste_preselecionado")
                 if aprovador_preselecionado not in aprovadores_opcoes:
                     aprovador_preselecionado = aprovadores_opcoes[0]
+
+                aprovador_index = aprovadores_opcoes.index(aprovador_preselecionado)
                 aprovador_selecionado = st.selectbox(
                     "Para qual gestor enviar?",
                     aprovadores_opcoes,
-                    index=aprovadores_opcoes.index(aprovador_preselecionado),
+                    index=aprovador_index,
                 )
             else:
                 aprovador_selecionado = None
@@ -1175,6 +1548,7 @@ def solicitar_ajuste_interface(ajuste_system):
                     if resultado["success"]:
                         st.session_state.aprovador_ajuste_preselecionado = aprovador_selecionado
                         st.success("✅ Solicitação enviada ao gestor")
+                        time_module.sleep(2)  # Aguarda 2 segundos para usuário ver a mensagem
                         st.rerun()
                     else:
                         st.error(f"❌ {resultado['message']}")
@@ -1346,7 +1720,7 @@ def notificacoes_interface(horas_extras_system):
                     st.write(
                         f"**Justificativa:** {solicitacao['justificativa']}")
                     st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -1362,6 +1736,7 @@ def notificacoes_interface(horas_extras_system):
                             )
                             if resultado["success"]:
                                 st.success("✅ Solicitação aprovada!")
+                                time_module.sleep(2)  # Aguarda 2 segundos para usuário ver a mensagem
                                 st.rerun()
                             else:
                                 st.error(f"❌ {resultado['message']}")
@@ -1541,7 +1916,6 @@ def ajustes_solicitados_interface(ajuste_system):
                                 st.rerun()
                             else:
                                 st.error(f"❌ {resultado['message']}")
-
             else:
                 default_data = safe_date_parse(dados.get('data')) or date.today()
                 default_hora = _extract_time(dados.get('hora'))
@@ -1633,116 +2007,6 @@ def ajustes_solicitados_interface(ajuste_system):
                                 st.rerun()
                             else:
                                 st.error(f"❌ {resultado['message']}")
-
-
-def registrar_ausencia_interface(upload_system):
-    """Interface para registrar ausências com opção 'não tenho comprovante'"""
-    st.markdown("""
-    <div class="feature-card">
-        <h3>🏥 Registrar Ausência</h3>
-        <p>Registre faltas, férias, atestados e outras ausências</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    with st.form("ausencia_form"):
-        col1, col2 = st.columns(2)
-
-        with col1:
-            data_inicio = st.date_input("📅 Data de Início")
-            tipo_ausencia = st.selectbox(
-                "📋 Tipo de Ausência",
-                ["Atestado Médico", "Falta Justificada",
-                    "Férias", "Licença", "Outros"]
-            )
-
-        with col2:
-            data_fim = st.date_input("📅 Data de Fim", value=data_inicio)
-
-        motivo = st.text_area("📝 Motivo da Ausência",
-                              placeholder="Descreva o motivo da ausência...")
-
-        # Opção de upload de comprovante
-        st.markdown("**📎 Comprovante:**")
-        nao_possui_comprovante_check = st.checkbox("❌ Não possuo comprovante")
-        if nao_possui_comprovante_check:
-            st.warning("⚠️ Ausências sem comprovante podem gerar desconto automático no banco de horas.")
-        
-        uploaded_file = None
-        if not nao_possui_comprovante_check:
-            uploaded_file = st.file_uploader(
-                "Anexar comprovante (PDF, JPG, PNG)",
-                type=['pdf', 'jpg', 'jpeg', 'png'],
-                help="Faça upload do atestado médico, declaração ou outro documento comprobatório"
-            )
-
-        submitted = st.form_submit_button(
-            "✅ Registrar Ausência", use_container_width=True)
-
-        if submitted:
-            if not motivo.strip():
-                st.error("❌ O motivo é obrigatório")
-            elif data_inicio > data_fim:
-                st.error(
-                    "❌ Data de início deve ser anterior ou igual à data de fim")
-            elif not nao_possui_comprovante_check and uploaded_file is None:
-                st.error("❌ Anexe o comprovante ou marque a opção 'Não possuo comprovante'.")
-            else:
-                arquivo_comprovante = None
-                
-                # Processar upload se houver arquivo
-                if uploaded_file is not None:
-                    import hashlib
-                    file_bytes = uploaded_file.read()
-                    file_hash = hashlib.md5(file_bytes).hexdigest()
-
-                    ext = uploaded_file.name.split('.')[-1]
-                    nome_arquivo = f"{st.session_state.usuario}_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{file_hash[:8]}.{ext}"
-                    
-                    # Criar diretório se não existir
-                    ano = datetime.now().year
-                    mes = datetime.now().month
-                    upload_dir = os.path.join("uploads", "ausencias", str(ano), str(mes).zfill(2))
-                    os.makedirs(upload_dir, exist_ok=True)
-                    
-                    # Salvar arquivo
-                    caminho_completo = os.path.join(upload_dir, nome_arquivo)
-                    with open(caminho_completo, "wb") as f:
-                        f.write(file_bytes)
-                    
-                    arquivo_comprovante = caminho_completo
-
-                # Registrar ausência no banco
-                conn = get_connection()
-                cursor = conn.cursor()
-
-                try:
-                    cursor.execute(f"""
-                        INSERT INTO ausencias 
-                        (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                    """, (
-                        st.session_state.usuario,
-                        data_inicio.strftime("%Y-%m-%d"),
-                        data_fim.strftime("%Y-%m-%d"),
-                        tipo_ausencia,
-                        motivo,
-                        arquivo_comprovante,
-                        1 if nao_possui_comprovante_check else 0
-                    ))
-
-                    conn.commit()
-                    st.success("✅ Ausência registrada com sucesso!")
-
-                    if nao_possui_comprovante_check:
-                        st.info(
-                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação. O desconto será lançado no banco de horas até a regularização.")
-
-                    st.rerun()
-
-                except Exception as e:
-                    st.error(f"❌ Erro ao registrar ausência: {str(e)}")
-                finally:
-                    conn.close()
 
 
 def atestado_horas_interface(atestado_system, upload_system):
@@ -1856,6 +2120,7 @@ def atestado_horas_interface(atestado_system, upload_system):
                             st.success(f"✅ {resultado['message']}")
                             st.info(
                                 f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                            time_module.sleep(2)  # Aguarda 2 segundos para usuário ver as mensagens
                             st.rerun()
                         else:
                             st.error(f"❌ {resultado['message']}")
@@ -2224,6 +2489,7 @@ def tela_gestor():
         banco_horas_system,
         calculo_horas_system,
         ajuste_registros_system,
+        notification_manager,
     ) = init_systems()
 
     # Verificar notificações pendentes
@@ -2635,7 +2901,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                     st.write(
                         f"**Aprovador Solicitado:** {solicitacao['aprovador_solicitado']}")
                     st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -3138,31 +3404,26 @@ def todos_registros_interface(calculo_horas_system):
     conn = get_connection()
     cursor = conn.cursor()
 
-    query = """
+    placeholder = SQL_PLACEHOLDER
+    query = f"""
         SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
                r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
                u.nome_completo
         FROM registros_ponto r
         LEFT JOIN usuarios u ON r.usuario = u.usuario
-        WHERE DATE(r.data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        WHERE DATE(r.data_hora) BETWEEN {placeholder} AND {placeholder}
     """
     params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
 
     # Aplicar filtro de usuário
     if usuario_filter != "Todos":
         usuario_login = usuario_filter.split("(")[1].rstrip(")")
-        if USE_POSTGRESQL:
-            query += " AND r.usuario = %s"
-        else:
-            query += " AND r.usuario = ?"
+        query += f" AND r.usuario = {placeholder}"
         params.append(usuario_login)
 
     # Aplicar filtro de tipo
     if tipo_registro != "Todos":
-        if USE_POSTGRESQL:
-            query += " AND r.tipo = %s"
-        else:
-            query += " AND r.tipo = ?"
+        query += f" AND r.tipo = {placeholder}"
         params.append(tipo_registro)
 
     query += " ORDER BY r.data_hora DESC LIMIT 500"
