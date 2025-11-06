@@ -2498,7 +2498,7 @@ def aprovar_atestados_interface(atestado_system):
                    a.status, a.data_registro, u.nome_completo
             FROM atestado_horas a
             LEFT JOIN usuarios u ON a.usuario = u.usuario
-            ORDER BY a.data_solicitacao DESC
+            ORDER BY a.data_registro DESC
             LIMIT 100
         """)
         todos = cursor.fetchall()
@@ -3062,7 +3062,7 @@ def gerenciar_projetos_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND nome LIKE ?"
+            query += f" AND nome LIKE {SQL_PLACEHOLDER}"
             params.append(f"%{busca}%")
 
         query += " ORDER BY nome"
@@ -3117,10 +3117,10 @@ def gerenciar_projetos_interface():
                             conn = get_connection()
                             cursor = conn.cursor()
 
-                            cursor.execute("""
+                            cursor.execute(f"""
                                 UPDATE projetos 
-                                SET nome = ?, descricao = ?, ativo = ?
-                                WHERE id = ?
+                                SET nome = {SQL_PLACEHOLDER}, descricao = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER}
+                                WHERE id = {SQL_PLACEHOLDER}
                             """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
 
                             conn.commit()
@@ -3139,7 +3139,7 @@ def gerenciar_projetos_interface():
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM projetos WHERE id = ?", (projeto_id,))
+                                    f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}", (projeto_id,))
                                 conn.commit()
                                 conn.close()
 
@@ -3170,9 +3170,9 @@ def gerenciar_projetos_interface():
                         conn = get_connection()
                         cursor = conn.cursor()
 
-                        cursor.execute("""
+                        cursor.execute(f"""
                             INSERT INTO projetos (nome, descricao, ativo)
-                            VALUES (?, ?, ?)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                         """, (nome_novo, descricao_nova, int(ativo_novo)))
 
                         conn.commit()
@@ -3181,8 +3181,8 @@ def gerenciar_projetos_interface():
                         st.success(
                             f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("❌ Já existe um projeto com este nome!")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao cadastrar projeto: {e}")
 
 
 def gerenciar_usuarios_interface():
@@ -3385,7 +3385,7 @@ def gerenciar_usuarios_interface():
                                 conn = get_connection()
                                 cursor = conn.cursor()
                                 cursor.execute(
-                                    "DELETE FROM usuarios WHERE id = ?", (usuario_id,))
+                                    f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}", (usuario_id,))
                                 conn.commit()
                                 conn.close()
 
@@ -3441,11 +3441,11 @@ def gerenciar_usuarios_interface():
                         senha_hash = hashlib.sha256(
                             nova_senha.encode()).hexdigest()
 
-                        cursor.execute("""
+                        cursor.execute(f"""
                             INSERT INTO usuarios 
                             (usuario, senha, tipo, nome_completo, ativo, 
                              jornada_inicio_previsto, jornada_fim_previsto)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                         """, (
                             novo_login,
                             senha_hash,
@@ -3462,8 +3462,8 @@ def gerenciar_usuarios_interface():
                         st.success(
                             f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
                         st.rerun()
-                    except sqlite3.IntegrityError:
-                        st.error("❌ Já existe um usuário com este login!")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao cadastrar usuário: {e}")
 
 
 def sistema_interface():
@@ -3568,10 +3568,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_jornada:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3610,10 +3610,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_he:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3655,10 +3655,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_gps:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3687,10 +3687,10 @@ def sistema_interface():
             ]
 
             for chave, valor in configs_gerais:
-                cursor.execute("""
+                cursor.execute(f"""
                     UPDATE configuracoes 
-                    SET valor = ?, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = ?
+                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                    WHERE chave = {SQL_PLACEHOLDER}
                 """, (valor, chave))
 
             conn.commit()
@@ -3716,10 +3716,10 @@ def buscar_registros_dia(usuario, data):
     cursor = conn.cursor()
 
     try:
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
             FROM registros_ponto 
-            WHERE usuario = ? AND DATE(data_hora) = ?
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
             ORDER BY data_hora
         """, (usuario, data))
 
