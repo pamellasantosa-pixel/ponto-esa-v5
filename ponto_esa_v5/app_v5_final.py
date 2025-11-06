@@ -54,6 +54,48 @@ def get_datetime_br():
     """Retorna datetime atual no fuso horário de Brasília"""
     return datetime.now(TIMEZONE_BR)
 
+# Utilitários seguros para datas/horas (compatível com PostgreSQL/SQLite)
+def _try_parse_dt(value, fmt):
+    try:
+        return datetime.strptime(str(value), fmt)
+    except Exception:
+        return None
+
+def safe_datetime_parse(value):
+    """Converte value em datetime de forma resiliente.
+    Aceita datetime, date, ISO str, e formatos comuns usados no app.
+    """
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    # Tentar ISO/strings conhecidas
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M", "%Y-%m-%d", "%d/%m/%Y"):
+        parsed = _try_parse_dt(value, fmt)
+        if parsed:
+            return parsed
+    try:
+        return datetime.fromisoformat(str(value))
+    except Exception:
+        # Fallback: agora (evita quebra na UI)
+        return datetime.now()
+
+def ensure_time(value, default=time(8, 0)):
+    """Garante um objeto datetime.time a partir de time|datetime|str."""
+    if isinstance(value, time):
+        return value
+    if isinstance(value, datetime):
+        return value.time()
+    if value:
+        for fmt in ("%H:%M:%S", "%H:%M"):
+            try:
+                return datetime.strptime(str(value), fmt).time()
+            except Exception:
+                pass
+    return default
+
 
 # Importar sistemas desenvolvidos
 
@@ -1041,8 +1083,9 @@ def notificacoes_interface(horas_extras_system):
                         f"**Horário:** {solicitacao['hora_inicio']} às {solicitacao['hora_fim']}")
                     st.write(
                         f"**Justificativa:** {solicitacao['justificativa']}")
-                    st.write(
-                        f"**Solicitado em:** {solicitacao['data_solicitacao'][:19]}")
+                    # data_solicitacao pode ser datetime (PostgreSQL) ou string
+                    ds_fmt = safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')
+                    st.write(f"**Solicitado em:** {ds_fmt}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -2136,12 +2179,13 @@ def aprovar_atestados_interface(atestado_system):
                     with col1:
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
-                        st.markdown(
-                            f"**Data do Atestado:** {datetime.strptime(data, '%Y-%m-%d').strftime('%d/%m/%Y')}")
+                        # Data pode vir como date (PostgreSQL) ou string (SQLite)
+                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                        st.markdown(f"**Data do Atestado:** {data_fmt}")
                         st.markdown(
                             f"**Horas Trabalhadas:** {format_time_duration(horas)}")
                         st.markdown(
-                            f"**Solicitado em:** {datetime.fromisoformat(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
 
                         st.markdown("---")
                         st.markdown("**Justificativa:**")
@@ -2636,7 +2680,7 @@ def todos_registros_interface(calculo_horas_system):
         registros_agrupados = {}
         for registro in registros:
             reg_id, usuario, data_hora_str, tipo, modalidade, projeto, atividade, localizacao, lat, lng, nome_completo = registro
-            data_hora = datetime.fromisoformat(data_hora_str)
+            data_hora = safe_datetime_parse(data_hora_str)
             data_str = data_hora.strftime("%Y-%m-%d")
 
             chave = f"{usuario}_{data_str}"
@@ -3184,7 +3228,7 @@ def gerenciar_usuarios_interface():
             query += " AND ativo = 0"
 
         if busca:
-            query += " AND (usuario LIKE ? OR nome_completo LIKE ?)"
+            query += " AND (usuario LIKE %s OR nome_completo LIKE %s)"
             params.extend([f"%{busca}%", f"%{busca}%"])
 
         query += " ORDER BY nome_completo"
@@ -3253,15 +3297,13 @@ def gerenciar_usuarios_interface():
                         with col_c:
                             nova_jornada_inicio = st.time_input(
                                 "Início:",
-                                value=datetime.strptime(jornada_inicio or "08:00", "%H:%M").time(
-                                ) if jornada_inicio else time(8, 0),
+                                value=ensure_time(jornada_inicio, default=time(8, 0)),
                                 key=f"inicio_{usuario_id}"
                             )
                         with col_d:
                             nova_jornada_fim = st.time_input(
                                 "Fim:",
-                                value=datetime.strptime(jornada_fim or "17:00", "%H:%M").time(
-                                ) if jornada_fim else time(17, 0),
+                                value=ensure_time(jornada_fim, default=time(17, 0)),
                                 key=f"fim_{usuario_id}"
                             )
 
@@ -3310,9 +3352,9 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute("""
                                 UPDATE usuarios 
-                                SET nome_completo = ?, tipo = ?, ativo = ?,
-                                    jornada_inicio_previsto = ?, jornada_fim_previsto = ?
-                                WHERE id = ?
+                                SET nome_completo = %s, tipo = %s, ativo = %s,
+                                    jornada_inicio_previsto = %s, jornada_fim_previsto = %s
+                                WHERE id = %s
                             """, (
                                 novo_nome,
                                 novo_tipo,

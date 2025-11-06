@@ -5,7 +5,7 @@ Gerencia o saldo de horas dos funcionários
 
 import sqlite3
 from database_postgresql import get_connection
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as time_type
 import calendar
 
 class BancoHorasSystem:
@@ -32,9 +32,23 @@ class BancoHorasSystem:
         jornada_inicio = jornada[0] or "08:00"
         jornada_fim = jornada[1] or "17:00"
         
+        def _safe_time(value, default="08:00"):
+            if isinstance(value, time_type):
+                return value
+            if isinstance(value, datetime):
+                return value.time()
+            if isinstance(value, str):
+                for fmt in ("%H:%M:%S", "%H:%M"):
+                    try:
+                        return datetime.strptime(value, fmt).time()
+                    except Exception:
+                        pass
+            # default
+            return datetime.strptime(default, "%H:%M").time()
+        
         # Calcular horas previstas por dia (descontando 1h de almoço se > 6h)
-        inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
-        fim_dt = datetime.strptime(jornada_fim, "%H:%M")
+        inicio_dt = datetime.combine(date.today(), _safe_time(jornada_inicio, "08:00"))
+        fim_dt = datetime.combine(date.today(), _safe_time(jornada_fim, "17:00"))
         horas_previstas_dia = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas_dia > 6:
             horas_previstas_dia -= 1  # Desconto do almoço
@@ -83,13 +97,37 @@ class BancoHorasSystem:
         saldo_total = 0
         
         # Processar registros de ponto
+        def _safe_date(value):
+            if isinstance(value, date):
+                return value
+            if isinstance(value, datetime):
+                return value.date()
+            try:
+                return datetime.strptime(str(value), "%Y-%m-%d").date()
+            except Exception:
+                return datetime.fromisoformat(str(value)).date()
+
+        def _safe_dt(value):
+            if isinstance(value, datetime):
+                return value
+            try:
+                return datetime.fromisoformat(str(value))
+            except Exception:
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                    try:
+                        return datetime.strptime(str(value), fmt)
+                    except Exception:
+                        pass
+            return None
+
         for registro in registros_por_dia:
-            data_reg = registro[0]
-            primeiro = datetime.strptime(registro[1], "%Y-%m-%d %H:%M:%S")
-            ultimo = datetime.strptime(registro[2], "%Y-%m-%d %H:%M:%S")
+            data_reg_date = _safe_date(registro[0])
+            data_reg = data_reg_date.strftime("%Y-%m-%d")
+            primeiro = _safe_dt(registro[1])
+            ultimo = _safe_dt(registro[2])
             
             # Verificar se é domingo ou feriado
-            data_obj = datetime.strptime(data_reg, "%Y-%m-%d").date()
+            data_obj = data_reg_date
             eh_domingo = data_obj.weekday() == 6
             eh_feriado = self._eh_feriado(data_obj)
             
@@ -115,7 +153,7 @@ class BancoHorasSystem:
                 # Dia útil: verificar atrasos e saídas antecipadas
                 
                 # Atraso na entrada
-                entrada_prevista = datetime.combine(data_obj, datetime.strptime(jornada_inicio, "%H:%M").time())
+                entrada_prevista = datetime.combine(data_obj, _safe_time(jornada_inicio, "08:00"))
                 if primeiro > entrada_prevista:
                     atraso = (primeiro - entrada_prevista).total_seconds() / 3600
                     extrato.append({
@@ -129,7 +167,7 @@ class BancoHorasSystem:
                     saldo_total -= atraso
                 
                 # Saída antecipada
-                saida_prevista = datetime.combine(data_obj, datetime.strptime(jornada_fim, "%H:%M").time())
+                saida_prevista = datetime.combine(data_obj, _safe_time(jornada_fim, "17:00"))
                 if ultimo < saida_prevista:
                     saida_antecipada = (saida_prevista - ultimo).total_seconds() / 3600
                     extrato.append({
@@ -158,9 +196,12 @@ class BancoHorasSystem:
         
         # Processar horas extras aprovadas
         for he in horas_extras_aprovadas:
-            data_he = he[0]
-            inicio = datetime.strptime(he[1], "%H:%M")
-            fim = datetime.strptime(he[2], "%H:%M")
+            data_he_date = _safe_date(he[0])
+            data_he = data_he_date.strftime("%Y-%m-%d")
+            ini_t = _safe_time(he[1], "00:00")
+            fim_t = _safe_time(he[2], "00:00")
+            inicio = datetime.combine(date.today(), ini_t)
+            fim = datetime.combine(date.today(), fim_t)
             if fim <= inicio:
                 fim += timedelta(days=1)
             
@@ -177,8 +218,8 @@ class BancoHorasSystem:
         
         # Processar ausências sem comprovante
         for ausencia in ausencias_sem_comprovante:
-            data_inicio_aus = datetime.strptime(ausencia[0], "%Y-%m-%d").date()
-            data_fim_aus = datetime.strptime(ausencia[1], "%Y-%m-%d").date()
+            data_inicio_aus = _safe_date(ausencia[0])
+            data_fim_aus = _safe_date(ausencia[1])
             
             # Calcular dias úteis da ausência
             dias_ausencia = []
@@ -202,7 +243,7 @@ class BancoHorasSystem:
         
         # Processar atestados de horas aprovados (desconto)
         for atestado in atestados_aprovados:
-            data_at = atestado[0]
+            data_at = _safe_date(atestado[0]).strftime("%Y-%m-%d")
             horas_atestado = atestado[1]
             
             extrato.append({
