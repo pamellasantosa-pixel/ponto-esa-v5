@@ -47,19 +47,13 @@ def safe_datetime_parse(dt_value):
 
 
 class CalculoHorasSystem:
-    def __init__(self, db_path=None):
-        self._db_path = db_path
+    def __init__(self):
+        pass
 
-    def _get_connection(self):
-        if isinstance(self._db_path, str):
-            return sqlite3.connect(self._db_path)
-        if self._db_path:
-            return self._db_path
-        return get_connection()
-
+        
     def calcular_horas_dia(self, usuario, data):
         """Calcula as horas trabalhadas em um dia específico com todas as regras"""
-        conn = self._get_connection()
+        conn = get_connection()
         try:
             cursor = conn.cursor()
 
@@ -197,7 +191,7 @@ class CalculoHorasSystem:
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f"""
@@ -243,7 +237,7 @@ class CalculoHorasSystem:
 
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute(f"""
@@ -264,7 +258,7 @@ class CalculoHorasSystem:
 
     def obter_feriados_periodo(self, data_inicio, data_fim):
         """Obtém lista de feriados em um período"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f"""
@@ -280,75 +274,74 @@ class CalculoHorasSystem:
 
     def gerar_relatorio_horas_extras(self, usuario, data_inicio, data_fim):
         """Gera relatório de horas extras não aprovadas"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
-        try:
-            # Buscar jornada prevista
-            cursor.execute(f"""
-                SELECT jornada_inicio_previsto, jornada_fim_previsto 
-                FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}
-            """, (usuario,))
+        # Buscar jornada prevista
+        cursor.execute(f"""
+            SELECT jornada_inicio_previsto, jornada_fim_previsto 
+            FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}
+        """, (usuario,))
 
-            jornada = cursor.fetchone()
-            if not jornada:
-                return {"success": False, "message": "Usuário não encontrado"}
+        jornada = cursor.fetchone()
+        if not jornada:
+            conn.close()
+            return {"success": False, "message": "Usuário não encontrado"}
 
-            jornada_inicio = jornada[0] or "08:00"
-            jornada_fim = jornada[1] or "17:00"
+        jornada_inicio = jornada[0] or "08:00"
+        jornada_fim = jornada[1] or "17:00"
 
-            # Calcular horas previstas por dia
-            inicio_dt = safe_time_parse(jornada_inicio)
-            fim_dt = safe_time_parse(jornada_fim)
-            horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
-            if horas_previstas > 6:
-                horas_previstas -= 1  # Desconto do almoço
+        # Calcular horas previstas por dia
+        inicio_dt = safe_time_parse(jornada_inicio)
+        fim_dt = safe_time_parse(jornada_fim)
+        horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
+        if horas_previstas > 6:
+            horas_previstas -= 1  # Desconto do almoço
 
-            # Buscar dias com possíveis horas extras
-            data_atual = datetime.strptime(data_inicio, "%Y-%m-%d").date()
-            data_final = datetime.strptime(data_fim, "%Y-%m-%d").date()
+        # Buscar dias com possíveis horas extras
+        data_atual = datetime.strptime(data_inicio, "%Y-%m-%d").date()
+        data_final = datetime.strptime(data_fim, "%Y-%m-%d").date()
 
-            horas_extras_detectadas = []
+        horas_extras_detectadas = []
 
-            while data_atual <= data_final:
-                # Pular finais de semana (sábado e domingo)
-                if data_atual.weekday() >= 5:
-                    data_atual += timedelta(days=1)
-                    continue
-
-                calculo = self.calcular_horas_dia(
-                    usuario, data_atual.strftime("%Y-%m-%d"))
-
-                if calculo and calculo.get("horas_liquidas", 0) > horas_previstas:
-                    # Verificar se já foi aprovada formalmente
-                    cursor.execute(f"""
-                        SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                        WHERE usuario = {SQL_PLACEHOLDER} AND data = {SQL_PLACEHOLDER} AND status = 'aprovado'
-                    """, (usuario, data_atual.strftime("%Y-%m-%d")))
-
-                    ja_aprovada = cursor.fetchone()[0] > 0
-
-                    if not ja_aprovada:
-                        horas_extras = calculo["horas_liquidas"] - horas_previstas
-                        horas_extras_detectadas.append({
-                            "data": data_atual.strftime("%Y-%m-%d"),
-                            "horas_trabalhadas": calculo["horas_liquidas"],
-                            "horas_previstas": horas_previstas,
-                            "horas_extras": horas_extras,
-                            "primeiro_registro": calculo.get("primeiro_registro", "N/A"),
-                            "ultimo_registro": calculo.get("ultimo_registro", "N/A")
-                        })
-
+        while data_atual <= data_final:
+            # Pular finais de semana (sábado e domingo)
+            if data_atual.weekday() >= 5:
                 data_atual += timedelta(days=1)
+                continue
 
-            return {
-                "success": True,
-                "horas_extras_detectadas": horas_extras_detectadas,
-                "total_horas_extras": sum([he["horas_extras"] for he in horas_extras_detectadas])
-            }
-        finally:
-            if not self._db_path:
-                conn.close()
+            calculo = self.calcular_horas_dia(
+                usuario, data_atual.strftime("%Y-%m-%d"))
+
+            if calculo["horas_liquidas"] > horas_previstas:
+                # Verificar se já foi aprovada formalmente
+                cursor.execute(f"""
+                    SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                    WHERE usuario = {SQL_PLACEHOLDER} AND data = {SQL_PLACEHOLDER} AND status = 'aprovado'
+                """, (usuario, data_atual.strftime("%Y-%m-%d")))
+
+                ja_aprovada = cursor.fetchone()[0] > 0
+
+                if not ja_aprovada:
+                    horas_extras = calculo["horas_liquidas"] - horas_previstas
+                    horas_extras_detectadas.append({
+                        "data": data_atual.strftime("%Y-%m-%d"),
+                        "horas_trabalhadas": calculo["horas_liquidas"],
+                        "horas_previstas": horas_previstas,
+                        "horas_extras": horas_extras,
+                        "primeiro_registro": calculo["primeiro_registro"],
+                        "ultimo_registro": calculo["ultimo_registro"]
+                    })
+
+            data_atual += timedelta(days=1)
+
+        conn.close()
+
+        return {
+            "success": True,
+            "horas_extras_detectadas": horas_extras_detectadas,
+            "total_horas_extras": sum([he["horas_extras"] for he in horas_extras_detectadas])
+        }
 
 # Funções utilitárias
 

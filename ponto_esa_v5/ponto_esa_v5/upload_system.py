@@ -17,9 +17,8 @@ from pathlib import Path
 
 
 class UploadSystem:
-    def __init__(self, upload_dir="uploads", db_path=None):
+    def __init__(self, upload_dir="uploads"):
         self.upload_dir = upload_dir
-        self._db_path = db_path
         self.max_file_size = 10 * 1024 * 1024  # 10MB
         self.allowed_extensions = {
             'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'gif', 'txt', 'rtf'
@@ -36,11 +35,6 @@ class UploadSystem:
         }
         self.init_directories()
         self.init_database()
-
-    def _get_connection(self):
-        if self._db_path:
-            return sqlite3.connect(self._db_path)
-        return get_connection()
 
     def init_directories(self):
         """Cria estrutura de diretórios para uploads"""
@@ -65,7 +59,7 @@ class UploadSystem:
 
     def init_database(self):
         """Inicializa tabela de uploads"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -105,14 +99,8 @@ class UploadSystem:
 
         # Verificar MIME type
         mime_type, _ = mimetypes.guess_type(filename)
-        print(f"DEBUG: Filename: {filename}, Guessed MIME type: {mime_type}")  # Linha de depuração
-        if not mime_type:
-            # Se o tipo não puder ser adivinhado, confiar na extensão
-            if extension == 'txt':
-                mime_type = 'text/plain'
-        
         if mime_type not in self.allowed_mimes:
-            errors.append(f"Tipo MIME não permitido: {mime_type}")
+            errors.append("Tipo MIME não permitido")
 
         # Verificar nome do arquivo
         if not filename or len(filename) > 255:
@@ -222,17 +210,15 @@ class UploadSystem:
 
     def register_upload(self, usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a=None, relacionado_id=None):
         """Registra upload no banco de dados"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
-            # A query foi corrigida para usar placeholders '?' diretamente,
-            # que é o formato esperado pelo sqlite3, resolvendo o erro 'unrecognized token'.
-            # A variável SQL_PLACEHOLDER foi mantida para consistência, mas a query agora é mais robusta.
-            placeholders = ", ".join([SQL_PLACEHOLDER] * 9)
-            query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({placeholders})"
-            
-            cursor.execute(query, (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
+            cursor.execute('''
+                INSERT INTO uploads 
+                (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+            ''', (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
 
             upload_id = cursor.lastrowid
             conn.commit()
@@ -245,7 +231,7 @@ class UploadSystem:
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f'''
@@ -266,7 +252,7 @@ class UploadSystem:
 
     def get_user_uploads(self, usuario, categoria=None, relacionado_a=None, relacionado_id=None):
         """Lista uploads de um usuário"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = f"SELECT * FROM uploads WHERE usuario = {SQL_PLACEHOLDER} AND status = 'ativo'"
@@ -275,11 +261,11 @@ class UploadSystem:
         if categoria:
             # Mapear categoria para relacionado_a
             if categoria in ['ausencia', 'atestado_horas', 'documento']:
-                query += f" AND relacionado_a = {SQL_PLACEHOLDER}"
+                query += " AND relacionado_a = %s"
                 params.append(categoria)
 
         if relacionado_a:
-            query += f" AND relacionado_a = {SQL_PLACEHOLDER}"
+            query += " AND relacionado_a = %s"
             params.append(relacionado_a)
 
         if relacionado_id:
@@ -301,7 +287,7 @@ class UploadSystem:
 
     def get_file_info(self, upload_id, usuario=None):
         """Obtém informações de um arquivo específico"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = f"SELECT * FROM uploads WHERE id = {SQL_PLACEHOLDER}"
@@ -325,12 +311,13 @@ class UploadSystem:
 
     def delete_file(self, upload_id, usuario):
         """Remove arquivo (marca como inativo)"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
+
         try:
             # Verificar se arquivo pertence ao usuário
             cursor.execute(
-                f"SELECT caminho FROM uploads WHERE id = {SQL_PLACEHOLDER} AND usuario = {SQL_PLACEHOLDER}", (upload_id, usuario))
+                "SELECT caminho FROM uploads WHERE id = %s AND usuario = %s", (upload_id, usuario))
             result = cursor.fetchone()
 
             if not result:
@@ -340,7 +327,7 @@ class UploadSystem:
 
             # Marcar como inativo no banco
             cursor.execute(
-                f"UPDATE uploads SET status = 'removido' WHERE id = {SQL_PLACEHOLDER}", (upload_id,))
+                "UPDATE uploads SET status = 'removido' WHERE id = %s", (upload_id,))
 
             # Remover arquivo físico
             try:
@@ -390,11 +377,12 @@ class UploadSystem:
 
     def get_storage_stats(self):
         """Obtém estatísticas de armazenamento"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
             SELECT 
+                COUNT(*) as total_files,
                 SUM(tamanho) as total_size,
                 relacionado_a,
                 COUNT(*) as files_by_category
@@ -402,11 +390,13 @@ class UploadSystem:
             WHERE status = 'ativo'
             GROUP BY relacionado_a
         ''')
+
         stats_by_category = cursor.fetchall()
 
         cursor.execute('''
             SELECT COUNT(*), SUM(tamanho) FROM uploads WHERE status = 'ativo'
         ''')
+
         total_stats = cursor.fetchone()
         conn.close()
 
@@ -415,9 +405,9 @@ class UploadSystem:
             "total_size": total_stats[1] or 0,
             "by_category": [
                 {
-                    "category": row[1] or "outros",
-                    "files": row[2],
-                    "size": row[0]
+                    "category": row[2] or "outros",
+                    "files": row[3],
+                    "size": row[1]
                 }
                 for row in stats_by_category
             ]

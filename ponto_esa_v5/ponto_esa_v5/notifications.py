@@ -6,7 +6,6 @@ de registrar ponto e controlar horas extras.
 
 import threading
 import time
-import inspect
 from datetime import datetime, timedelta
 import json
 import os
@@ -184,39 +183,15 @@ class NotificationManager:
 
         interval = interval_seconds if interval_seconds is not None else self.default_reminder_interval
 
-        accepts_param = False
-        if stop_condition is not None:
-            try:
-                accepts_param = len(inspect.signature(stop_condition).parameters) > 0
-            except (TypeError, ValueError):
-                accepts_param = False
-
-        def should_stop(notifications_sent):
-            if stop_condition is None:
-                return False
-
-            try:
-                if accepts_param:
-                    return bool(stop_condition(notifications_sent))
-                return bool(stop_condition())
-            except Exception as exc:
-                print(f"Erro ao avaliar stop_condition para job {job_id}: {exc}")
-                return True
-
         def worker():
-            notifications_sent = 0
             try:
                 while self.running and job_control.get("active", False):
                     time.sleep(interval)
 
-                    if not self.running or not job_control.get("active", False):
+                    if stop_condition and stop_condition():
                         break
 
                     self.add_notification(user_id, payload)
-                    notifications_sent += 1
-
-                    if should_stop(notifications_sent):
-                        break
             finally:
                 # Remover job ao finalizar
                 self.repeating_jobs.pop(job_id, None)
@@ -230,15 +205,6 @@ class NotificationManager:
         job = self.repeating_jobs.get(job_id)
         if job:
             job["active"] = False
-
-    def stop_all_jobs(self, wait=False):
-        """Interrompe todos os jobs de notificações repetitivas."""
-        for job_id, job in list(self.repeating_jobs.items()):
-            job["active"] = False
-            thread = job.get("thread")
-            if wait and thread and thread.is_alive():
-                thread.join(timeout=1)
-        self.repeating_jobs.clear()
 
     def _save_notification_to_db(self, notification):
         """Persiste notificações em PostgreSQL ou SQLite, conforme disponível."""
@@ -397,7 +363,9 @@ class NotificationManager:
         self.running = False
         self.notification_threads.clear()
         self.active_notifications.clear()
-        self.stop_all_jobs()
+        for job in self.repeating_jobs.values():
+            job["active"] = False
+        self.repeating_jobs.clear()
 
 # Instância global do gerenciador de notificações
 notification_manager = NotificationManager()

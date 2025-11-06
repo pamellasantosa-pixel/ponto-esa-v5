@@ -34,8 +34,6 @@ def test_save_and_find_and_delete_file():
     content = b"Hello Test"
     resp = us.save_file(content, 'funcionario',
                         'test_file.txt', categoria='documento')
-    if not resp['success']:
-        print(f"DEBUG: Save file failed. Response: {resp}")
     assert resp['success'] is True
     upload_id = resp['upload_id']
 

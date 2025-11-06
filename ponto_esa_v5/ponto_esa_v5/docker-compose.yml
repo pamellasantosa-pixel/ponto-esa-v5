@@ -1,0 +1,12 @@
+version: '3.8'
+services:
+  ponto_esa:
+    build: .
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./database:/app/database
+      - ./uploads:/app/uploads
+    environment:
+      - PYTHONUNBUFFERED=1
+    restart: unless-stopped

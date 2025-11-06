@@ -220,7 +220,7 @@ class AjusteRegistrosSystem:
             stop_condition=stop_condition,
         )
 
-        return {"success": True, "message": "Solicitação enviada com sucesso", "solicitacao_id": solicitacao_id}
+        return {"success": True, "message": "Solicitação enviada com sucesso", "id": solicitacao_id}
 
     def aplicar_ajuste(
         self,

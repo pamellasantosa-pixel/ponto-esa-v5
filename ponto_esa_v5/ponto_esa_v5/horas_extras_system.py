@@ -14,17 +14,12 @@ from notifications import notification_manager
 
 
 class HorasExtrasSystem:
-    def __init__(self, db_path=None):
-        self._db_path = db_path
-
-    def _get_connection(self):
-        if self._db_path:
-            return sqlite3.connect(self._db_path)
-        return get_connection()
+    def __init__(self):
+        pass
         
     def verificar_fim_jornada(self, usuario):
         """Verifica se o usuário chegou no horário de fim da jornada prevista"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Buscar jornada prevista do usuário
@@ -62,7 +57,7 @@ class HorasExtrasSystem:
 
     def obter_aprovadores_disponiveis(self):
         """Obtém lista de usuários que podem aprovar horas extras (gestores e outros funcionários)"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -78,7 +73,7 @@ class HorasExtrasSystem:
 
     def solicitar_horas_extras(self, usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado):
         """Registra uma nova solicitação de horas extras"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -167,7 +162,7 @@ class HorasExtrasSystem:
 
     def listar_solicitacoes_usuario(self, usuario, status=None):
         """Lista solicitações de horas extras de um usuário"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         query = f"SELECT * FROM solicitacoes_horas_extras WHERE usuario = {SQL_PLACEHOLDER}"
@@ -191,7 +186,7 @@ class HorasExtrasSystem:
 
     def listar_solicitacoes_para_aprovacao(self, aprovador):
         """Lista solicitações pendentes para um aprovador específico"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f"""
@@ -211,7 +206,7 @@ class HorasExtrasSystem:
 
     def aprovar_solicitacao(self, solicitacao_id, aprovador, observacoes=None):
         """Aprova uma solicitação de horas extras"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -264,7 +259,7 @@ class HorasExtrasSystem:
 
     def rejeitar_solicitacao(self, solicitacao_id, aprovador, observacoes):
         """Rejeita uma solicitação de horas extras"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         try:
@@ -334,7 +329,7 @@ class HorasExtrasSystem:
 
     def contar_notificacoes_pendentes(self, aprovador):
         """Conta quantas solicitações estão pendentes para um aprovador"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f"""
@@ -349,7 +344,7 @@ class HorasExtrasSystem:
 
     def _is_solicitacao_finalizada(self, solicitacao_id):
         """Verifica se a solicitação de horas extras foi tratada."""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(

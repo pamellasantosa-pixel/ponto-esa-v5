@@ -8,7 +8,6 @@ load_dotenv()
 
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
-SQL_PLACEHOLDER = '%s' if USE_POSTGRESQL else '?'
 
 if USE_POSTGRESQL:
     import psycopg2  # type: ignore[import-not-found]
