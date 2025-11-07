@@ -344,40 +344,47 @@ class BancoHorasSystem:
     
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = get_connection()
-        cursor = conn.cursor()
         eh_feriado = False  # Valor padrão
+        conn = None
         
         try:
+            conn = get_connection()
+            cursor = conn.cursor()
             cursor.execute(f"""
                 SELECT COUNT(*) FROM feriados 
                 WHERE data = {SQL_PLACEHOLDER} AND ativo = 1
             """, (data.strftime("%Y-%m-%d"),))
             
             eh_feriado = cursor.fetchone()[0] > 0
+            conn.close()
         except Exception:
-            # Rollback para limpar o estado de erro da transação
-            try:
-                conn.rollback()
-            except Exception:
-                pass  # Se rollback falhar, ignorar
+            # Fechar conexão com erro e tentar com nova conexão
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
             
-            # Fallback: se coluna ativo não existe, tenta sem ela
+            # Fallback: criar nova conexão e tentar sem coluna ativo
+            conn_fallback = None
             try:
-                cursor.execute(f"""
+                conn_fallback = get_connection()
+                cursor_fallback = conn_fallback.cursor()
+                cursor_fallback.execute(f"""
                     SELECT COUNT(*) FROM feriados 
                     WHERE data = {SQL_PLACEHOLDER}
                 """, (data.strftime("%Y-%m-%d"),))
                 
-                eh_feriado = cursor.fetchone()[0] > 0
+                eh_feriado = cursor_fallback.fetchone()[0] > 0
+                conn_fallback.close()
             except Exception:
                 # Se falhar completamente, assume que não é feriado
                 eh_feriado = False
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass  # Se fechar conexão falhar, ignorar
+                if conn_fallback:
+                    try:
+                        conn_fallback.close()
+                    except Exception:
+                        pass
         
         return eh_feriado
     
