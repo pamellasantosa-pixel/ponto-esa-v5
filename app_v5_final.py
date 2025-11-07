@@ -3296,7 +3296,7 @@ def gerenciar_usuarios_interface():
                             )
 
                         # Jornada de trabalho
-                        st.markdown("**Jornada de Trabalho:**")
+                        st.markdown("**Jornada de Trabalho Padrão:**")
                         col_c, col_d = st.columns(2)
                         with col_c:
                             nova_jornada_inicio = st.time_input(
@@ -3310,6 +3310,88 @@ def gerenciar_usuarios_interface():
                                 value=ensure_time(jornada_fim, default=time(17, 0)),
                                 key=f"fim_{usuario_id}"
                             )
+
+                        # Jornada Semanal Variável
+                        st.markdown("---")
+                        st.markdown("**📅 Jornada Semanal Detalhada:**")
+                        st.info("💡 Configure horários diferentes para cada dia da semana")
+                        
+                        from jornada_semanal_system import obter_jornada_usuario, salvar_jornada_semanal
+                        
+                        jornada_atual = obter_jornada_usuario(usuario) or {}
+                        
+                        dias = {
+                            'seg': '🔵 Segunda', 'ter': '🔵 Terça', 'qua': '🔵 Quarta',
+                            'qui': '🔵 Quinta', 'sex': '🔵 Sexta', 'sab': '🟡 Sábado', 'dom': '🔴 Domingo'
+                        }
+                        
+                        jornada_config = {}
+                        
+                        for dia_key, dia_nome in dias.items():
+                            config_dia = jornada_atual.get(dia_key, {
+                                'trabalha': dia_key in ['seg', 'ter', 'qua', 'qui', 'sex'], 
+                                'inicio': '08:00', 
+                                'fim': '17:00'
+                            })
+                            
+                            col_check, col_inicio, col_fim = st.columns([2, 2, 2])
+                            
+                            with col_check:
+                                trabalha = st.checkbox(
+                                    dia_nome,
+                                    value=config_dia.get('trabalha', True),
+                                    key=f"trabalha_{dia_key}_{usuario_id}"
+                                )
+                            
+                            with col_inicio:
+                                if trabalha:
+                                    try:
+                                        hora_inicio_str = config_dia.get('inicio', '08:00')
+                                        if isinstance(hora_inicio_str, str):
+                                            hora_parts = hora_inicio_str.split(':')
+                                            hora_inicio_val = time(int(hora_parts[0]), int(hora_parts[1]))
+                                        else:
+                                            hora_inicio_val = time(8, 0)
+                                    except:
+                                        hora_inicio_val = time(8, 0)
+                                    
+                                    hora_inicio = st.time_input(
+                                        "Entrada",
+                                        value=hora_inicio_val,
+                                        key=f"inicio_{dia_key}_{usuario_id}",
+                                        label_visibility="collapsed"
+                                    )
+                                else:
+                                    hora_inicio = None
+                                    st.markdown("<small style='color: gray;'>Não trabalha</small>", unsafe_allow_html=True)
+                            
+                            with col_fim:
+                                if trabalha:
+                                    try:
+                                        hora_fim_str = config_dia.get('fim', '17:00')
+                                        if isinstance(hora_fim_str, str):
+                                            hora_parts = hora_fim_str.split(':')
+                                            hora_fim_val = time(int(hora_parts[0]), int(hora_parts[1]))
+                                        else:
+                                            hora_fim_val = time(17, 0)
+                                    except:
+                                        hora_fim_val = time(17, 0)
+                                    
+                                    hora_fim = st.time_input(
+                                        "Saída",
+                                        value=hora_fim_val,
+                                        key=f"fim_{dia_key}_{usuario_id}",
+                                        label_visibility="collapsed"
+                                    )
+                                else:
+                                    hora_fim = None
+                                    st.markdown("<small style='color: gray;'>-</small>", unsafe_allow_html=True)
+                            
+                            jornada_config[dia_key] = {
+                                'trabalha': trabalha,
+                                'inicio': hora_inicio.strftime('%H:%M') if hora_inicio else None,
+                                'fim': hora_fim.strftime('%H:%M') if hora_fim else None
+                            }
 
                         # Alteração de senha - Corrigido: removido expander aninhado
                         st.markdown("**🔑 Alterar Senha:**")
@@ -3370,6 +3452,10 @@ def gerenciar_usuarios_interface():
 
                             conn.commit()
                             conn.close()
+                            
+                            # Salvar jornada semanal
+                            from jornada_semanal_system import salvar_jornada_semanal
+                            salvar_jornada_semanal(usuario_id, jornada_config)
 
                             st.success("✅ Usuário atualizado!")
                             st.rerun()
@@ -3414,7 +3500,7 @@ def gerenciar_usuarios_interface():
                     "Tipo de Usuário:*", ["funcionario", "gestor"])
                 novo_ativo = st.checkbox("Usuário Ativo", value=True)
 
-            st.markdown("**Jornada de Trabalho:**")
+            st.markdown("**Jornada de Trabalho Padrão:**")
             col3, col4 = st.columns(2)
             with col3:
                 jornada_inicio = st.time_input(
@@ -3422,6 +3508,9 @@ def gerenciar_usuarios_interface():
             with col4:
                 jornada_fim = st.time_input(
                     "Fim da Jornada:", value=time(17, 0))
+            
+            st.markdown("---")
+            st.info("💡 **Opcional:** Configure jornada semanal detalhada após criar o usuário na aba de edição")
 
             submitted = st.form_submit_button(
                 "➕ Cadastrar Usuário", use_container_width=True)
@@ -3454,9 +3543,17 @@ def gerenciar_usuarios_interface():
                             jornada_inicio.strftime("%H:%M"),
                             jornada_fim.strftime("%H:%M")
                         ))
+                        
+                        # Obter ID do usuário recém-criado
+                        cursor.execute("SELECT last_insert_rowid()")
+                        novo_usuario_id = cursor.fetchone()[0]
 
                         conn.commit()
                         conn.close()
+                        
+                        # Copiar jornada padrão para dias úteis (seg-sex)
+                        from jornada_semanal_system import copiar_jornada_padrao_para_dias
+                        copiar_jornada_padrao_para_dias(novo_usuario_id, ['seg', 'ter', 'qua', 'qui', 'sex'])
 
                         st.success(
                             f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
