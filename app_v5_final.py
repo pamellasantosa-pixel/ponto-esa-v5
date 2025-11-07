@@ -711,6 +711,30 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             "📝 Descrição da Atividade",
             placeholder="Descreva brevemente a atividade realizada..."
         )
+        
+        # Alerta visual para domingo ou feriado
+        from calculo_horas_system import eh_dia_com_multiplicador
+        
+        info_dia = eh_dia_com_multiplicador(data_registro)
+        if info_dia['tem_multiplicador']:
+            if info_dia['eh_domingo'] and info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉📅 **ATENÇÃO: DOMINGO E FERIADO ({info_dia['nome_feriado']})!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
+            elif info_dia['eh_domingo']:
+                st.warning(f"""
+                ⚠️ 📅 **ATENÇÃO: DOMINGO!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
+            elif info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉 **ATENÇÃO: FERIADO - {info_dia['nome_feriado']}!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
 
         # Validação de registros
         data_str = data_registro.strftime("%Y-%m-%d")
@@ -1559,13 +1583,79 @@ def meus_registros_interface(calculo_horas_system):
         # Formatar dados para exibição
         df['Data'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%d/%m/%Y')
         df['Hora'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%H:%M')
+        df['DataObj'] = pd.to_datetime(df['Data/Hora']).dt.date
+        
+        # Adicionar informação de multiplicador para cada dia
+        from calculo_horas_system import eh_dia_com_multiplicador
+        
+        def get_badge_dia(data_obj):
+            info = eh_dia_com_multiplicador(data_obj)
+            if info['tem_multiplicador']:
+                if info['eh_domingo'] and info['eh_feriado']:
+                    return f"🎉📅 {info['nome_feriado']} (DOMINGO) - x2"
+                elif info['eh_domingo']:
+                    return "📅 DOMINGO - Horas em DOBRO (x2)"
+                elif info['eh_feriado']:
+                    return f"🎉 FERIADO: {info['nome_feriado']} - Horas em DOBRO (x2)"
+            return ""
+        
+        # Agrupar por data e exibir com destaque
+        st.markdown("### 📅 Registros Detalhados por Dia")
+        
+        for data_unica in df['DataObj'].unique():
+            registros_dia = df[df['DataObj'] == data_unica]
+            data_formatada = registros_dia.iloc[0]['Data']
+            
+            # Verificar se tem multiplicador
+            badge = get_badge_dia(data_unica)
+            
+            if badge:
+                # Exibir com destaque
+                st.markdown(f"#### {data_formatada}")
+                st.warning(f"**{badge}**")
+            else:
+                st.markdown(f"#### {data_formatada}")
+            
+            # Exibir registros do dia
+            st.dataframe(
+                registros_dia[['Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Calcular horas do dia
+            calculo_dia = calculo_horas_system.calcular_horas_dia(
+                st.session_state.usuario,
+                data_unica.strftime("%Y-%m-%d")
+            )
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("⏱️ Horas Trabalhadas", 
+                         format_time_duration(calculo_dia.get("horas_trabalhadas", 0)))
+            with col2:
+                st.metric("💼 Horas Líquidas", 
+                         format_time_duration(calculo_dia.get("horas_liquidas", 0)))
+            with col3:
+                multiplicador = calculo_dia.get("multiplicador", 1)
+                horas_finais = calculo_dia.get("horas_finais", 0)
+                if multiplicador > 1:
+                    st.metric("✨ Total Contabilizado", 
+                             format_time_duration(horas_finais),
+                             delta=f"x{multiplicador}")
+                else:
+                    st.metric("📊 Total Contabilizado", 
+                             format_time_duration(horas_finais))
+            
+            st.markdown("---")
 
-        # Exibir tabela
-        st.dataframe(
-            df[['Data', 'Hora', 'Tipo', 'Modalidade',
-                'Projeto', 'Atividade', 'Localização']],
-            use_container_width=True
-        )
+        # Exibir tabela completa (versão antiga mantida para referência)
+        with st.expander("📊 Ver Tabela Completa (Todos os Registros)"):
+            st.dataframe(
+                df[['Data', 'Hora', 'Tipo', 'Modalidade',
+                    'Projeto', 'Atividade', 'Localização']],
+                use_container_width=True
+            )
 
         # Botão de exportação
         if st.button("📊 Exportar para Excel"):

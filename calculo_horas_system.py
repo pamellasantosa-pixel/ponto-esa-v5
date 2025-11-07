@@ -347,3 +347,118 @@ def format_time_duration(horas):
         h = int(abs(horas))
         m = int((abs(horas) - h) * 60)
         return f"{h}h {m}min" if m > 0 else f"{h}h"
+
+
+def verificar_se_eh_feriado(data):
+    """
+    Verifica se uma data é feriado (função pública para uso em interfaces)
+    
+    Args:
+        data: date, datetime ou string no formato 'YYYY-MM-DD'
+    
+    Returns:
+        dict: {'eh_feriado': bool, 'nome_feriado': str ou None, 'tipo': str ou None}
+    """
+    from datetime import datetime, date
+    
+    # Converter para date se necessário
+    if isinstance(data, str):
+        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+    elif isinstance(data, datetime):
+        data_obj = data.date()
+    else:
+        data_obj = data
+    
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute("""
+            SELECT nome, tipo FROM feriados 
+            WHERE data = %s
+        """, (data_obj.strftime("%Y-%m-%d"),))
+        
+        resultado = cursor.fetchone()
+        
+        if resultado:
+            return {
+                'eh_feriado': True,
+                'nome_feriado': resultado[0],
+                'tipo': resultado[1]
+            }
+        else:
+            return {
+                'eh_feriado': False,
+                'nome_feriado': None,
+                'tipo': None
+            }
+    except Exception as e:
+        print(f"Erro ao verificar feriado: {e}")
+        return {
+            'eh_feriado': False,
+            'nome_feriado': None,
+            'tipo': None
+        }
+    finally:
+        try:
+            conn.close()
+        except Exception:
+            pass
+
+
+def eh_dia_com_multiplicador(data):
+    """
+    Verifica se uma data tem multiplicador de horas (domingo ou feriado)
+    
+    Args:
+        data: date, datetime ou string no formato 'YYYY-MM-DD'
+    
+    Returns:
+        dict: {
+            'tem_multiplicador': bool,
+            'multiplicador': int (1 ou 2),
+            'motivo': str,
+            'eh_domingo': bool,
+            'eh_feriado': bool,
+            'nome_feriado': str ou None
+        }
+    """
+    from datetime import datetime, date
+    
+    # Converter para date se necessário
+    if isinstance(data, str):
+        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
+    elif isinstance(data, datetime):
+        data_obj = data.date()
+    else:
+        data_obj = data
+    
+    # Verificar se é domingo
+    eh_domingo = data_obj.weekday() == 6
+    
+    # Verificar se é feriado
+    info_feriado = verificar_se_eh_feriado(data_obj)
+    eh_feriado = info_feriado['eh_feriado']
+    
+    # Determinar multiplicador e motivo
+    if eh_domingo and eh_feriado:
+        motivo = f"Domingo E Feriado ({info_feriado['nome_feriado']})"
+        tem_multiplicador = True
+    elif eh_domingo:
+        motivo = "Domingo"
+        tem_multiplicador = True
+    elif eh_feriado:
+        motivo = f"Feriado: {info_feriado['nome_feriado']}"
+        tem_multiplicador = True
+    else:
+        motivo = "Dia normal"
+        tem_multiplicador = False
+    
+    return {
+        'tem_multiplicador': tem_multiplicador,
+        'multiplicador': 2 if tem_multiplicador else 1,
+        'motivo': motivo,
+        'eh_domingo': eh_domingo,
+        'eh_feriado': eh_feriado,
+        'nome_feriado': info_feriado.get('nome_feriado')
+    }
