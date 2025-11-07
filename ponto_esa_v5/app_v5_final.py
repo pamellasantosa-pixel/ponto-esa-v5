@@ -847,6 +847,167 @@ def exibir_hora_extra_em_andamento():
             st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
 
 
+def aprovar_hora_extra_rapida_interface():
+    """Interface rápida para gestor aprovar/rejeitar hora extra"""
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 20px;
+        border-radius: 10px;
+        margin: 20px 0;
+        color: white;
+    ">
+        <h2 style="margin: 0; color: white;">📋 Aprovar Hora Extra</h2>
+        <p style="margin: 10px 0;">Você tem solicitações de hora extra aguardando aprovação</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Buscar solicitações pendentes para este gestor
+        cursor.execute(f"""
+            SELECT 
+                he.id,
+                u.nome_completo,
+                he.justificativa,
+                he.data_inicio,
+                he.hora_inicio
+            FROM horas_extras_ativas he
+            JOIN usuarios u ON u.usuario = he.usuario
+            WHERE he.aprovador = {SQL_PLACEHOLDER}
+            AND he.status = 'aguardando_aprovacao'
+            ORDER BY he.data_criacao DESC
+        """, (st.session_state.usuario,))
+        
+        solicitacoes = cursor.fetchall()
+        
+        if not solicitacoes:
+            st.info("✅ Nenhuma solicitação pendente no momento")
+            
+            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if 'aprovar_hora_extra' in st.session_state:
+                    del st.session_state.aprovar_hora_extra
+                st.rerun()
+            return
+        
+        # Exibir cada solicitação
+        for idx, sol in enumerate(solicitacoes):
+            he_id, nome_funcionario, justificativa, data_inicio, hora_inicio = sol
+            
+            # Converter data/hora
+            data_inicio_obj = safe_datetime_parse(data_inicio) if isinstance(data_inicio, str) else data_inicio
+            hora_inicio_obj = safe_datetime_parse(hora_inicio) if isinstance(hora_inicio, str) else hora_inicio
+            
+            data_formatada = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else 'N/A'
+            hora_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+            
+            st.markdown(f"""
+            <div style="
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin: 15px 0;
+                border-left: 5px solid #f5576c;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                <h4 style="margin: 0 0 10px 0; color: #333;">👤 {nome_funcionario}</h4>
+                <p style="margin: 5px 0; color: #666;">
+                    <strong>📅 Data:</strong> {data_formatada} às {hora_formatada}<br>
+                    <strong>💬 Justificativa:</strong> {justificativa if justificativa else 'Não informada'}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                    # Atualizar status para em_execucao
+                    cursor.execute(f"""
+                        UPDATE horas_extras_ativas
+                        SET status = 'em_execucao'
+                        WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    conn.commit()
+                    
+                    # Criar notificação para o funcionário
+                    from notifications import NotificationManager
+                    notification_manager = NotificationManager()
+                    
+                    funcionario = None
+                    cursor.execute(f"""
+                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        funcionario = result[0]
+                        
+                        notification_manager.criar_notificacao(
+                            usuario=funcionario,
+                            tipo='hora_extra_aprovada',
+                            titulo='✅ Hora Extra Aprovada',
+                            mensagem=f'Sua solicitação de hora extra foi aprovada por {st.session_state.nome_completo}. O contador está rodando!',
+                            dados_extra={'hora_extra_id': he_id}
+                        )
+                    
+                    st.success(f"✅ Hora extra de {nome_funcionario} aprovada com sucesso!")
+                    st.balloons()
+                    time.sleep(1.5)
+                    st.rerun()
+            
+            with col2:
+                if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                    # Atualizar status para rejeitada
+                    cursor.execute(f"""
+                        UPDATE horas_extras_ativas
+                        SET status = 'rejeitada'
+                        WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    conn.commit()
+                    
+                    # Criar notificação para o funcionário
+                    from notifications import NotificationManager
+                    notification_manager = NotificationManager()
+                    
+                    funcionario = None
+                    cursor.execute(f"""
+                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        funcionario = result[0]
+                        
+                        notification_manager.criar_notificacao(
+                            usuario=funcionario,
+                            tipo='hora_extra_rejeitada',
+                            titulo='❌ Hora Extra Rejeitada',
+                            mensagem=f'Sua solicitação de hora extra foi rejeitada por {st.session_state.nome_completo}.',
+                            dados_extra={'hora_extra_id': he_id}
+                        )
+                    
+                    st.warning(f"❌ Hora extra de {nome_funcionario} rejeitada")
+                    time.sleep(1.5)
+                    st.rerun()
+            
+            st.markdown("---")
+        
+        # Botão para voltar
+        if st.button("↩️ Voltar ao Menu", use_container_width=True):
+            if 'aprovar_hora_extra' in st.session_state:
+                del st.session_state.aprovar_hora_extra
+            st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar solicitações: {str(e)}")
+        logger.error(f"Erro em aprovar_hora_extra_rapida_interface: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+
+
 # Interface principal do funcionário
 def tela_funcionario():
     """Interface principal para funcionários"""
@@ -2098,6 +2259,59 @@ def tela_gestor():
         <div class="user-info">Gestor • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Verificar se há solicitações de hora extra pendentes
+    conn = None
+    solicitacoes_pendentes_count = 0
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM horas_extras_ativas
+            WHERE aprovador = {SQL_PLACEHOLDER}
+            AND status = 'aguardando_aprovacao'
+        """, (st.session_state.usuario,))
+        result = cursor.fetchone()
+        solicitacoes_pendentes_count = result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+    
+    # Se houver solicitações pendentes, exibir alerta destacado
+    if solicitacoes_pendentes_count > 0:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            animation: pulse 2s infinite;
+        ">
+            <h3 style="margin: 0; color: white;">🔔 Solicitações de Hora Extra Pendentes</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                Você tem <strong>{solicitacoes_pendentes_count}</strong> solicitação{'ões' if solicitacoes_pendentes_count > 1 else ''} aguardando aprovação
+            </p>
+        </div>
+        <style>
+            @keyframes pulse {{
+                0%, 100% {{ box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                50% {{ box-shadow: 0 6px 12px rgba(245, 87, 108, 0.4); }}
+            }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        if st.button("📋 Aprovar Agora", type="primary", use_container_width=True, key="btn_aprovar_rapido"):
+            st.session_state.aprovar_hora_extra = True
+            st.rerun()
+    
+    # Se clicou em aprovar hora extra, mostrar interface de aprovação
+    if st.session_state.get('aprovar_hora_extra'):
+        aprovar_hora_extra_rapida_interface()
+        return  # Não exibir resto da interface
 
     # Menu lateral
     with st.sidebar:
