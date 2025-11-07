@@ -696,12 +696,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 ["Presencial", "Home Office", "Trabalho em Campo"]
             )
 
-            hora_registro = st.time_input(
-                "🕐 Horário do Registro",
-                value=datetime.now().time(),
-                help="Defina o horário do registro"
-            )
-
         with col2:
             tipo_registro = st.selectbox(
                 "⏰ Tipo de Registro",
@@ -720,22 +714,24 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         pode_registrar = calculo_horas_system.pode_registrar_tipo(
             st.session_state.usuario, data_str, tipo_registro)
 
-        if not pode_registrar and tipo_registro in ["Início", "Fim"]:
+        if tipo_registro in ["Início", "Fim"] and not pode_registrar:
             st.warning(
                 f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
         submitted = st.form_submit_button(
-            "✅ Registrar Ponto", use_container_width=True, disabled=not pode_registrar)
+            "✅ Registrar Ponto", use_container_width=True)
 
-        if submitted and pode_registrar:
+        if submitted:
             if not atividade.strip():
                 st.error("❌ A descrição da atividade é obrigatória")
+            elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
+                st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
                 # Coordenadas GPS (simplificado - GPS desabilitado temporariamente)
                 latitude = None
                 longitude = None
 
-                # Registrar ponto
+                # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
                     st.session_state.usuario,
                     tipo_registro,
@@ -743,7 +739,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     projeto,
                     atividade,
                     data_registro.strftime("%Y-%m-%d"),
-                    hora_registro.strftime("%H:%M:%S"),
+                    None,  # Não passar horário - usar atual
                     latitude,
                     longitude
                 )
