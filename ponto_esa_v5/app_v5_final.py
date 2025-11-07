@@ -592,6 +592,112 @@ def tela_login():
                     st.warning("⚠️ Preencha todos os campos")
 
 
+def validar_limites_horas_extras(usuario):
+    """
+    Valida se o usuário pode fazer hora extra segundo limites da CLT
+    - Máximo 2h extras por dia
+    - Máximo 10h extras por semana
+    """
+    from datetime import datetime, timedelta
+    
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        agora = get_datetime_br()
+        hoje = agora.date()
+        
+        # Início da semana (segunda-feira)
+        inicio_semana = hoje - timedelta(days=hoje.weekday())
+        
+        # Horas extras hoje
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND DATE(data_inicio) = {SQL_PLACEHOLDER}
+            AND status IN ('encerrada', 'em_execucao')
+        """, (usuario, hoje))
+        
+        horas_hoje_ativas = cursor.fetchone()[0] or 0
+        
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+            )) / 3600), 0)
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data = {SQL_PLACEHOLDER}
+            AND status = 'aprovado'
+        """, (usuario, hoje))
+        
+        horas_hoje_historico = cursor.fetchone()[0] or 0
+        horas_hoje_total = horas_hoje_ativas + horas_hoje_historico
+        
+        # Horas extras esta semana
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND DATE(data_inicio) >= {SQL_PLACEHOLDER}
+            AND status IN ('encerrada', 'em_execucao')
+        """, (usuario, inicio_semana))
+        
+        horas_semana_ativas = cursor.fetchone()[0] or 0
+        
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+            )) / 3600), 0)
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data >= {SQL_PLACEHOLDER}
+            AND status = 'aprovado'
+        """, (usuario, inicio_semana))
+        
+        horas_semana_historico = cursor.fetchone()[0] or 0
+        horas_semana_total = horas_semana_ativas + horas_semana_historico
+        
+        # Verificar limites CLT
+        LIMITE_DIA = 2.0  # 2 horas por dia
+        LIMITE_SEMANA = 10.0  # 10 horas por semana
+        
+        pode_fazer = True
+        mensagem = ""
+        
+        if horas_hoje_total >= LIMITE_DIA:
+            pode_fazer = False
+            mensagem = f"Limite diário de horas extras atingido ({horas_hoje_total:.1f}h de {LIMITE_DIA}h)"
+        elif horas_semana_total >= LIMITE_SEMANA:
+            pode_fazer = False
+            mensagem = f"Limite semanal de horas extras atingido ({horas_semana_total:.1f}h de {LIMITE_SEMANA}h)"
+        
+        return {
+            'pode_fazer_hora_extra': pode_fazer,
+            'mensagem': mensagem,
+            'horas_hoje': horas_hoje_total,
+            'horas_semana': horas_semana_total,
+            'limite_dia': LIMITE_DIA,
+            'limite_semana': LIMITE_SEMANA
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao validar limites de horas extras: {str(e)}")
+        # Em caso de erro, permitir (não bloquear por erro de sistema)
+        return {
+            'pode_fazer_hora_extra': True,
+            'mensagem': '',
+            'horas_hoje': 0,
+            'horas_semana': 0,
+            'limite_dia': 2.0,
+            'limite_semana': 10.0
+        }
+    finally:
+        if conn:
+            conn.close()
+
+
 def iniciar_hora_extra_interface():
     """Interface para iniciar hora extra com seleção de aprovador e justificativa"""
     from datetime import datetime
@@ -657,7 +763,30 @@ def iniciar_hora_extra_interface():
             if not justificativa.strip():
                 st.error("❌ A justificativa é obrigatória!")
             else:
-                # Registrar hora extra ativa
+                # Validar limites CLT de horas extras
+                validacao = validar_limites_horas_extras(st.session_state.usuario)
+                
+                if not validacao['pode_fazer_hora_extra']:
+                    st.error(f"❌ {validacao['mensagem']}")
+                    st.warning("⚠️ **Limite Legal Atingido:** A CLT estabelece limites de horas extras para proteção do trabalhador.")
+                    
+                    with st.expander("📋 Ver detalhes dos limites"):
+                        st.write(f"**Horas extras hoje:** {validacao['horas_hoje']:.1f}h de 2h permitidas")
+                        st.write(f"**Horas extras esta semana:** {validacao['horas_semana']:.1f}h de 10h permitidas")
+                        st.markdown("""
+                        **Limites CLT:**
+                        - Máximo de 2 horas extras por dia
+                        - Máximo de 10 horas extras por semana
+                        - Descanso mínimo entre jornadas: 11 horas
+                        """)
+                else:
+                    # Mostrar aviso se estiver próximo do limite
+                    if validacao['horas_hoje'] >= 1.5:
+                        st.warning(f"⚠️ Você já fez {validacao['horas_hoje']:.1f}h extras hoje. Limite: 2h")
+                    if validacao['horas_semana'] >= 8:
+                        st.warning(f"⚠️ Você já fez {validacao['horas_semana']:.1f}h extras esta semana. Limite: 10h")
+                    
+                    # Registrar hora extra ativa
                 conn = get_connection()
                 cursor = conn.cursor()
                 
@@ -717,7 +846,9 @@ def iniciar_hora_extra_interface():
 def exibir_hora_extra_em_andamento():
     """Exibe contador de hora extra em andamento com opção de encerrar"""
     from datetime import datetime
+    from streamlit_autorefresh import st_autorefresh
     
+    # Auto-refresh a cada 30 segundos quando há hora extra ativa
     # Verificar se tem hora extra ativa
     conn = get_connection()
     cursor = conn.cursor()
@@ -735,6 +866,9 @@ def exibir_hora_extra_em_andamento():
     
     if not hora_extra:
         return
+    
+    # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+    st_autorefresh(interval=30000, key="hora_extra_counter")
     
     he_id, aprovador, justificativa, data_inicio, status = hora_extra
     
@@ -1029,7 +1163,7 @@ def tela_funcionario():
     
     verificacao_saida = verificar_horario_saida_proximo(
         st.session_state.usuario, 
-        margem_minutos=30
+        margem_minutos=5  # Alerta 5 minutos antes do fim da jornada
     )
     
     if verificacao_saida['proximo']:
@@ -1081,6 +1215,7 @@ def tela_funcionario():
             "🏥 Registrar Ausência",
             "⏰ Atestado de Horas",
             f"🕐 Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
+            "📊 Relatórios de Horas Extras",
             "🏦 Meu Banco de Horas",
             "📁 Meus Arquivos",
             "🔔 Notificações"
@@ -1104,6 +1239,9 @@ def tela_funcionario():
         atestado_horas_interface(atestado_system, upload_system)
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
+    elif opcao == "📊 Relatórios de Horas Extras":
+        from relatorios_horas_extras import relatorios_horas_extras_interface
+        relatorios_horas_extras_interface()
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
@@ -1293,6 +1431,217 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             f"📋 Nenhum registro encontrado para {data_selecionada.strftime('%d/%m/%Y')}")
 
 
+def historico_horas_extras_interface():
+    """Interface completa de histórico de horas extras com filtros avançados"""
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 20px;
+    ">
+        <h2 style="margin: 0; color: white;">📊 Histórico Completo de Horas Extras</h2>
+        <p style="margin: 10px 0;">Visualize todas as suas horas extras: ativas, aprovadas, rejeitadas e finalizadas</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Filtros avançados
+    st.markdown("### 🔍 Filtros")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        status_filtro = st.multiselect(
+            "Status",
+            ["aguardando_aprovacao", "em_execucao", "encerrada", "rejeitada", "pendente", "aprovado", "rejeitado"],
+            default=["aguardando_aprovacao", "em_execucao", "encerrada"]
+        )
+    
+    with col2:
+        data_inicio_filtro = st.date_input(
+            "Data Início",
+            value=date.today() - timedelta(days=30)
+        )
+    
+    with col3:
+        data_fim_filtro = st.date_input(
+            "Data Fim",
+            value=date.today()
+        )
+    
+    # Buscar dados de ambas as tabelas
+    conn = None
+    horas_extras_completo = []
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Buscar de horas_extras_ativas
+        cursor.execute(f"""
+            SELECT 
+                'ativa' as origem,
+                id,
+                aprovador,
+                justificativa,
+                data_inicio,
+                hora_inicio,
+                status,
+                data_fim,
+                hora_fim,
+                tempo_decorrido_minutos,
+                data_criacao
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data_inicio BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+        
+        ativas = cursor.fetchall()
+        
+        # Buscar de solicitacoes_horas_extras
+        cursor.execute(f"""
+            SELECT 
+                'historico' as origem,
+                id,
+                aprovador_solicitado,
+                justificativa,
+                data,
+                hora_inicio,
+                status,
+                NULL as data_fim,
+                hora_fim,
+                NULL as tempo_decorrido,
+                data_solicitacao
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+        
+        historico = cursor.fetchall()
+        
+        # Combinar e filtrar por status
+        for registro in ativas + historico:
+            origem, id_reg, aprovador, justificativa, data_reg, hora_inicio, status, data_fim, hora_fim, tempo_min, data_criacao = registro
+            
+            if status in status_filtro:
+                horas_extras_completo.append({
+                    'origem': origem,
+                    'id': id_reg,
+                    'aprovador': aprovador,
+                    'justificativa': justificativa,
+                    'data': data_reg,
+                    'hora_inicio': hora_inicio,
+                    'status': status,
+                    'data_fim': data_fim,
+                    'hora_fim': hora_fim,
+                    'tempo_minutos': tempo_min,
+                    'data_criacao': data_criacao
+                })
+        
+        # Ordenar por data decrescente
+        horas_extras_completo.sort(key=lambda x: x['data'], reverse=True)
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar histórico: {str(e)}")
+        logger.error(f"Erro em historico_horas_extras_interface: {str(e)}")
+        return
+    finally:
+        if conn:
+            conn.close()
+    
+    # Exibir resumo
+    if horas_extras_completo:
+        st.markdown("### 📈 Resumo do Período")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_horas = sum([r['tempo_minutos'] or 0 for r in horas_extras_completo if r['status'] in ['encerrada', 'aprovado']]) / 60
+        aguardando = len([r for r in horas_extras_completo if r['status'] == 'aguardando_aprovacao'])
+        em_execucao = len([r for r in horas_extras_completo if r['status'] == 'em_execucao'])
+        finalizadas = len([r for r in horas_extras_completo if r['status'] in ['encerrada', 'aprovado']])
+        
+        with col1:
+            st.metric("⏱️ Total de Horas", f"{total_horas:.1f}h")
+        with col2:
+            st.metric("⏳ Aguardando", aguardando)
+        with col3:
+            st.metric("▶️ Em Execução", em_execucao)
+        with col4:
+            st.metric("✅ Finalizadas", finalizadas)
+        
+        st.markdown("---")
+        st.markdown(f"### 📋 Registros Encontrados ({len(horas_extras_completo)})")
+        
+        # Exibir registros em cards
+        for he in horas_extras_completo:
+            # Definir cor do card baseado no status
+            if he['status'] == 'aguardando_aprovacao':
+                bg_color = "#fff3cd"
+                border_color = "#ffc107"
+                icon = "⏳"
+            elif he['status'] == 'em_execucao':
+                bg_color = "#d1ecf1"
+                border_color = "#17a2b8"
+                icon = "▶️"
+            elif he['status'] in ['encerrada', 'aprovado']:
+                bg_color = "#d4edda"
+                border_color = "#28a745"
+                icon = "✅"
+            else:
+                bg_color = "#f8d7da"
+                border_color = "#dc3545"
+                icon = "❌"
+            
+            # Converter datas
+            from calculo_horas_system import safe_datetime_parse
+            data_obj = safe_datetime_parse(he['data']) if isinstance(he['data'], str) else he['data']
+            data_formatada = data_obj.strftime('%d/%m/%Y') if data_obj else 'N/A'
+            
+            hora_inicio_obj = safe_datetime_parse(he['hora_inicio']) if isinstance(he['hora_inicio'], str) else he['hora_inicio']
+            hora_inicio_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+            
+            hora_fim_formatada = 'N/A'
+            if he['hora_fim']:
+                hora_fim_obj = safe_datetime_parse(he['hora_fim']) if isinstance(he['hora_fim'], str) else he['hora_fim']
+                hora_fim_formatada = hora_fim_obj.strftime('%H:%M') if hora_fim_obj else 'N/A'
+            
+            tempo_texto = "Em andamento"
+            if he['tempo_minutos']:
+                horas = he['tempo_minutos'] // 60
+                minutos = he['tempo_minutos'] % 60
+                tempo_texto = f"{int(horas)}h {int(minutos)}min"
+            
+            st.markdown(f"""
+            <div style="
+                background: {bg_color};
+                padding: 15px;
+                border-radius: 8px;
+                border-left: 5px solid {border_color};
+                margin-bottom: 15px;
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h4 style="margin: 0; color: #333;">{icon} {data_formatada} - {he['status'].replace('_', ' ').title()}</h4>
+                    <span style="background: {border_color}; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                        {he['origem'].upper()}
+                    </span>
+                </div>
+                <p style="margin: 10px 0; color: #666;">
+                    <strong>⏰ Horário:</strong> {hora_inicio_formatada} {f'até {hora_fim_formatada}' if hora_fim_formatada != 'N/A' else ''}<br>
+                    <strong>⏱️ Duração:</strong> {tempo_texto}<br>
+                    <strong>👤 Aprovador:</strong> {he['aprovador'] if he['aprovador'] else 'Não definido'}<br>
+                    <strong>💬 Justificativa:</strong> {he['justificativa'] if he['justificativa'] else 'Não informada'}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+    else:
+        st.info("📋 Nenhum registro encontrado para os filtros selecionados")
+    
+    # Botão voltar
+    if st.button("↩️ Voltar ao Menu", use_container_width=True):
+        st.rerun()
+
+
 def horas_extras_interface(horas_extras_system):
     """Interface para solicitação e acompanhamento de horas extras"""
     st.markdown("""
@@ -1301,6 +1650,20 @@ def horas_extras_interface(horas_extras_system):
         <p>Solicite aprovação para horas extras trabalhadas</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Botão para acessar histórico completo
+    if st.button("📊 Ver Histórico Completo", use_container_width=True, type="secondary"):
+        st.session_state.ver_historico_completo = True
+        st.rerun()
+    
+    # Se clicou em ver histórico, mostrar interface de histórico
+    if st.session_state.get('ver_historico_completo'):
+        historico_horas_extras_interface()
+        # Botão para voltar
+        if st.button("↩️ Voltar para Horas Extras"):
+            del st.session_state.ver_historico_completo
+            st.rerun()
+        return
 
     tab1, tab2 = st.tabs(["📝 Nova Solicitação", "📋 Minhas Solicitações"])
 
