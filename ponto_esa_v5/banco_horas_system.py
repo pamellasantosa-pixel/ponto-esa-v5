@@ -311,11 +311,14 @@ class BancoHorasSystem:
     
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = get_connection()
-        cursor = conn.cursor()
+        eh_feriado = False  # Valor padrão
+        conn = None
         data_str = data.strftime("%Y-%m-%d")
+        
         try:
-            # Tenta com coluna 'ativo' (compatível com alguns bancos legados)
+            # Primeira tentativa com coluna 'ativo'
+            conn = get_connection()
+            cursor = conn.cursor()
             cursor.execute(
                 """
                 SELECT COUNT(*) FROM feriados 
@@ -324,14 +327,36 @@ class BancoHorasSystem:
                 (data_str,)
             )
             eh_feriado = cursor.fetchone()[0] > 0
+            conn.close()  # ✅ Fecha conexão de sucesso
+            
         except Exception:
-            # Fallback: considera feriado se houver qualquer linha na data
-            cursor.execute(
-                "SELECT COUNT(*) FROM feriados WHERE data = %s",
-                (data_str,)
-            )
-            eh_feriado = cursor.fetchone()[0] > 0
-        conn.close()
+            # ✅ Fechar conexão com erro
+            if conn:
+                try:
+                    conn.close()
+                except Exception:
+                    pass
+            
+            # ✅ NOVA CONEXÃO ISOLADA para fallback
+            conn_fallback = None
+            try:
+                conn_fallback = get_connection()  # Nova conexão limpa
+                cursor_fallback = conn_fallback.cursor()
+                cursor_fallback.execute(
+                    "SELECT COUNT(*) FROM feriados WHERE data = %s",
+                    (data_str,)
+                )
+                
+                eh_feriado = cursor_fallback.fetchone()[0] > 0
+                conn_fallback.close()
+            except Exception:
+                # Se falhar completamente, assume que não é feriado
+                eh_feriado = False
+                if conn_fallback:
+                    try:
+                        conn_fallback.close()
+                    except Exception:
+                        pass
         
         return eh_feriado
     
