@@ -21,18 +21,11 @@ jobs:
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        if [ -f requirements-pinned.txt ]; then python -m pip install -r requirements-pinned.txt; fi
+        if [ -f ponto_esa_v5/requirements-pinned.txt ]; then python -m pip install -r ponto_esa_v5/requirements-pinned.txt; fi
 
-    - name: Check Python syntax
+    - name: Run tests
       run: |
-        python -m py_compile ponto_esa_v5/app_v5_final.py
-        echo "✅ Sintaxe Python OK!"
-
-    - name: Run tests (optional)
-      continue-on-error: true
-      run: |
-        cd ponto_esa_v5
-        python -m pytest tests/ -v --tb=short || echo "Tests skipped - database not configured"
+        pytest -q
 
     - name: Upload test results
       if: always()

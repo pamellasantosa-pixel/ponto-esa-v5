@@ -4,65 +4,9 @@ Gerencia o saldo de horas dos funcionários
 """
 
 import sqlite3
-from database_postgresql import get_connection, USE_POSTGRESQL
-
-# SQL Placeholder para compatibilidade SQLite/PostgreSQL
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+from database_postgresql import get_connection
 from datetime import datetime, timedelta, date, time as time_type
 import calendar
-
-
-def safe_datetime_parse(dt_value):
-    """Converte para datetime de forma segura entre PostgreSQL e SQLite."""
-    if dt_value is None:
-        return None
-    if isinstance(dt_value, datetime):
-        return dt_value
-    if isinstance(dt_value, str):
-        try:
-            return datetime.fromisoformat(dt_value)
-        except ValueError:
-            try:
-                return datetime.strptime(dt_value, "%Y-%m-%d %H:%M:%S")
-            except ValueError:
-                return datetime.strptime(dt_value.split(".")[0], "%Y-%m-%d %H:%M:%S")
-    return dt_value
-
-
-def safe_date_parse(date_value):
-    """Converte para date de forma segura entre PostgreSQL e SQLite."""
-    if date_value is None:
-        return None
-    if isinstance(date_value, date):
-        return date_value
-    if isinstance(date_value, datetime):
-        return date_value.date()
-    if isinstance(date_value, str):
-        try:
-            return datetime.strptime(date_value, "%Y-%m-%d").date()
-        except ValueError:
-            return datetime.fromisoformat(date_value).date()
-    return date_value
-
-
-def safe_time_parse(time_value):
-    """
-    Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
-    PostgreSQL retorna time objects, SQLite retorna strings.
-    """
-    if time_value is None:
-        return datetime.strptime("08:00", "%H:%M")
-    if isinstance(time_value, time_type):
-        # PostgreSQL retorna datetime.time - converter para datetime
-        return datetime.combine(date.today(), time_value)
-    if isinstance(time_value, str):
-        # SQLite retorna string - pode ser HH:MM ou HH:MM:SS
-        try:
-            return datetime.strptime(time_value, "%H:%M:%S")
-        except ValueError:
-            return datetime.strptime(time_value, "%H:%M")
-    return time_value
-
 
 class BancoHorasSystem:
     def __init__(self):
@@ -75,9 +19,9 @@ class BancoHorasSystem:
         cursor = conn.cursor()
         
         # Buscar jornada prevista do usuário
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT jornada_inicio_previsto, jornada_fim_previsto 
-            FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}
+            FROM usuarios WHERE usuario = %s
         """, (usuario,))
         
         jornada = cursor.fetchone()
@@ -88,19 +32,33 @@ class BancoHorasSystem:
         jornada_inicio = jornada[0] or "08:00"
         jornada_fim = jornada[1] or "17:00"
         
+        def _safe_time(value, default="08:00"):
+            if isinstance(value, time_type):
+                return value
+            if isinstance(value, datetime):
+                return value.time()
+            if isinstance(value, str):
+                for fmt in ("%H:%M:%S", "%H:%M"):
+                    try:
+                        return datetime.strptime(value, fmt).time()
+                    except Exception:
+                        pass
+            # default
+            return datetime.strptime(default, "%H:%M").time()
+        
         # Calcular horas previstas por dia (descontando 1h de almoço se > 6h)
-        inicio_dt = safe_time_parse(jornada_inicio)
-        fim_dt = safe_time_parse(jornada_fim)
+        inicio_dt = datetime.combine(date.today(), _safe_time(jornada_inicio, "08:00"))
+        fim_dt = datetime.combine(date.today(), _safe_time(jornada_fim, "17:00"))
         horas_previstas_dia = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas_dia > 6:
             horas_previstas_dia -= 1  # Desconto do almoço
         
         # Buscar todos os registros do período
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT DATE(data_hora) as data, MIN(data_hora) as primeiro, MAX(data_hora) as ultimo,
                    COUNT(*) as total_registros
             FROM registros_ponto 
-            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            WHERE usuario = %s AND DATE(data_hora) BETWEEN %s AND %s
             GROUP BY DATE(data_hora)
             ORDER BY data
         """, (usuario, data_inicio, data_fim))
@@ -108,26 +66,26 @@ class BancoHorasSystem:
         registros_por_dia = cursor.fetchall()
         
         # Buscar horas extras aprovadas
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT data, hora_inicio, hora_fim FROM solicitacoes_horas_extras 
-            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'aprovado' AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
         """, (usuario, data_inicio, data_fim))
         
         horas_extras_aprovadas = cursor.fetchall()
         
         # Buscar ausências sem comprovante
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT data_inicio, data_fim FROM ausencias 
-            WHERE usuario = {SQL_PLACEHOLDER} AND nao_possui_comprovante = 1 
-            AND data_inicio <= {SQL_PLACEHOLDER} AND data_fim >= {SQL_PLACEHOLDER}
+            WHERE usuario = %s AND nao_possui_comprovante = 1 
+            AND data_inicio <= %s AND data_fim >= %s
         """, (usuario, data_fim, data_inicio))
         
         ausencias_sem_comprovante = cursor.fetchall()
         
         # Buscar atestados de horas aprovados
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT data, total_horas FROM atestado_horas 
-            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'aprovado' AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            WHERE usuario = %s AND status = 'aprovado' AND data BETWEEN %s AND %s
         """, (usuario, data_inicio, data_fim))
         
         atestados_aprovados = cursor.fetchall()
@@ -139,19 +97,36 @@ class BancoHorasSystem:
         saldo_total = 0
         
         # Processar registros de ponto
+        def _safe_date(value):
+            if isinstance(value, date):
+                return value
+            if isinstance(value, datetime):
+                return value.date()
+            try:
+                return datetime.strptime(str(value), "%Y-%m-%d").date()
+            except Exception:
+                return datetime.fromisoformat(str(value)).date()
+
+        def _safe_dt(value):
+            if isinstance(value, datetime):
+                return value
+            try:
+                return datetime.fromisoformat(str(value))
+            except Exception:
+                for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M"):
+                    try:
+                        return datetime.strptime(str(value), fmt)
+                    except Exception:
+                        pass
+            return None
+
         for registro in registros_por_dia:
-            data_reg_date = safe_date_parse(registro[0])
-            if data_reg_date is None:
-                continue
-
+            data_reg_date = _safe_date(registro[0])
             data_reg = data_reg_date.strftime("%Y-%m-%d")
-
-            primeiro = safe_datetime_parse(registro[1])
-            ultimo = safe_datetime_parse(registro[2])
-
-            if primeiro is None or ultimo is None:
-                continue
-
+            primeiro = _safe_dt(registro[1])
+            ultimo = _safe_dt(registro[2])
+            
+            # Verificar se é domingo ou feriado
             data_obj = data_reg_date
             eh_domingo = data_obj.weekday() == 6
             eh_feriado = self._eh_feriado(data_obj)
@@ -178,7 +153,7 @@ class BancoHorasSystem:
                 # Dia útil: verificar atrasos e saídas antecipadas
                 
                 # Atraso na entrada
-                entrada_prevista = datetime.combine(data_obj, safe_time_parse(jornada_inicio).time())
+                entrada_prevista = datetime.combine(data_obj, _safe_time(jornada_inicio, "08:00"))
                 if primeiro > entrada_prevista:
                     atraso = (primeiro - entrada_prevista).total_seconds() / 3600
                     extrato.append({
@@ -192,7 +167,7 @@ class BancoHorasSystem:
                     saldo_total -= atraso
                 
                 # Saída antecipada
-                saida_prevista = datetime.combine(data_obj, safe_time_parse(jornada_fim).time())
+                saida_prevista = datetime.combine(data_obj, _safe_time(jornada_fim, "17:00"))
                 if ultimo < saida_prevista:
                     saida_antecipada = (saida_prevista - ultimo).total_seconds() / 3600
                     extrato.append({
@@ -221,13 +196,12 @@ class BancoHorasSystem:
         
         # Processar horas extras aprovadas
         for he in horas_extras_aprovadas:
-            data_he_date = safe_date_parse(he[0])
-            if data_he_date is None:
-                continue
-
+            data_he_date = _safe_date(he[0])
             data_he = data_he_date.strftime("%Y-%m-%d")
-            inicio = safe_time_parse(he[1])
-            fim = safe_time_parse(he[2])
+            ini_t = _safe_time(he[1], "00:00")
+            fim_t = _safe_time(he[2], "00:00")
+            inicio = datetime.combine(date.today(), ini_t)
+            fim = datetime.combine(date.today(), fim_t)
             if fim <= inicio:
                 fim += timedelta(days=1)
             
@@ -244,11 +218,8 @@ class BancoHorasSystem:
         
         # Processar ausências sem comprovante
         for ausencia in ausencias_sem_comprovante:
-            data_inicio_aus = safe_date_parse(ausencia[0])
-            data_fim_aus = safe_date_parse(ausencia[1])
-
-            if not data_inicio_aus or not data_fim_aus:
-                continue
+            data_inicio_aus = _safe_date(ausencia[0])
+            data_fim_aus = _safe_date(ausencia[1])
             
             # Calcular dias úteis da ausência
             dias_ausencia = []
@@ -272,11 +243,7 @@ class BancoHorasSystem:
         
         # Processar atestados de horas aprovados (desconto)
         for atestado in atestados_aprovados:
-            data_at_date = safe_date_parse(atestado[0])
-            if data_at_date is None:
-                continue
-
-            data_at = data_at_date.strftime("%Y-%m-%d")
+            data_at = _safe_date(atestado[0]).strftime("%Y-%m-%d")
             horas_atestado = atestado[1]
             
             extrato.append({
@@ -322,7 +289,7 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         
-        cursor.execute(f"""
+        cursor.execute("""
             SELECT usuario, nome_completo FROM usuarios 
             WHERE ativo = 1 AND tipo = 'funcionario'
             ORDER BY nome_completo
@@ -346,34 +313,39 @@ class BancoHorasSystem:
         """Verifica se uma data é feriado"""
         eh_feriado = False  # Valor padrão
         conn = None
+        data_str = data.strftime("%Y-%m-%d")
         
         try:
+            # Primeira tentativa com coluna 'ativo'
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute(f"""
+            cursor.execute(
+                """
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = {SQL_PLACEHOLDER} AND ativo = 1
-            """, (data.strftime("%Y-%m-%d"),))
-            
+                WHERE data = %s AND ativo = 1
+                """,
+                (data_str,)
+            )
             eh_feriado = cursor.fetchone()[0] > 0
-            conn.close()
+            conn.close()  # ✅ Fecha conexão de sucesso
+            
         except Exception:
-            # Fechar conexão com erro e tentar com nova conexão
+            # ✅ Fechar conexão com erro
             if conn:
                 try:
                     conn.close()
                 except Exception:
                     pass
             
-            # Fallback: criar nova conexão e tentar sem coluna ativo
+            # ✅ NOVA CONEXÃO ISOLADA para fallback
             conn_fallback = None
             try:
-                conn_fallback = get_connection()
+                conn_fallback = get_connection()  # Nova conexão limpa
                 cursor_fallback = conn_fallback.cursor()
-                cursor_fallback.execute(f"""
-                    SELECT COUNT(*) FROM feriados 
-                    WHERE data = {SQL_PLACEHOLDER}
-                """, (data.strftime("%Y-%m-%d"),))
+                cursor_fallback.execute(
+                    "SELECT COUNT(*) FROM feriados WHERE data = %s",
+                    (data_str,)
+                )
                 
                 eh_feriado = cursor_fallback.fetchone()[0] > 0
                 conn_fallback.close()
@@ -424,4 +396,3 @@ def format_saldo_display(saldo):
         return f"❌ {format_time_duration(saldo)}"
     else:
         return "⚖️ 0h"
-

@@ -240,10 +240,12 @@ class NotificationManager:
                     )
                 ''')
 
+                # Usar placeholders compatíveis com o driver (%s para PostgreSQL)
+                placeholders = ', '.join([SQL_PLACEHOLDER] * 8)
                 cursor.execute(
-                    '''INSERT INTO notificacoes
+                    f'''INSERT INTO notificacoes
                        (id, user_id, title, message, type, timestamp, read, extra_data)
-                       VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})''',
+                       VALUES ({placeholders})''',
                     (
                         notification['id'],
                         notification['user_id'],
