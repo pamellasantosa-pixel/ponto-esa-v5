@@ -199,13 +199,13 @@ class CalculoHorasSystem:
         try:
             cursor.execute("""
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = %s AND ativo = 1
+                WHERE data = %s
             """, (data.strftime("%Y-%m-%d"),))
 
             eh_feriado = cursor.fetchone()[0] > 0
             return eh_feriado
-        except sqlite3.OperationalError:
-            # Se a tabela feriados não existir em um DB temporário, considerar não feriado
+        except Exception:
+            # Se a tabela feriados não existir ou houver erro, considerar não feriado
             return False
         finally:
             try:
@@ -220,7 +220,7 @@ class CalculoHorasSystem:
 
         cursor.execute("""
             SELECT data, nome, tipo FROM feriados 
-            WHERE data BETWEEN %s AND %s AND ativo = 1
+            WHERE data BETWEEN %s AND %s
             ORDER BY data
         """, (data_inicio, data_fim))
 
