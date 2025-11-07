@@ -9,6 +9,22 @@ from datetime import datetime, timedelta, date
 import calendar
 
 
+def safe_datetime_parse(value):
+    """Converte value para datetime de forma segura (compatível PostgreSQL/SQLite)"""
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        # Tentar formatos comuns
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+    return None
+
+
 class CalculoHorasSystem:
     def __init__(self):
         pass
@@ -52,8 +68,24 @@ class CalculoHorasSystem:
             eh_feriado = self._eh_feriado(data_obj)
 
             # Calcular horas entre primeiro e último registro
-            primeiro = datetime.strptime(registros[0][0], "%Y-%m-%d %H:%M:%S")
-            ultimo = datetime.strptime(registros[-1][0], "%Y-%m-%d %H:%M:%S")
+            primeiro = safe_datetime_parse(registros[0][0])
+            ultimo = safe_datetime_parse(registros[-1][0])
+
+            if not primeiro or not ultimo:
+                return {
+                    "horas_trabalhadas": 0,
+                    "horas_liquidas": 0,
+                    "horas_finais": 0,
+                    "desconto_almoco": 0,
+                    "desconto_atestados": 0,
+                    "eh_domingo": False,
+                    "eh_feriado": False,
+                    "multiplicador": 1,
+                    "primeiro_registro": "00:00",
+                    "ultimo_registro": "00:00",
+                    "total_registros": len(registros),
+                    "detalhes": "Erro ao processar horários"
+                }
 
             horas_trabalhadas = (ultimo - primeiro).total_seconds() / 3600
 
