@@ -346,6 +346,7 @@ class BancoHorasSystem:
         """Verifica se uma data é feriado"""
         conn = get_connection()
         cursor = conn.cursor()
+        eh_feriado = False  # Valor padrão
         
         try:
             cursor.execute(f"""
@@ -356,7 +357,10 @@ class BancoHorasSystem:
             eh_feriado = cursor.fetchone()[0] > 0
         except Exception:
             # Rollback para limpar o estado de erro da transação
-            conn.rollback()
+            try:
+                conn.rollback()
+            except Exception:
+                pass  # Se rollback falhar, ignorar
             
             # Fallback: se coluna ativo não existe, tenta sem ela
             try:
@@ -370,7 +374,10 @@ class BancoHorasSystem:
                 # Se falhar completamente, assume que não é feriado
                 eh_feriado = False
         finally:
-            conn.close()
+            try:
+                conn.close()
+            except Exception:
+                pass  # Se fechar conexão falhar, ignorar
         
         return eh_feriado
     
