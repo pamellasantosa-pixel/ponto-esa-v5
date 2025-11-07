@@ -439,13 +439,17 @@ def obter_projetos_ativos():
     return projetos
 
 
-def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro=None, latitude=None, longitude=None):
+def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro=None, hora_registro=None, latitude=None, longitude=None):
     """Registra ponto do usuário com GPS real"""
     conn = get_connection()
     cursor = conn.cursor()
 
     # Se não especificada, usar data/hora atual no fuso horário de Brasília
-    if data_registro:
+    if data_registro and hora_registro:
+        data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
+        hora_obj = datetime.strptime(hora_registro, "%H:%M:%S").time() if isinstance(hora_registro, str) else hora_registro
+        data_hora_registro = TIMEZONE_BR.localize(datetime.combine(data_obj, hora_obj))
+    elif data_registro:
         agora = get_datetime_br()
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
         data_hora_registro = TIMEZONE_BR.localize(data_obj.replace(
@@ -692,6 +696,12 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 ["Presencial", "Home Office", "Trabalho em Campo"]
             )
 
+            hora_registro = st.time_input(
+                "🕐 Horário do Registro",
+                value=datetime.now().time(),
+                help="Defina o horário do registro"
+            )
+
         with col2:
             tipo_registro = st.selectbox(
                 "⏰ Tipo de Registro",
@@ -729,10 +739,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     document.write(JSON.stringify(gps));
                 } else {
                     document.write('null');
-                }
-                </script>
-                """, height=0)
-
                 latitude = None
                 longitude = None
 
@@ -743,6 +749,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     modalidade,
                     projeto,
                     atividade,
+                    data_registro.strftime("%Y-%m-%d"),
+                    hora_registro.strftime("%H:%M:%S"),
+                    latitude,
+                    longitude
+                )   atividade,
                     data_registro.strftime("%Y-%m-%d"),
                     latitude,
                     longitude
