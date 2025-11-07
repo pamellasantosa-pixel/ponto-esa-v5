@@ -448,14 +448,17 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
     if data_registro and hora_registro:
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
         hora_obj = datetime.strptime(hora_registro, "%H:%M:%S").time() if isinstance(hora_registro, str) else hora_registro
-        data_hora_registro = TIMEZONE_BR.localize(datetime.combine(data_obj, hora_obj))
+        data_hora_registro = datetime.combine(data_obj, hora_obj)
     elif data_registro:
         agora = get_datetime_br()
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
-        data_hora_registro = TIMEZONE_BR.localize(data_obj.replace(
-            hour=agora.hour, minute=agora.minute, second=agora.second))
+        # Pegar hora/minuto/segundo de Brasília, mas salvar sem timezone
+        data_hora_registro = data_obj.replace(
+            hour=agora.hour, minute=agora.minute, second=agora.second)
     else:
-        data_hora_registro = get_datetime_br()
+        # Usar horário atual de Brasília, mas remover timezone antes de salvar
+        agora_br = get_datetime_br()
+        data_hora_registro = agora_br.replace(tzinfo=None)
 
     # Formatar localização
     if latitude and longitude:
