@@ -592,6 +592,261 @@ def tela_login():
                     st.warning("⚠️ Preencha todos os campos")
 
 
+def iniciar_hora_extra_interface():
+    """Interface para iniciar hora extra com seleção de aprovador e justificativa"""
+    from datetime import datetime
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🕐 Iniciar Hora Extra</h3>
+        <p>Solicite autorização para trabalhar além do horário previsto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Buscar gestores disponíveis para aprovação
+    gestores = obter_usuarios_para_aprovacao()
+    
+    if not gestores:
+        st.error("❌ Nenhum gestor disponível para aprovar hora extra")
+        if st.button("⬅️ Voltar"):
+            st.session_state.solicitar_horas_extras = False
+            st.rerun()
+        return
+    
+    # Mostrar informação do horário de saída previsto
+    horario_previsto = st.session_state.get('horario_saida_previsto', 'não definido')
+    st.info(f"📅 Seu horário de saída previsto para hoje: **{horario_previsto}**")
+    
+    with st.form("form_iniciar_hora_extra"):
+        st.markdown("### 👤 Selecione o Gestor para Aprovação")
+        
+        aprovador = st.selectbox(
+            "Gestor Responsável:",
+            options=[g['usuario'] for g in gestores],
+            format_func=lambda x: next(g['nome_completo'] for g in gestores if g['usuario'] == x)
+        )
+        
+        st.markdown("### 📝 Justificativa da Hora Extra")
+        justificativa = st.text_area(
+            "Por que você precisa fazer hora extra?",
+            placeholder="Ex: Finalizar relatório urgente solicitado pela diretoria para entrega amanhã...",
+            height=120,
+            help="Seja específico sobre o motivo e a urgência da hora extra"
+        )
+        
+        st.markdown("---")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            submitted = st.form_submit_button(
+                "✅ Iniciar Hora Extra", 
+                use_container_width=True, 
+                type="primary"
+            )
+        with col2:
+            cancelar = st.form_submit_button(
+                "❌ Cancelar", 
+                use_container_width=True
+            )
+        
+        if cancelar:
+            st.session_state.solicitar_horas_extras = False
+            st.rerun()
+        
+        if submitted:
+            if not justificativa.strip():
+                st.error("❌ A justificativa é obrigatória!")
+            else:
+                # Registrar hora extra ativa
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                try:
+                    agora = get_datetime_br()
+                    agora_sem_tz = agora.replace(tzinfo=None)
+                    
+                    cursor.execute(f"""
+                        INSERT INTO horas_extras_ativas
+                        (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                    """, (
+                        st.session_state.usuario,
+                        aprovador,
+                        justificativa,
+                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                        agora_sem_tz.strftime('%H:%M')
+                    ))
+                    
+                    # Obter ID da hora extra criada
+                    cursor.execute("SELECT last_insert_rowid()")
+                    hora_extra_id = cursor.fetchone()[0]
+                    
+                    conn.commit()
+                    
+                    # Criar notificação para o gestor
+                    try:
+                        from notifications import NotificationManager
+                        notif_manager = NotificationManager()
+                        notif_manager.criar_notificacao(
+                            usuario_destino=aprovador,
+                            tipo='aprovacao_hora_extra',
+                            titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
+                            mensagem=f"Justificativa: {justificativa}",
+                            dados_extras={'hora_extra_id': hora_extra_id}
+                        )
+                    except Exception as e:
+                        # Não bloquear se notificação falhar
+                        print(f"Erro ao criar notificação: {e}")
+                    
+                    st.session_state.hora_extra_ativa_id = hora_extra_id
+                    st.session_state.solicitar_horas_extras = False
+                    
+                    st.success("✅ Solicitação de hora extra enviada com sucesso!")
+                    st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
+                    st.balloons()
+                    
+                    if st.button("🔙 Voltar para o Menu Principal"):
+                        st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Erro ao registrar hora extra: {e}")
+                finally:
+                    conn.close()
+
+
+def exibir_hora_extra_em_andamento():
+    """Exibe contador de hora extra em andamento com opção de encerrar"""
+    from datetime import datetime
+    
+    # Verificar se tem hora extra ativa
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute(f"""
+        SELECT id, aprovador, justificativa, data_inicio, status
+        FROM horas_extras_ativas
+        WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
+        ORDER BY data_inicio DESC
+        LIMIT 1
+    """, (st.session_state.usuario,))
+    
+    hora_extra = cursor.fetchone()
+    conn.close()
+    
+    if not hora_extra:
+        return
+    
+    he_id, aprovador, justificativa, data_inicio, status = hora_extra
+    
+    # Calcular tempo decorrido
+    from calculo_horas_system import safe_datetime_parse
+    inicio = safe_datetime_parse(data_inicio)
+    agora = datetime.now()
+    tempo_decorrido = agora - inicio
+    
+    horas = int(tempo_decorrido.total_seconds() // 3600)
+    minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+    
+    if status == 'aguardando_aprovacao':
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                <strong>Gestor:</strong> {aprovador}<br>
+                <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
+                <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    elif status == 'em_execucao':
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                <strong>Aprovada por:</strong> {aprovador}<br>
+                <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                # Encerrar hora extra
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                try:
+                    agora = get_datetime_br()
+                    agora_sem_tz = agora.replace(tzinfo=None)
+                    tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
+                    
+                    cursor.execute(f"""
+                        UPDATE horas_extras_ativas
+                        SET status = 'encerrada',
+                            data_fim = {SQL_PLACEHOLDER},
+                            hora_fim = {SQL_PLACEHOLDER},
+                            tempo_decorrido_minutos = {SQL_PLACEHOLDER}
+                        WHERE id = {SQL_PLACEHOLDER}
+                    """, (
+                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                        agora_sem_tz.strftime('%H:%M'),
+                        tempo_total_minutos,
+                        he_id
+                    ))
+                    
+                    # Registrar na tabela de solicitações de horas extras
+                    cursor.execute(f"""
+                        INSERT INTO solicitacoes_horas_extras
+                        (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                    """, (
+                        st.session_state.usuario,
+                        inicio.strftime('%Y-%m-%d'),
+                        inicio.strftime('%H:%M'),
+                        agora_sem_tz.strftime('%H:%M'),
+                        justificativa,
+                        aprovador,
+                        aprovador,
+                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
+                    ))
+                    
+                    conn.commit()
+                    
+                    st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
+                    st.balloons()
+                    
+                    # Aguardar um pouco para mostrar a mensagem
+                    import time
+                    time.sleep(2)
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Erro ao encerrar hora extra: {e}")
+                finally:
+                    conn.close()
+        
+        with col2:
+            st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
+
+
 # Interface principal do funcionário
 def tela_funcionario():
     """Interface principal para funcionários"""
@@ -605,13 +860,51 @@ def tela_funcionario():
     </div>
     """, unsafe_allow_html=True)
 
-    # Verificar notificação de fim de jornada
-    verificacao_jornada = horas_extras_system.verificar_fim_jornada(
-        st.session_state.usuario)
-    if verificacao_jornada["deve_notificar"]:
-        st.warning(f"⏰ {verificacao_jornada['message']}")
-        if st.button("🕐 Solicitar Horas Extras"):
-            st.session_state.solicitar_horas_extras = True
+    # Exibir hora extra em andamento (se houver)
+    exibir_hora_extra_em_andamento()
+
+    # Verificar se está próximo do horário de saída (usa jornada semanal configurada)
+    from jornada_semanal_system import verificar_horario_saida_proximo
+    
+    verificacao_saida = verificar_horario_saida_proximo(
+        st.session_state.usuario, 
+        margem_minutos=30
+    )
+    
+    if verificacao_saida['proximo']:
+        minutos = verificacao_saida['minutos_restantes']
+        
+        # Criar card destacado para hora extra
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            <h3 style="margin: 0; color: white;">⏰ Horário de Saída Próximo</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                Seu horário de saída é às <strong>{verificacao_saida['horario_saida']}</strong>
+                <br>Faltam aproximadamente <strong>{minutos} minutos</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("🕐 Solicitar Hora Extra", type="primary", use_container_width=True, key="btn_solicitar_he"):
+                st.session_state.solicitar_horas_extras = True
+                st.session_state.horario_saida_previsto = verificacao_saida['horario_saida']
+                st.rerun()
+        with col2:
+            st.info(f"💡 Precisa trabalhar além das {verificacao_saida['horario_saida']}? Solicite hora extra agora!")
+    
+    # Se clicou em solicitar hora extra, mostrar formulário de solicitação
+    if st.session_state.get('solicitar_horas_extras'):
+        iniciar_hora_extra_interface()
+        return  # Não exibir resto da interface
 
     # Menu lateral
     with st.sidebar:
@@ -711,6 +1004,30 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             "📝 Descrição da Atividade",
             placeholder="Descreva brevemente a atividade realizada..."
         )
+        
+        # Alerta visual para domingo ou feriado
+        from calculo_horas_system import eh_dia_com_multiplicador
+        
+        info_dia = eh_dia_com_multiplicador(data_registro)
+        if info_dia['tem_multiplicador']:
+            if info_dia['eh_domingo'] and info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉📅 **ATENÇÃO: DOMINGO E FERIADO ({info_dia['nome_feriado']})!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
+            elif info_dia['eh_domingo']:
+                st.warning(f"""
+                ⚠️ 📅 **ATENÇÃO: DOMINGO!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
+            elif info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉 **ATENÇÃO: FERIADO - {info_dia['nome_feriado']}!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
 
         # Validação de registros
         data_str = data_registro.strftime("%Y-%m-%d")
@@ -1559,13 +1876,79 @@ def meus_registros_interface(calculo_horas_system):
         # Formatar dados para exibição
         df['Data'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%d/%m/%Y')
         df['Hora'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%H:%M')
+        df['DataObj'] = pd.to_datetime(df['Data/Hora']).dt.date
+        
+        # Adicionar informação de multiplicador para cada dia
+        from calculo_horas_system import eh_dia_com_multiplicador
+        
+        def get_badge_dia(data_obj):
+            info = eh_dia_com_multiplicador(data_obj)
+            if info['tem_multiplicador']:
+                if info['eh_domingo'] and info['eh_feriado']:
+                    return f"🎉📅 {info['nome_feriado']} (DOMINGO) - x2"
+                elif info['eh_domingo']:
+                    return "📅 DOMINGO - Horas em DOBRO (x2)"
+                elif info['eh_feriado']:
+                    return f"🎉 FERIADO: {info['nome_feriado']} - Horas em DOBRO (x2)"
+            return ""
+        
+        # Agrupar por data e exibir com destaque
+        st.markdown("### 📅 Registros Detalhados por Dia")
+        
+        for data_unica in df['DataObj'].unique():
+            registros_dia = df[df['DataObj'] == data_unica]
+            data_formatada = registros_dia.iloc[0]['Data']
+            
+            # Verificar se tem multiplicador
+            badge = get_badge_dia(data_unica)
+            
+            if badge:
+                # Exibir com destaque
+                st.markdown(f"#### {data_formatada}")
+                st.warning(f"**{badge}**")
+            else:
+                st.markdown(f"#### {data_formatada}")
+            
+            # Exibir registros do dia
+            st.dataframe(
+                registros_dia[['Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade']],
+                use_container_width=True,
+                hide_index=True
+            )
+            
+            # Calcular horas do dia
+            calculo_dia = calculo_horas_system.calcular_horas_dia(
+                st.session_state.usuario,
+                data_unica.strftime("%Y-%m-%d")
+            )
+            
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("⏱️ Horas Trabalhadas", 
+                         format_time_duration(calculo_dia.get("horas_trabalhadas", 0)))
+            with col2:
+                st.metric("💼 Horas Líquidas", 
+                         format_time_duration(calculo_dia.get("horas_liquidas", 0)))
+            with col3:
+                multiplicador = calculo_dia.get("multiplicador", 1)
+                horas_finais = calculo_dia.get("horas_finais", 0)
+                if multiplicador > 1:
+                    st.metric("✨ Total Contabilizado", 
+                             format_time_duration(horas_finais),
+                             delta=f"x{multiplicador}")
+                else:
+                    st.metric("📊 Total Contabilizado", 
+                             format_time_duration(horas_finais))
+            
+            st.markdown("---")
 
-        # Exibir tabela
-        st.dataframe(
-            df[['Data', 'Hora', 'Tipo', 'Modalidade',
-                'Projeto', 'Atividade', 'Localização']],
-            use_container_width=True
-        )
+        # Exibir tabela completa (versão antiga mantida para referência)
+        with st.expander("📊 Ver Tabela Completa (Todos os Registros)"):
+            st.dataframe(
+                df[['Data', 'Hora', 'Tipo', 'Modalidade',
+                    'Projeto', 'Atividade', 'Localização']],
+                use_container_width=True
+            )
 
         # Botão de exportação
         if st.button("📊 Exportar para Excel"):
@@ -3296,7 +3679,7 @@ def gerenciar_usuarios_interface():
                             )
 
                         # Jornada de trabalho
-                        st.markdown("**Jornada de Trabalho:**")
+                        st.markdown("**Jornada de Trabalho Padrão:**")
                         col_c, col_d = st.columns(2)
                         with col_c:
                             nova_jornada_inicio = st.time_input(
@@ -3310,6 +3693,88 @@ def gerenciar_usuarios_interface():
                                 value=ensure_time(jornada_fim, default=time(17, 0)),
                                 key=f"fim_{usuario_id}"
                             )
+
+                        # Jornada Semanal Variável
+                        st.markdown("---")
+                        st.markdown("**📅 Jornada Semanal Detalhada:**")
+                        st.info("💡 Configure horários diferentes para cada dia da semana")
+                        
+                        from jornada_semanal_system import obter_jornada_usuario, salvar_jornada_semanal
+                        
+                        jornada_atual = obter_jornada_usuario(usuario) or {}
+                        
+                        dias = {
+                            'seg': '🔵 Segunda', 'ter': '🔵 Terça', 'qua': '🔵 Quarta',
+                            'qui': '🔵 Quinta', 'sex': '🔵 Sexta', 'sab': '🟡 Sábado', 'dom': '🔴 Domingo'
+                        }
+                        
+                        jornada_config = {}
+                        
+                        for dia_key, dia_nome in dias.items():
+                            config_dia = jornada_atual.get(dia_key, {
+                                'trabalha': dia_key in ['seg', 'ter', 'qua', 'qui', 'sex'], 
+                                'inicio': '08:00', 
+                                'fim': '17:00'
+                            })
+                            
+                            col_check, col_inicio, col_fim = st.columns([2, 2, 2])
+                            
+                            with col_check:
+                                trabalha = st.checkbox(
+                                    dia_nome,
+                                    value=config_dia.get('trabalha', True),
+                                    key=f"trabalha_{dia_key}_{usuario_id}"
+                                )
+                            
+                            with col_inicio:
+                                if trabalha:
+                                    try:
+                                        hora_inicio_str = config_dia.get('inicio', '08:00')
+                                        if isinstance(hora_inicio_str, str):
+                                            hora_parts = hora_inicio_str.split(':')
+                                            hora_inicio_val = time(int(hora_parts[0]), int(hora_parts[1]))
+                                        else:
+                                            hora_inicio_val = time(8, 0)
+                                    except:
+                                        hora_inicio_val = time(8, 0)
+                                    
+                                    hora_inicio = st.time_input(
+                                        "Entrada",
+                                        value=hora_inicio_val,
+                                        key=f"inicio_{dia_key}_{usuario_id}",
+                                        label_visibility="collapsed"
+                                    )
+                                else:
+                                    hora_inicio = None
+                                    st.markdown("<small style='color: gray;'>Não trabalha</small>", unsafe_allow_html=True)
+                            
+                            with col_fim:
+                                if trabalha:
+                                    try:
+                                        hora_fim_str = config_dia.get('fim', '17:00')
+                                        if isinstance(hora_fim_str, str):
+                                            hora_parts = hora_fim_str.split(':')
+                                            hora_fim_val = time(int(hora_parts[0]), int(hora_parts[1]))
+                                        else:
+                                            hora_fim_val = time(17, 0)
+                                    except:
+                                        hora_fim_val = time(17, 0)
+                                    
+                                    hora_fim = st.time_input(
+                                        "Saída",
+                                        value=hora_fim_val,
+                                        key=f"fim_{dia_key}_{usuario_id}",
+                                        label_visibility="collapsed"
+                                    )
+                                else:
+                                    hora_fim = None
+                                    st.markdown("<small style='color: gray;'>-</small>", unsafe_allow_html=True)
+                            
+                            jornada_config[dia_key] = {
+                                'trabalha': trabalha,
+                                'inicio': hora_inicio.strftime('%H:%M') if hora_inicio else None,
+                                'fim': hora_fim.strftime('%H:%M') if hora_fim else None
+                            }
 
                         # Alteração de senha - Corrigido: removido expander aninhado
                         st.markdown("**🔑 Alterar Senha:**")
@@ -3370,6 +3835,10 @@ def gerenciar_usuarios_interface():
 
                             conn.commit()
                             conn.close()
+                            
+                            # Salvar jornada semanal
+                            from jornada_semanal_system import salvar_jornada_semanal
+                            salvar_jornada_semanal(usuario_id, jornada_config)
 
                             st.success("✅ Usuário atualizado!")
                             st.rerun()
@@ -3414,7 +3883,7 @@ def gerenciar_usuarios_interface():
                     "Tipo de Usuário:*", ["funcionario", "gestor"])
                 novo_ativo = st.checkbox("Usuário Ativo", value=True)
 
-            st.markdown("**Jornada de Trabalho:**")
+            st.markdown("**Jornada de Trabalho Padrão:**")
             col3, col4 = st.columns(2)
             with col3:
                 jornada_inicio = st.time_input(
@@ -3422,6 +3891,9 @@ def gerenciar_usuarios_interface():
             with col4:
                 jornada_fim = st.time_input(
                     "Fim da Jornada:", value=time(17, 0))
+            
+            st.markdown("---")
+            st.info("💡 **Opcional:** Configure jornada semanal detalhada após criar o usuário na aba de edição")
 
             submitted = st.form_submit_button(
                 "➕ Cadastrar Usuário", use_container_width=True)
@@ -3454,9 +3926,17 @@ def gerenciar_usuarios_interface():
                             jornada_inicio.strftime("%H:%M"),
                             jornada_fim.strftime("%H:%M")
                         ))
+                        
+                        # Obter ID do usuário recém-criado
+                        cursor.execute("SELECT last_insert_rowid()")
+                        novo_usuario_id = cursor.fetchone()[0]
 
                         conn.commit()
                         conn.close()
+                        
+                        # Copiar jornada padrão para dias úteis (seg-sex)
+                        from jornada_semanal_system import copiar_jornada_padrao_para_dias
+                        copiar_jornada_padrao_para_dias(novo_usuario_id, ['seg', 'ter', 'qua', 'qui', 'sex'])
 
                         st.success(
                             f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
