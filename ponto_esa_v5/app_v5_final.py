@@ -731,14 +731,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             if not atividade.strip():
                 st.error("❌ A descrição da atividade é obrigatória")
             else:
-                # Tentar obter coordenadas GPS via JavaScript
-                gps_coords = st.components.v1.html("""
-                <script>
-                const gps = getStoredGPS();
-                if (gps) {
-                    document.write(JSON.stringify(gps));
-                } else {
-                    document.write('null');
+                # Coordenadas GPS (simplificado - GPS desabilitado temporariamente)
                 latitude = None
                 longitude = None
 
@@ -751,10 +744,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     atividade,
                     data_registro.strftime("%Y-%m-%d"),
                     hora_registro.strftime("%H:%M:%S"),
-                    latitude,
-                    longitude
-                )   atividade,
-                    data_registro.strftime("%Y-%m-%d"),
                     latitude,
                     longitude
                 )
