@@ -320,9 +320,27 @@ def verificar_horario_saida_proximo(usuario, margem_minutos=30):
         return {'proximo': False, 'horario_saida': None, 'minutos_restantes': None}
     
     # Converter horário de saída para datetime de hoje
-    horario_saida_str = jornada_dia['fim']
-    hora, minuto = map(int, horario_saida_str.split(':'))
+    horario_saida_val = jornada_dia['fim']
+
+    def parse_hora_minuto(value):
+        if isinstance(value, time):
+            return value.hour, value.minute
+
+        value_str = str(value).strip() if value is not None else ''
+        if not value_str:
+            raise ValueError("Horário de saída inválido")
+
+        partes = value_str.split(':')
+        if len(partes) < 2:
+            raise ValueError(f"Formato de horário inesperado: {value_str}")
+
+        hora = int(partes[0])
+        minuto = int(partes[1])
+        return hora, minuto
+
+    hora, minuto = parse_hora_minuto(horario_saida_val)
     horario_saida = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+    horario_saida_str = f"{hora:02d}:{minuto:02d}"
     
     # Calcular diferença
     diferenca = horario_saida - agora
