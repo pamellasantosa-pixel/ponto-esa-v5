@@ -7,7 +7,16 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 import logging
-from database import get_connection, SQL_PLACEHOLDER
+import os
+
+# Verificar se usa PostgreSQL e importar o módulo correto
+USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+
+if USE_POSTGRESQL:
+    from database_postgresql import get_connection, SQL_PLACEHOLDER
+else:
+    from database import get_connection, SQL_PLACEHOLDER
+
 from calculo_horas_system import safe_datetime_parse
 
 logger = logging.getLogger(__name__)

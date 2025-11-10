@@ -3,8 +3,16 @@ Sistema de Jornada Semanal Variável
 Permite configurar horários diferentes para cada dia da semana
 """
 
-from database import get_connection, SQL_PLACEHOLDER
+import os
 from datetime import datetime, time
+
+# Verificar se usa PostgreSQL e importar o módulo correto
+USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+
+if USE_POSTGRESQL:
+    from database_postgresql import get_connection, SQL_PLACEHOLDER
+else:
+    from database import get_connection, SQL_PLACEHOLDER
 
 DIAS_SEMANA = {
     0: 'seg',  # Segunda-feira

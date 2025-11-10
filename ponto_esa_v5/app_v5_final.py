@@ -46,6 +46,11 @@ else:
     # SQLite usa ? como placeholder
     SQL_PLACEHOLDER = '?'
 
+# Adicionar ao namespace global para que outros módulos possam acessar
+import sys
+current_module = sys.modules[__name__]
+current_module.SQL_PLACEHOLDER = SQL_PLACEHOLDER
+
 # Adicionar o diretório atual ao path para permitir importações
 if os.path.dirname(__file__) not in sys.path:
     sys.path.insert(0, os.path.dirname(__file__))
@@ -388,11 +393,6 @@ function getStoredGPS() {
     const timestamp = sessionStorage.getItem('gps_timestamp');
     
     // Verificar se os dados são recentes (menos de 5 minutos)
-    if (lat && lng && timestamp) {
-        const age = Date.now() - parseInt(timestamp);
-        if (age < 300000) { // 5 minutos
-            return {
-                latitude: parseFloat(lat),
                 longitude: parseFloat(lng),
                 timestamp: parseInt(timestamp)
             };
