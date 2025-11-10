@@ -2063,47 +2063,53 @@ def registrar_ausencia_interface(upload_system):
             
             # Se upload foi feito, processar arquivo
             if uploaded_file is not None:
-                # Salvar arquivo usando upload_system
-                resultado = upload_system.salvar_arquivo(
-                    uploaded_file,
-                    st.session_state.usuario,
-                    'ausencias'
+                file_content = uploaded_file.read()
+                upload_result = upload_system.save_file(
+                    file_content=file_content,
+                    usuario=st.session_state.usuario,
+                    original_filename=uploaded_file.name,
+                    categoria='ausencia',
+                    relacionado_a='ausencia'
                 )
-                if resultado['success']:
-                    arquivo_comprovante = resultado['caminho']
 
-                # Registrar ausência no banco
-                conn = get_connection()
-                cursor = conn.cursor()
+                if upload_result["success"]:
+                    arquivo_comprovante = upload_result["path"]
+                else:
+                    st.error(f"❌ Erro ao enviar comprovante: {upload_result['message']}")
+                    return
 
-                try:
-                    cursor.execute("""
-                        INSERT INTO ausencias 
-                        (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        st.session_state.usuario,
-                        data_inicio.strftime("%Y-%m-%d"),
-                        data_fim.strftime("%Y-%m-%d"),
-                        tipo_ausencia,
-                        motivo,
-                        arquivo_comprovante,
-                        1 if nao_possui_comprovante else 0
-                    ))
+            # Registrar ausência no banco
+            conn = get_connection()
+            cursor = conn.cursor()
 
-                    conn.commit()
-                    st.success("✅ Ausência registrada com sucesso!")
+            try:
+                cursor.execute("""
+                    INSERT INTO ausencias 
+                    (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    st.session_state.usuario,
+                    data_inicio.strftime("%Y-%m-%d"),
+                    data_fim.strftime("%Y-%m-%d"),
+                    tipo_ausencia,
+                    motivo,
+                    arquivo_comprovante,
+                    1 if nao_possui_comprovante else 0
+                ))
 
-                    if nao_possui_comprovante:
-                        st.info(
-                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
+                conn.commit()
+                st.success("✅ Ausência registrada com sucesso!")
 
-                    st.rerun()
+                if nao_possui_comprovante:
+                    st.info(
+                        "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
 
-                except Exception as e:
-                    st.error(f"❌ Erro ao registrar ausência: {str(e)}")
-                finally:
-                    conn.close()
+                st.rerun()
+
+            except Exception as e:
+                st.error(f"❌ Erro ao registrar ausência: {str(e)}")
+            finally:
+                conn.close()
 
 
 def atestado_horas_interface(atestado_system, upload_system):
@@ -2266,8 +2272,15 @@ def atestado_horas_interface(atestado_system, upload_system):
                                 st.write(
                                     f"**Aprovado por:** {atestado['aprovado_por']}")
                             if atestado['data_aprovacao']:
+                                data_aprovacao = atestado['data_aprovacao']
+                                if isinstance(data_aprovacao, datetime):
+                                    data_aprovacao_fmt = data_aprovacao.strftime('%d/%m/%Y %H:%M')
+                                elif isinstance(data_aprovacao, date):
+                                    data_aprovacao_fmt = data_aprovacao.strftime('%d/%m/%Y')
+                                else:
+                                    data_aprovacao_fmt = str(data_aprovacao)[:16]
                                 st.write(
-                                    f"**Data aprovação:** {atestado['data_aprovacao'][:10]}")
+                                    f"**Data aprovação:** {data_aprovacao_fmt}")
 
                         if atestado['motivo']:
                             st.write(f"**Motivo:** {atestado['motivo']}")

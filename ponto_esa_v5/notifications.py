@@ -143,6 +143,21 @@ class NotificationManager:
         if len(self.active_notifications[user_id]) > 10:
             self.active_notifications[user_id] = self.active_notifications[user_id][-10:]
     
+    def add_notification(self, user_id, payload):
+        """Adiciona notificação a partir de um payload flexível."""
+        if not isinstance(payload, dict):
+            raise ValueError("payload deve ser um dicionário")
+
+        title = payload.get("title", "Notificação")
+        message = payload.get("message", "")
+        notification_type = payload.get("type", "general")
+
+        extra_data = payload.copy()
+        for field in ("title", "message", "type"):
+            extra_data.pop(field, None)
+
+        self._send_notification(user_id, title, message, notification_type, extra_data)
+
     def _save_notification_to_db(self, notification):
         """
         Salva a notificação no banco de dados
