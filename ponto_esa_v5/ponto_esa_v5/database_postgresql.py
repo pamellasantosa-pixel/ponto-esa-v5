@@ -18,6 +18,11 @@ USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 if USE_POSTGRESQL:
     import psycopg2  # type: ignore[import-not-found]
     import psycopg2.extras  # type: ignore[import-not-found]
+    # PostgreSQL usa %s como placeholder
+    SQL_PLACEHOLDER = '%s'
+else:
+    # SQLite usa ? como placeholder
+    SQL_PLACEHOLDER = '?'
 
 
 def get_connection():

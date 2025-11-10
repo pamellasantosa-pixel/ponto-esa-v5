@@ -19,8 +19,12 @@ if USE_POSTGRESQL:
         'password': os.getenv('DB_PASSWORD', 'postgres'),
         'port': os.getenv('DB_PORT', '5432')
     }
+    # PostgreSQL usa %s como placeholder
+    SQL_PLACEHOLDER = '%s'
 else:
     import sqlite3
+    # SQLite usa ? como placeholder
+    SQL_PLACEHOLDER = '?'
 
 
 def get_connection():
