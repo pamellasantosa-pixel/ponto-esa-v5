@@ -24,6 +24,10 @@ from io import BytesIO
 import sys
 from dotenv import load_dotenv
 import pytz  # Para gerenciar fusos horários
+import logging
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -882,114 +886,114 @@ def exibir_hora_extra_em_andamento():
             pass
         
         he_id, aprovador, justificativa, data_inicio, status = hora_extra
-    
-    # Calcular tempo decorrido
-    from calculo_horas_system import safe_datetime_parse
-    inicio = safe_datetime_parse(data_inicio)
-    agora = datetime.now()
-    tempo_decorrido = agora - inicio
-    
-    horas = int(tempo_decorrido.total_seconds() // 3600)
-    minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
-    
-    if status == 'aguardando_aprovacao':
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-            padding: 20px;
-            border-radius: 10px;
-            margin: 10px 0;
-            color: white;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        ">
-            <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
-            <p style="margin: 10px 0; font-size: 16px;">
-                <strong>Gestor:</strong> {aprovador}<br>
-                <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
-                <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
-                <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-    
-    elif status == 'em_execucao':
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-            padding: 20px;
-            border-radius: 10px;
-            margin: 10px 0;
-            color: white;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        ">
-            <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
-            <p style="margin: 10px 0; font-size: 16px;">
-                <strong>Aprovada por:</strong> {aprovador}<br>
-                <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
-                <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
         
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
-                # Encerrar hora extra
-                conn = get_connection()
-                cursor = conn.cursor()
-                
-                try:
-                    agora = get_datetime_br()
-                    agora_sem_tz = agora.replace(tzinfo=None)
-                    tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
-                    
-                    cursor.execute(f"""
-                        UPDATE horas_extras_ativas
-                        SET status = 'encerrada',
-                            data_fim = {SQL_PLACEHOLDER},
-                            hora_fim = {SQL_PLACEHOLDER},
-                            tempo_decorrido_minutos = {SQL_PLACEHOLDER}
-                        WHERE id = {SQL_PLACEHOLDER}
-                    """, (
-                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
-                        agora_sem_tz.strftime('%H:%M'),
-                        tempo_total_minutos,
-                        he_id
-                    ))
-                    
-                    # Registrar na tabela de solicitações de horas extras
-                    cursor.execute(f"""
-                        INSERT INTO solicitacoes_horas_extras
-                        (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
-                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                    """, (
-                        st.session_state.usuario,
-                        inicio.strftime('%Y-%m-%d'),
-                        inicio.strftime('%H:%M'),
-                        agora_sem_tz.strftime('%H:%M'),
-                        justificativa,
-                        aprovador,
-                        aprovador,
-                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
-                    ))
-                    
-                    conn.commit()
-                    
-                    st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
-                    st.balloons()
-                    
-                    # Aguardar um pouco para mostrar a mensagem
-                    import time
-                    time.sleep(2)
-                    st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Erro ao encerrar hora extra: {e}")
-                finally:
-                    conn.close()
+        # Calcular tempo decorrido
+        from calculo_horas_system import safe_datetime_parse
+        inicio = safe_datetime_parse(data_inicio)
+        agora = datetime.now()
+        tempo_decorrido = agora - inicio
         
-        with col2:
-            st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
+        horas = int(tempo_decorrido.total_seconds() // 3600)
+        minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+        
+        if status == 'aguardando_aprovacao':
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
+                <p style="margin: 10px 0; font-size: 16px;">
+                    <strong>Gestor:</strong> {aprovador}<br>
+                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                    <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
+                    <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        elif status == 'em_execucao':
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
+                <p style="margin: 10px 0; font-size: 16px;">
+                    <strong>Aprovada por:</strong> {aprovador}<br>
+                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                    <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                    # Encerrar hora extra
+                    conn_encerrar = get_connection()
+                    cursor_encerrar = conn_encerrar.cursor()
+                    
+                    try:
+                        agora = get_datetime_br()
+                        agora_sem_tz = agora.replace(tzinfo=None)
+                        tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
+                        
+                        cursor_encerrar.execute(f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'encerrada',
+                                data_fim = {SQL_PLACEHOLDER},
+                                hora_fim = {SQL_PLACEHOLDER},
+                                tempo_decorrido_minutos = {SQL_PLACEHOLDER}
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """, (
+                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                            agora_sem_tz.strftime('%H:%M'),
+                            tempo_total_minutos,
+                            he_id
+                        ))
+                        
+                        # Registrar na tabela de solicitações de horas extras
+                        cursor_encerrar.execute(f"""
+                            INSERT INTO solicitacoes_horas_extras
+                            (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        """, (
+                            st.session_state.usuario,
+                            inicio.strftime('%Y-%m-%d'),
+                            inicio.strftime('%H:%M'),
+                            agora_sem_tz.strftime('%H:%M'),
+                            justificativa,
+                            aprovador,
+                            aprovador,
+                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
+                        ))
+                        
+                        conn_encerrar.commit()
+                        
+                        st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
+                        st.balloons()
+                        
+                        # Aguardar um pouco para mostrar a mensagem
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erro ao encerrar hora extra: {e}")
+                    finally:
+                        conn_encerrar.close()
+            
+            with col2:
+                st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
     
     except Exception as e:
         logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
@@ -2164,42 +2168,44 @@ def atestado_horas_interface(atestado_system, upload_system):
                     st.error(
                         "❌ Horário de início deve ser anterior ao horário de fim")
                 else:
-                    arquivo_comprovante = None                        # Processar upload se houver e se não marcou nao_possui_comprovante
-                        if uploaded_file and not nao_possui_comprovante:
-                            upload_result = upload_system.save_file(
-                                file_content=uploaded_file.read(),
-                                usuario=st.session_state.usuario,
-                                original_filename=uploaded_file.name,
-                                categoria='atestado_horas'
-                            )
-
-                            if upload_result["success"]:
-                                arquivo_comprovante = upload_result["filename"]
-                                st.success(
-                                    f"📎 Arquivo enviado: {uploaded_file.name}")
-                            else:
-                                st.error(
-                                    f"❌ Erro no upload: {upload_result['message']}")
-
-                        # Registrar atestado
-                        resultado = atestado_system.registrar_atestado_horas(
+                    arquivo_comprovante = None
+                    
+                    # Processar upload se houver e se não marcou nao_possui_comprovante
+                    if uploaded_file and not nao_possui_comprovante:
+                        upload_result = upload_system.save_file(
+                            file_content=uploaded_file.read(),
                             usuario=st.session_state.usuario,
-                            data=data_atestado.strftime("%Y-%m-%d"),
-                            hora_inicio=hora_inicio.strftime("%H:%M"),
-                            hora_fim=hora_fim.strftime("%H:%M"),
-                            motivo=motivo,
-                            arquivo_comprovante=arquivo_comprovante,
-                            nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
-                            ) and nao_possui_comprovante else 0
+                            original_filename=uploaded_file.name,
+                            categoria='atestado_horas'
                         )
 
-                        if resultado["success"]:
-                            st.success(f"✅ {resultado['message']}")
-                            st.info(
-                                f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
-                            st.rerun()
+                        if upload_result["success"]:
+                            arquivo_comprovante = upload_result["filename"]
+                            st.success(
+                                f"📎 Arquivo enviado: {uploaded_file.name}")
                         else:
-                            st.error(f"❌ {resultado['message']}")
+                            st.error(
+                                f"❌ Erro no upload: {upload_result['message']}")
+
+                    # Registrar atestado
+                    resultado = atestado_system.registrar_atestado_horas(
+                        usuario=st.session_state.usuario,
+                        data=data_atestado.strftime("%Y-%m-%d"),
+                        hora_inicio=hora_inicio.strftime("%H:%M"),
+                        hora_fim=hora_fim.strftime("%H:%M"),
+                        motivo=motivo,
+                        arquivo_comprovante=arquivo_comprovante,
+                        nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
+                        ) and nao_possui_comprovante else 0
+                    )
+
+                    if resultado["success"]:
+                        st.success(f"✅ {resultado['message']}")
+                        st.info(
+                            f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {resultado['message']}")
 
         with tab2:
             st.subheader("📋 Meus Atestados de Horas")
