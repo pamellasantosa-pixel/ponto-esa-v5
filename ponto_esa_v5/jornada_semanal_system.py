@@ -328,17 +328,33 @@ def verificar_horario_saida_proximo(usuario, margem_minutos=30):
 
         value_str = str(value).strip() if value is not None else ''
         if not value_str:
-            raise ValueError("Horário de saída inválido")
+            return None
 
-        partes = value_str.split(':')
-        if len(partes) < 2:
-            raise ValueError(f"Formato de horário inesperado: {value_str}")
+        try:
+            # Suporta formatos ISO (ex: 17:30:00 ou 17:30:00+00:00)
+            hora_iso = datetime.fromisoformat(value_str)
+            return hora_iso.hour, hora_iso.minute
+        except (ValueError, TypeError):
+            partes = value_str.split(':')
+            if len(partes) >= 2:
+                try:
+                    return int(partes[0]), int(partes[1])
+                except ValueError:
+                    return None
+        return None
 
-        hora = int(partes[0])
-        minuto = int(partes[1])
-        return hora, minuto
+    hora_minuto = parse_hora_minuto(horario_saida_val)
+    if hora_minuto is None:
+        logger.warning(
+            "Horário de saída inválido para usuário %s: %s", usuario, horario_saida_val
+        )
+        return {
+            'proximo': False,
+            'horario_saida': None,
+            'minutos_restantes': None
+        }
 
-    hora, minuto = parse_hora_minuto(horario_saida_val)
+    hora, minuto = hora_minuto
     horario_saida = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
     horario_saida_str = f"{hora:02d}:{minuto:02d}"
     
