@@ -1787,10 +1787,25 @@ def horas_extras_interface(horas_extras_system):
         # Aplicar filtro de período
         if periodo != "Todos":
             dias = 7 if periodo == "Últimos 7 dias" else 30
-            data_limite = (get_datetime_br() - timedelta(days=dias)
-                           ).strftime("%Y-%m-%d")
+            data_limite = (get_datetime_br() - timedelta(days=dias)).date()
+
+            def parse_data_value(value):
+                if isinstance(value, datetime):
+                    return value.date()
+                if isinstance(value, date):
+                    return value
+                try:
+                    return safe_datetime_parse(value).date()
+                except Exception:
+                    try:
+                        return datetime.strptime(str(value), "%Y-%m-%d").date()
+                    except Exception:
+                        return None
+
             solicitacoes = [
-                s for s in solicitacoes if s["data"] >= data_limite]
+                s for s in solicitacoes
+                if (parsed := parse_data_value(s["data"])) is not None and parsed >= data_limite
+            ]
 
         if solicitacoes:
             for solicitacao in solicitacoes:
