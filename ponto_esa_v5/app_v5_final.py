@@ -846,31 +846,42 @@ def iniciar_hora_extra_interface():
 def exibir_hora_extra_em_andamento():
     """Exibe contador de hora extra em andamento com opção de encerrar"""
     from datetime import datetime
-    from streamlit_autorefresh import st_autorefresh
     
-    # Auto-refresh a cada 30 segundos quando há hora extra ativa
     # Verificar se tem hora extra ativa
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute(f"""
-        SELECT id, aprovador, justificativa, data_inicio, status
-        FROM horas_extras_ativas
-        WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
-        ORDER BY data_inicio DESC
-        LIMIT 1
-    """, (st.session_state.usuario,))
-    
-    hora_extra = cursor.fetchone()
-    conn.close()
-    
-    if not hora_extra:
-        return
-    
-    # Se há hora extra ativa, ativar auto-refresh de 30 segundos
-    st_autorefresh(interval=30000, key="hora_extra_counter")
-    
-    he_id, aprovador, justificativa, data_inicio, status = hora_extra
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Verificar se tabela existe (compatibilidade com bancos antigos)
+        try:
+            cursor.execute(f"""
+                SELECT id, aprovador, justificativa, data_inicio, status
+                FROM horas_extras_ativas
+                WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
+                ORDER BY data_inicio DESC
+                LIMIT 1
+            """, (st.session_state.usuario,))
+            
+            hora_extra = cursor.fetchone()
+        except Exception as e:
+            # Tabela não existe ou erro de acesso - retornar silenciosamente
+            if 'does not exist' in str(e) or 'no such table' in str(e):
+                return
+            raise e
+        
+        if not hora_extra:
+            return
+        
+        # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=30000, key="hora_extra_counter")
+        except ImportError:
+            # Biblioteca não instalada - continuar sem auto-refresh
+            pass
+        
+        he_id, aprovador, justificativa, data_inicio, status = hora_extra
     
     # Calcular tempo decorrido
     from calculo_horas_system import safe_datetime_parse
@@ -979,6 +990,12 @@ def exibir_hora_extra_em_andamento():
         
         with col2:
             st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
+    
+    except Exception as e:
+        logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
 
 
 def aprovar_hora_extra_rapida_interface():
@@ -1993,26 +2010,48 @@ def registrar_ausencia_interface(upload_system):
         motivo = st.text_area("📝 Motivo da Ausência",
                               placeholder="Descreva o motivo da ausência...")
 
-        # Removido: opção de não possuir comprovante e upload (será tratado via Atestado)
+        # Checkbox para indicar que não possui comprovante
+        nao_possui_comprovante = st.checkbox(
+            "❌ Não possuo comprovante físico no momento",
+            help="Marque se não houver documento para anexar agora"
+        )
+        
+        # Upload de comprovante (se não marcou o checkbox)
         uploaded_file = None
+        if not nao_possui_comprovante:
+            uploaded_file = st.file_uploader(
+                "📎 Anexar Comprovante (Atestado Médico, etc.)",
+                type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+                help="Tamanho máximo: 10MB"
+            )
+        else:
+            st.warning(
+                "⚠️ Ausência será registrada sem documento. "
+                "Lembre-se de apresentar o comprovante assim que possível."
+            )
 
         submitted = st.form_submit_button(
             "✅ Registrar Ausência", use_container_width=True)
 
-        if submitted:
-            if not motivo.strip():
-                st.error("❌ O motivo é obrigatório")
-            elif data_inicio > data_fim:
-                st.error(
-                    "❌ Data de início deve ser anterior ou igual à data de fim")
-            else:
-                arquivo_comprovante = None
-
-                # Não há upload de comprovante nesta tela; arquivo_comprovante permanece None.
-                # Nota: anteriormente havia um checkbox "Não possuo comprovante" aqui. Para evitar
-                # referências indefinidas e manter compatibilidade do schema, definimos o valor
-                # padrão para a coluna `nao_possui_comprovante` como 0 (falso).
-                nao_possui_comprovante = 0
+    if submitted:
+        if not motivo.strip():
+            st.error("❌ O motivo é obrigatório")
+        elif data_inicio > data_fim:
+            st.error(
+                "❌ Data de início deve ser anterior ou igual à data de fim")
+        else:
+            arquivo_comprovante = None
+            
+            # Se upload foi feito, processar arquivo
+            if uploaded_file is not None:
+                # Salvar arquivo usando upload_system
+                resultado = upload_system.salvar_arquivo(
+                    uploaded_file,
+                    st.session_state.usuario,
+                    'ausencias'
+                )
+                if resultado['success']:
+                    arquivo_comprovante = resultado['caminho']
 
                 # Registrar ausência no banco
                 conn = get_connection()
@@ -2088,48 +2127,44 @@ def atestado_horas_interface(atestado_system, upload_system):
                         st.info(
                             f"⏱️ Total de horas: {format_time_duration(total_horas)}")
 
-                    motivo = st.text_area("📝 Motivo da Ausência",
-                                          placeholder="Descreva o motivo da ausência...")
+                motivo = st.text_area("📝 Motivo da Ausência",
+                                      placeholder="Descreva o motivo da ausência...")
 
-                    # Upload de comprovante (opcional)
-                    st.markdown("📎 **Comprovante (Opcional)**")
+                # Upload de comprovante (opcional)
+                st.markdown("📎 **Comprovante**")
+                
+                # Checkbox para indicar que não possui atestado físico
+                nao_possui_comprovante = st.checkbox(
+                    "❌ Não possuo atestado físico no momento",
+                    help="Marque se não houver documento para anexar agora"
+                )
+                
+                # Mostrar upload apenas se NÃO marcou o checkbox
+                uploaded_file = None
+                if not nao_possui_comprovante:
                     uploaded_file = st.file_uploader(
                         "Anexe um comprovante (atestado médico, declaração, etc.)",
                         type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
                         help="Tamanho máximo: 10MB"
                     )
+                else:
+                    st.warning(
+                        "⚠️ Atestado será registrado sem documento. "
+                        "O gestor receberá notificação para análise. "
+                        "As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante."
+                    )
 
-                    submitted = st.form_submit_button(
-                        "✅ Registrar Atestado", use_container_width=True)
+                submitted = st.form_submit_button(
+                    "✅ Registrar Atestado", use_container_width=True)
 
-                if submitted:
-                    if not motivo.strip():
-                        st.error("❌ O motivo é obrigatório")
-                    elif hora_inicio >= hora_fim:
-                        st.error(
-                            "❌ Horário de início deve ser anterior ao horário de fim")
-                    else:
-                        arquivo_comprovante = None
-
-                        # Checkbox para indicar que não possui atestado físico
-                        nao_possui_comprovante = st.checkbox(
-                            "❌ Não possuo atestado físico",
-                            help="Marque se não houver documento a anexar"
-                        )
-
-                        # Nota explicativa (exibida sempre, antes da submissão)
-                        st.caption(
-                            "Nota: Ao marcar 'Não possuo atestado físico' o atestado será registrado sem documento. "
-                            "O gestor será notificado e as horas poderão ser lançadas como débito no banco de horas até a apresentação do comprovante."
-                        )
-
-                        if nao_possui_comprovante:
-                            # Aviso visível ao usuário quando opta por não anexar o atestado físico.
-                            st.warning(
-                                "⚠️ Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
-                            uploaded_file = None
-
-                        # Processar upload se houver e se não marcou nao_possui_comprovante
+            if submitted:
+                if not motivo.strip():
+                    st.error("❌ O motivo é obrigatório")
+                elif hora_inicio >= hora_fim:
+                    st.error(
+                        "❌ Horário de início deve ser anterior ao horário de fim")
+                else:
+                    arquivo_comprovante = None                        # Processar upload se houver e se não marcou nao_possui_comprovante
                         if uploaded_file and not nao_possui_comprovante:
                             upload_result = upload_system.save_file(
                                 file_content=uploaded_file.read(),
