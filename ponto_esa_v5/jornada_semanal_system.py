@@ -4,6 +4,7 @@ Permite configurar horários diferentes para cada dia da semana
 """
 
 import os
+import logging
 from datetime import datetime, time
 
 # Verificar se usa PostgreSQL e importar o módulo correto
@@ -13,6 +14,65 @@ if USE_POSTGRESQL:
     from database_postgresql import get_connection, SQL_PLACEHOLDER
 else:
     from database import get_connection, SQL_PLACEHOLDER
+
+logger = logging.getLogger(__name__)
+
+JORNADA_COLUMNS = [
+    ("trabalha_seg", "INTEGER DEFAULT 1"),
+    ("jornada_seg_inicio", "TIME"),
+    ("jornada_seg_fim", "TIME"),
+    ("trabalha_ter", "INTEGER DEFAULT 1"),
+    ("jornada_ter_inicio", "TIME"),
+    ("jornada_ter_fim", "TIME"),
+    ("trabalha_qua", "INTEGER DEFAULT 1"),
+    ("jornada_qua_inicio", "TIME"),
+    ("jornada_qua_fim", "TIME"),
+    ("trabalha_qui", "INTEGER DEFAULT 1"),
+    ("jornada_qui_inicio", "TIME"),
+    ("jornada_qui_fim", "TIME"),
+    ("trabalha_sex", "INTEGER DEFAULT 1"),
+    ("jornada_sex_inicio", "TIME"),
+    ("jornada_sex_fim", "TIME"),
+    ("trabalha_sab", "INTEGER DEFAULT 0"),
+    ("jornada_sab_inicio", "TIME"),
+    ("jornada_sab_fim", "TIME"),
+    ("trabalha_dom", "INTEGER DEFAULT 0"),
+    ("jornada_dom_inicio", "TIME"),
+    ("jornada_dom_fim", "TIME"),
+]
+
+
+def ensure_jornada_columns():
+    """Garante que as colunas da jornada semanal existam no banco de dados."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        if USE_POSTGRESQL:
+            for column, definition in JORNADA_COLUMNS:
+                cursor.execute(
+                    f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {column} {definition}"
+                )
+        else:
+            for column, definition in JORNADA_COLUMNS:
+                try:
+                    cursor.execute(f"ALTER TABLE usuarios ADD COLUMN {column} {definition}")
+                except Exception:
+                    # Coluna já existe (SQLite não possui IF NOT EXISTS para ADD COLUMN)
+                    continue
+
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("Não foi possível garantir colunas de jornada semanal: %s", exc)
+    finally:
+        conn.close()
+
+
+ensure_jornada_columns()
 
 DIAS_SEMANA = {
     0: 'seg',  # Segunda-feira
