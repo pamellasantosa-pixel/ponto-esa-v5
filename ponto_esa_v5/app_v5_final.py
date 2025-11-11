@@ -3229,16 +3229,16 @@ def aprovar_atestados_interface(atestado_system):
                             conn = get_connection()
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT nome_original, tamanho, tipo_mime FROM uploads WHERE id = %s",
+                                "SELECT nome_original, tamanho, tipo_arquivo FROM uploads WHERE id = %s",
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
                             conn.close()
 
                             if arquivo_info:
-                                nome_arq, tamanho, tipo_mime = arquivo_info
+                                nome_arq, tamanho, tipo_arquivo = arquivo_info
                                 st.write(
-                                    f"{get_file_icon(tipo_mime)} **{nome_arq}** ({format_file_size(tamanho)})")
+                                    f"{get_file_icon(tipo_arquivo)} **{nome_arq}** ({format_file_size(tamanho)})")
 
                                 # Botão de download
                                 from upload_system import UploadSystem
@@ -3250,12 +3250,12 @@ def aprovar_atestados_interface(atestado_system):
                                         label="⬇️ Baixar Documento",
                                         data=content,
                                         file_name=nome_arq,
-                                        mime=tipo_mime,
+                                        mime=tipo_arquivo,
                                         key=f"download_{atestado_id}"
                                     )
 
                                     # Visualização de imagem
-                                    if is_image_file(tipo_mime):
+                                    if is_image_file(tipo_arquivo):
                                         st.image(
                                             content, caption=nome_arq, width=400)
 
@@ -3818,6 +3818,12 @@ def todos_registros_interface(calculo_horas_system):
                         jornada_inicio_str = jornada[0]
                         jornada_fim_str = jornada[1]
 
+                        # Converter para string se for time object
+                        if isinstance(jornada_inicio_str, time):
+                            jornada_inicio_str = jornada_inicio_str.strftime('%H:%M')
+                        if isinstance(jornada_fim_str, time):
+                            jornada_fim_str = jornada_fim_str.strftime('%H:%M')
+
                         # Calcular horas previstas
                         h_inicio, m_inicio = map(
                             int, jornada_inicio_str.split(':'))
@@ -3931,7 +3937,7 @@ def gerenciar_arquivos_interface(upload_system):
 
     query = """
         SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
-               u.data_upload, u.tamanho, u.tipo_arquivo as tipo_mime, 
+               u.data_upload, u.tamanho, u.tipo_arquivo as tipo_arquivo, 
                us.nome_completo
         FROM uploads u
         LEFT JOIN usuarios us ON u.usuario = us.usuario
@@ -4002,9 +4008,9 @@ def gerenciar_arquivos_interface(upload_system):
         st.info(f"Exibindo {len(arquivos)} arquivo(s)")
 
         for arquivo in arquivos:
-            arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_mime, nome_completo = arquivo
+            arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_arquivo, nome_completo = arquivo
 
-            with st.expander(f"{get_file_icon(tipo_mime)} {nome} - {nome_completo or usuario}"):
+            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}"):
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
@@ -4013,7 +4019,7 @@ def gerenciar_arquivos_interface(upload_system):
                     st.write(
                         f"**Data:** {safe_datetime_parse(data).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
-                    st.write(f"**Formato:** {tipo_mime}")
+                    st.write(f"**Formato:** {tipo_arquivo}")
 
                 with col2:
                     # Botão de download
@@ -4024,7 +4030,7 @@ def gerenciar_arquivos_interface(upload_system):
                             label="⬇️ Baixar",
                             data=content,
                             file_name=nome,
-                            mime=tipo_mime,
+                            mime=tipo_arquivo,
                             use_container_width=True
                         )
 
@@ -4047,7 +4053,7 @@ def gerenciar_arquivos_interface(upload_system):
                                 st.rerun()
 
                 # Visualização de imagens
-                if is_image_file(tipo_mime):
+                if is_image_file(tipo_arquivo):
                     content = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
