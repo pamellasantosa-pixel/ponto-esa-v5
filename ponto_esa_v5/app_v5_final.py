@@ -791,60 +791,60 @@ def iniciar_hora_extra_interface():
                         st.warning(f"⚠️ Você já fez {validacao['horas_semana']:.1f}h extras esta semana. Limite: 10h")
                     
                     # Registrar hora extra ativa
-                conn = get_connection()
-                cursor = conn.cursor()
-                
-                try:
-                    agora = get_datetime_br()
-                    agora_sem_tz = agora.replace(tzinfo=None)
+                    conn = get_connection()
+                    cursor = conn.cursor()
                     
-                    cursor.execute(f"""
-                        INSERT INTO horas_extras_ativas
-                        (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
-                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
-                    """, (
-                        st.session_state.usuario,
-                        aprovador,
-                        justificativa,
-                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
-                        agora_sem_tz.strftime('%H:%M')
-                    ))
-                    
-                    # Obter ID da hora extra criada
-                    cursor.execute("SELECT last_insert_rowid()")
-                    hora_extra_id = cursor.fetchone()[0]
-                    
-                    conn.commit()
-                    
-                    # Criar notificação para o gestor
                     try:
-                        from notifications import NotificationManager
-                        notif_manager = NotificationManager()
-                        notif_manager.criar_notificacao(
-                            usuario_destino=aprovador,
-                            tipo='aprovacao_hora_extra',
-                            titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
-                            mensagem=f"Justificativa: {justificativa}",
-                            dados_extras={'hora_extra_id': hora_extra_id}
-                        )
+                        agora = get_datetime_br()
+                        agora_sem_tz = agora.replace(tzinfo=None)
+                        
+                        cursor.execute(f"""
+                            INSERT INTO horas_extras_ativas
+                            (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                        """, (
+                            st.session_state.usuario,
+                            aprovador,
+                            justificativa,
+                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                            agora_sem_tz.strftime('%H:%M')
+                        ))
+                        
+                        # Obter ID da hora extra criada
+                        cursor.execute("SELECT last_insert_rowid()")
+                        hora_extra_id = cursor.fetchone()[0]
+                        
+                        conn.commit()
+                        
+                        # Criar notificação para o gestor
+                        try:
+                            from notifications import NotificationManager
+                            notif_manager = NotificationManager()
+                            notif_manager.criar_notificacao(
+                                usuario_destino=aprovador,
+                                tipo='aprovacao_hora_extra',
+                                titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
+                                mensagem=f"Justificativa: {justificativa}",
+                                dados_extras={'hora_extra_id': hora_extra_id}
+                            )
+                        except Exception as e:
+                            # Não bloquear se notificação falhar
+                            print(f"Erro ao criar notificação: {e}")
+                        
+                        st.session_state.hora_extra_ativa_id = hora_extra_id
+                        st.session_state.solicitar_horas_extras = False
+                        
+                        st.success("✅ Solicitação de hora extra enviada com sucesso!")
+                        st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
+                        st.balloons()
+                        
+                        if st.button("🔙 Voltar para o Menu Principal"):
+                            st.rerun()
+                        
                     except Exception as e:
-                        # Não bloquear se notificação falhar
-                        print(f"Erro ao criar notificação: {e}")
-                    
-                    st.session_state.hora_extra_ativa_id = hora_extra_id
-                    st.session_state.solicitar_horas_extras = False
-                    
-                    st.success("✅ Solicitação de hora extra enviada com sucesso!")
-                    st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
-                    st.balloons()
-                    
-                    if st.button("🔙 Voltar para o Menu Principal"):
-                        st.rerun()
-                    
-                except Exception as e:
-                    st.error(f"❌ Erro ao registrar hora extra: {e}")
-                finally:
-                    conn.close()
+                        st.error(f"❌ Erro ao registrar hora extra: {e}")
+                    finally:
+                        conn.close()
 
 
 def exibir_hora_extra_em_andamento():
@@ -2669,15 +2669,21 @@ def solicitar_correcao_registro_interface():
                 col1, col2 = st.columns(2)
                 
                 with col1:
+                    # Converter data_hora para datetime se for string
+                    if isinstance(registro['data_hora'], str):
+                        data_hora_obj = datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S")
+                    else:
+                        data_hora_obj = registro['data_hora']
+                    
                     nova_data = st.date_input(
                         "📅 Nova Data",
-                        value=datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S").date()
+                        value=data_hora_obj.date()
                     )
                     
                     # Campo de texto livre para hora e minuto
                     nova_hora_input = st.text_input(
                         "🕐 Nova Hora (HH:MM)",
-                        value=datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S").strftime("%H:%M"),
+                        value=data_hora_obj.strftime("%H:%M"),
                         help="Digite no formato HH:MM (ex: 08:30, 14:45)"
                     )
                     
