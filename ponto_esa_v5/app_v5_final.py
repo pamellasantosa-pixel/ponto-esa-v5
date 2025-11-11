@@ -2687,17 +2687,45 @@ def solicitar_correcao_registro_interface():
                         help="Digite no formato HH:MM (ex: 08:30, 14:45)"
                     )
                     
+                    # Mapear tipos do banco para as opções do selectbox
+                    tipo_mapeamento = {
+                        'Início': 'inicio',
+                        'Intermediário': 'intermediario',
+                        'Fim': 'fim',
+                        'inicio': 'inicio',
+                        'intermediario': 'intermediario',
+                        'fim': 'fim'
+                    }
+                    
+                    tipo_atual = tipo_mapeamento.get(registro['tipo'], 'inicio')
+                    tipos_opcoes = ["inicio", "intermediario", "fim"]
+                    
                     novo_tipo = st.selectbox(
                         "📋 Novo Tipo",
-                        ["inicio", "intermediario", "fim"],
-                        index=["inicio", "intermediario", "fim"].index(registro['tipo'])
+                        tipos_opcoes,
+                        index=tipos_opcoes.index(tipo_atual)
                     )
 
                 with col2:
+                    # Mapear modalidades do banco para as opções
+                    modalidade_mapeamento = {
+                        'Presencial': 'presencial',
+                        'Home Office': 'home_office',
+                        'Campo': 'campo',
+                        'presencial': 'presencial',
+                        'home_office': 'home_office',
+                        'campo': 'campo',
+                        None: '',
+                        '': ''
+                    }
+                    
+                    modalidade_atual = modalidade_mapeamento.get(registro['modalidade'], '')
+                    modalidades_opcoes = ["", "presencial", "home_office", "campo"]
+                    
                     nova_modalidade = st.selectbox(
                         "🏢 Nova Modalidade",
-                        ["", "presencial", "home_office", "campo"],
-                        index=["", "presencial", "home_office", "campo"].index(registro['modalidade'] or "")
+                        modalidades_opcoes,
+                        index=modalidades_opcoes.index(modalidade_atual)
                     )
                     
                     projetos = obter_projetos_ativos()
