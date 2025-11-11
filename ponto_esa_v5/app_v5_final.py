@@ -2197,16 +2197,18 @@ def atestado_horas_interface(atestado_system, upload_system):
                             file_content=uploaded_file.read(),
                             usuario=st.session_state.usuario,
                             original_filename=uploaded_file.name,
-                            categoria='atestado_horas'
+                            categoria='atestado_horas',
+                            relacionado_a='atestado_horas'
                         )
 
                         if upload_result["success"]:
-                            arquivo_comprovante = upload_result["filename"]
+                            arquivo_comprovante = upload_result["path"]
                             st.success(
                                 f"📎 Arquivo enviado: {uploaded_file.name}")
                         else:
                             st.error(
                                 f"❌ Erro no upload: {upload_result['message']}")
+                            return
 
                     # Registrar atestado
                     resultado = atestado_system.registrar_atestado_horas(
