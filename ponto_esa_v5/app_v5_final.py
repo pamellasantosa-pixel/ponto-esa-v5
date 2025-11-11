@@ -4904,6 +4904,13 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
+    
+    # Aplicar migration da tabela uploads se necessário
+    try:
+        from apply_uploads_migration import apply_uploads_migration
+        apply_uploads_migration()
+    except Exception as e:
+        logger.warning(f"Não foi possível aplicar migration de uploads: {e}")
 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
