@@ -1233,6 +1233,7 @@ def tela_funcionario():
         opcoes_menu = [
             "🕐 Registrar Ponto",
             "📋 Meus Registros",
+            "🔧 Solicitar Correção de Registro",
             "🏥 Registrar Ausência",
             "⏰ Atestado de Horas",
             f"🕐 Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
@@ -1254,6 +1255,8 @@ def tela_funcionario():
         registrar_ponto_interface(calculo_horas_system, horas_extras_system)
     elif opcao == "📋 Meus Registros":
         meus_registros_interface(calculo_horas_system)
+    elif opcao == "🔧 Solicitar Correção de Registro":
+        solicitar_correcao_registro_interface()
     elif opcao == "🏥 Registrar Ausência":
         registrar_ausencia_interface(upload_system)
     elif opcao == "⏰ Atestado de Horas":
@@ -2137,20 +2140,34 @@ def atestado_horas_interface(atestado_system, upload_system):
                         max_value=date.today() + timedelta(days=3)
                     )
 
-                    hora_inicio = st.time_input(
-                        "🕐 Horário de Início da Ausência")
+                    # Campo de texto livre para hora de início
+                    hora_inicio_input = st.text_input(
+                        "🕐 Horário de Início da Ausência (HH:MM)",
+                        value="08:00",
+                        help="Digite no formato HH:MM (ex: 08:30, 14:45)"
+                    )
 
                 with col2:
-                    hora_fim = st.time_input("🕕 Horário de Fim da Ausência")
+                    # Campo de texto livre para hora de fim
+                    hora_fim_input = st.text_input(
+                        "🕕 Horário de Fim da Ausência (HH:MM)",
+                        value="12:00",
+                        help="Digite no formato HH:MM (ex: 12:30, 18:15)"
+                    )
 
                     # Calcular horas automaticamente
-                    if hora_inicio and hora_fim:
+                    try:
+                        hora_inicio_time = datetime.strptime(hora_inicio_input, "%H:%M").time()
+                        hora_fim_time = datetime.strptime(hora_fim_input, "%H:%M").time()
+                        
                         total_horas = atestado_system.calcular_horas_ausencia(
-                            hora_inicio.strftime("%H:%M"),
-                            hora_fim.strftime("%H:%M")
+                            hora_inicio_input,
+                            hora_fim_input
                         )
                         st.info(
                             f"⏱️ Total de horas: {format_time_duration(total_horas)}")
+                    except ValueError:
+                        st.warning("⚠️ Digite horários válidos no formato HH:MM")
 
                 motivo = st.text_area("📝 Motivo da Ausência",
                                       placeholder="Descreva o motivo da ausência...")
@@ -2185,16 +2202,57 @@ def atestado_horas_interface(atestado_system, upload_system):
             if submitted:
                 if not motivo.strip():
                     st.error("❌ O motivo é obrigatório")
-                elif hora_inicio >= hora_fim:
-                    st.error(
-                        "❌ Horário de início deve ser anterior ao horário de fim")
                 else:
-                    arquivo_comprovante = None
-                    
-                    # Processar upload se houver e se não marcou nao_possui_comprovante
-                    if uploaded_file and not nao_possui_comprovante:
-                        upload_result = upload_system.save_file(
-                            file_content=uploaded_file.read(),
+                    # Validar formato de hora
+                    try:
+                        hora_inicio_time = datetime.strptime(hora_inicio_input, "%H:%M").time()
+                        hora_fim_time = datetime.strptime(hora_fim_input, "%H:%M").time()
+                        
+                        if hora_inicio_time >= hora_fim_time:
+                            st.error("❌ Horário de início deve ser anterior ao horário de fim")
+                        else:
+                            arquivo_comprovante = None
+                            
+                            # Processar upload se houver e se não marcou nao_possui_comprovante
+                            if uploaded_file and not nao_possui_comprovante:
+                                upload_result = upload_system.save_file(
+                                    file_content=uploaded_file.read(),
+                                    usuario=st.session_state.usuario,
+                                    original_filename=uploaded_file.name,
+                                    categoria='atestado_horas',
+                                    relacionado_a='atestado_horas'
+                                )
+
+                                if upload_result["success"]:
+                                    arquivo_comprovante = upload_result["path"]
+                                    st.success(
+                                        f"📎 Arquivo enviado: {uploaded_file.name}")
+                                else:
+                                    st.error(
+                                        f"❌ Erro no upload: {upload_result['message']}")
+                                    return
+
+                            # Registrar atestado
+                            resultado = atestado_system.registrar_atestado_horas(
+                                usuario=st.session_state.usuario,
+                                data=data_atestado.strftime("%Y-%m-%d"),
+                                hora_inicio=hora_inicio_input,
+                                hora_fim=hora_fim_input,
+                                motivo=motivo,
+                                arquivo_comprovante=arquivo_comprovante,
+                                nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
+                                ) and nao_possui_comprovante else 0
+                            )
+
+                            if resultado["success"]:
+                                st.success(f"✅ {resultado['message']}")
+                                st.info(
+                                    f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                                st.rerun()
+                            else:
+                                st.error(f"❌ {resultado['message']}")
+                    except ValueError:
+                        st.error("❌ Formato de hora inválido. Use HH:MM (ex: 08:30)")
                             usuario=st.session_state.usuario,
                             original_filename=uploaded_file.name,
                             categoria='atestado_horas',
@@ -2300,6 +2358,205 @@ def atestado_horas_interface(atestado_system, upload_system):
     except Exception as e:
         st.error(f"❌ Erro na página de atestado de horas: {str(e)}")
         st.code(str(e))
+
+
+def solicitar_correcao_registro_interface():
+    """Interface para funcionários solicitarem correção de registros"""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🔧 Solicitar Correção de Registro</h3>
+        <p>Solicite correção de um registro de ponto incorreto</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    tab1, tab2 = st.tabs(["📝 Nova Solicitação", "📋 Minhas Solicitações"])
+
+    with tab1:
+        st.subheader("📝 Solicitar Correção")
+
+        # Selecionar data
+        data_corrigir = st.date_input(
+            "📅 Data do Registro a Corrigir",
+            value=date.today(),
+            max_value=date.today()
+        )
+
+        # Buscar registros do usuário nessa data
+        registros = buscar_registros_dia(
+            st.session_state.usuario, 
+            data_corrigir.strftime("%Y-%m-%d")
+        )
+
+        if registros:
+            registro_opcoes = [
+                f"{r['data_hora']} - {r['tipo']}" for r in registros
+            ]
+            
+            registro_selecionado = st.selectbox(
+                "⏰ Selecione o Registro",
+                registro_opcoes
+            )
+            
+            idx = registro_opcoes.index(registro_selecionado)
+            registro = registros[idx]
+
+            with st.form("solicitar_correcao"):
+                st.markdown("### 📝 Dados Atuais")
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    st.info(f"**Data/Hora:** {registro['data_hora']}")
+                    st.info(f"**Tipo:** {registro['tipo']}")
+                
+                with col2:
+                    st.info(f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
+                    st.info(f"**Projeto:** {registro['projeto'] or 'N/A'}")
+
+                st.markdown("### ✏️ Correção Solicitada")
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    nova_data = st.date_input(
+                        "📅 Nova Data",
+                        value=datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S").date()
+                    )
+                    
+                    # Campo de texto livre para hora e minuto
+                    nova_hora_input = st.text_input(
+                        "🕐 Nova Hora (HH:MM)",
+                        value=datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S").strftime("%H:%M"),
+                        help="Digite no formato HH:MM (ex: 08:30, 14:45)"
+                    )
+                    
+                    novo_tipo = st.selectbox(
+                        "📋 Novo Tipo",
+                        ["inicio", "intermediario", "fim"],
+                        index=["inicio", "intermediario", "fim"].index(registro['tipo'])
+                    )
+
+                with col2:
+                    nova_modalidade = st.selectbox(
+                        "🏢 Nova Modalidade",
+                        ["", "presencial", "home_office", "campo"],
+                        index=["", "presencial", "home_office", "campo"].index(registro['modalidade'] or "")
+                    )
+                    
+                    projetos = obter_projetos_ativos()
+                    novo_projeto = st.selectbox(
+                        "📊 Novo Projeto",
+                        [""] + projetos,
+                        index=(projetos.index(registro['projeto']) + 1) if registro['projeto'] in projetos else 0
+                    )
+
+                justificativa = st.text_area(
+                    "📝 Justificativa da Correção *",
+                    placeholder="Explique detalhadamente por que este registro precisa ser corrigido...",
+                    help="Campo obrigatório"
+                )
+
+                submitted = st.form_submit_button(
+                    "✅ Enviar Solicitação", 
+                    use_container_width=True
+                )
+
+                if submitted:
+                    if not justificativa.strip():
+                        st.error("❌ A justificativa é obrigatória")
+                    else:
+                        # Validar formato de hora
+                        try:
+                            hora_valida = datetime.strptime(nova_hora_input, "%H:%M").time()
+                            nova_data_hora = f"{nova_data.strftime('%Y-%m-%d')} {nova_hora_input}:00"
+                            
+                            # Salvar solicitação no banco
+                            conn = get_connection()
+                            cursor = conn.cursor()
+                            
+                            cursor.execute("""
+                                INSERT INTO solicitacoes_correcao_registro
+                                (usuario, registro_id, data_hora_original, data_hora_nova, 
+                                 tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                 projeto_original, projeto_novo, justificativa, status)
+                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
+                            """, (
+                                st.session_state.usuario,
+                                registro['id'],
+                                registro['data_hora'],
+                                nova_data_hora,
+                                registro['tipo'],
+                                novo_tipo,
+                                registro['modalidade'],
+                                nova_modalidade if nova_modalidade else None,
+                                registro['projeto'],
+                                novo_projeto if novo_projeto else None,
+                                justificativa
+                            ))
+                            
+                            conn.commit()
+                            conn.close()
+                            
+                            st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
+                            st.rerun()
+                            
+                        except ValueError:
+                            st.error("❌ Formato de hora inválido. Use HH:MM (ex: 08:30)")
+        else:
+            st.info(f"📋 Nenhum registro encontrado para {data_corrigir.strftime('%d/%m/%Y')}")
+
+    with tab2:
+        st.subheader("📋 Minhas Solicitações de Correção")
+        
+        # Buscar solicitações do usuário
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, registro_id, data_hora_original, data_hora_nova,
+                   tipo_original, tipo_novo, justificativa, status,
+                   data_solicitacao, aprovado_por, data_aprovacao, observacoes
+            FROM solicitacoes_correcao_registro
+            WHERE usuario = %s
+            ORDER BY data_solicitacao DESC
+            LIMIT 50
+        """, (st.session_state.usuario,))
+        
+        solicitacoes = cursor.fetchall()
+        conn.close()
+        
+        if solicitacoes:
+            for sol in solicitacoes:
+                sol_id, reg_id, data_orig, data_nova, tipo_orig, tipo_novo, just, status, data_sol, aprov_por, data_aprov, obs = sol
+                
+                status_emoji = {
+                    'pendente': '⏳',
+                    'aprovado': '✅',
+                    'rejeitado': '❌'
+                }.get(status, '❓')
+                
+                with st.expander(f"{status_emoji} {data_orig} → {data_nova} - {status.upper()}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Dados Originais:**")
+                        st.write(f"- Data/Hora: {data_orig}")
+                        st.write(f"- Tipo: {tipo_orig}")
+                    
+                    with col2:
+                        st.write("**Correção Solicitada:**")
+                        st.write(f"- Nova Data/Hora: {data_nova}")
+                        st.write(f"- Novo Tipo: {tipo_novo}")
+                    
+                    st.write(f"**Justificativa:** {just}")
+                    st.write(f"**Solicitado em:** {data_sol}")
+                    
+                    if status != 'pendente':
+                        st.write(f"**Aprovado por:** {aprov_por or 'N/A'}")
+                        st.write(f"**Data aprovação:** {data_aprov or 'N/A'}")
+                        if obs:
+                            st.write(f"**Observações:** {obs}")
+        else:
+            st.info("📋 Você ainda não fez nenhuma solicitação de correção")
 
 
 def corrigir_registros_interface():
