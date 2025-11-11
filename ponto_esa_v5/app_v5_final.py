@@ -1163,6 +1163,126 @@ def aprovar_hora_extra_rapida_interface():
             conn.close()
 
 
+def exibir_widget_notificacoes(horas_extras_system):
+    """Exibe widget fixo de notificações pendentes até serem respondidas"""
+    try:
+        # Buscar todas as notificações pendentes
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Solicitações de horas extras pendentes (para aprovar)
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_horas_extras 
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        he_pendentes = cursor.fetchone()[0]
+        
+        # Solicitações de correção de registro pendentes (enviadas pelo usuário)
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        correcoes_pendentes = cursor.fetchone()[0]
+        
+        # Atestados de horas pendentes (enviados pelo usuário)
+        cursor.execute("""
+            SELECT COUNT(*) FROM atestado_horas 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        atestados_pendentes = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
+        
+        if total_notificacoes > 0:
+            # Criar container de notificações fixo
+            st.markdown("""
+            <style>
+            .notification-widget {
+                background: linear-gradient(135deg, #FFA500 0%, #FF6347 100%);
+                padding: 15px 20px;
+                border-radius: 10px;
+                margin: 15px 0;
+                box-shadow: 0 4px 12px rgba(255, 99, 71, 0.3);
+                border-left: 5px solid #FF4500;
+                animation: pulse 2s infinite;
+            }
+            
+            @keyframes pulse {
+                0%, 100% { transform: scale(1); }
+                50% { transform: scale(1.02); }
+            }
+            
+            .notification-badge {
+                background: white;
+                color: #FF4500;
+                padding: 5px 12px;
+                border-radius: 20px;
+                font-weight: bold;
+                font-size: 16px;
+                display: inline-block;
+                margin-left: 10px;
+            }
+            
+            .notification-item {
+                background: rgba(255, 255, 255, 0.2);
+                padding: 8px 12px;
+                border-radius: 5px;
+                margin: 5px 0;
+                color: white;
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+            <div class="notification-widget">
+                <h3 style="margin: 0; color: white; display: inline-block;">
+                    🔔 Notificações Pendentes
+                    <span class="notification-badge">{total_notificacoes}</span>
+                </h3>
+                <p style="margin: 10px 0 5px 0; color: white; font-size: 14px;">
+                    Você tem ações aguardando resposta:
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Mostrar detalhes em colunas
+            cols = st.columns(3)
+            
+            if he_pendentes > 0:
+                with cols[0]:
+                    if st.button(f"🕐 {he_pendentes} Hora(s) Extra para Aprovar", 
+                                use_container_width=True, 
+                                type="primary",
+                                key="notif_he"):
+                        st.session_state.ir_para_notificacoes = True
+                        st.rerun()
+            
+            if correcoes_pendentes > 0:
+                with cols[1]:
+                    if st.button(f"🔧 {correcoes_pendentes} Correção(ões) Pendente(s)", 
+                                use_container_width=True,
+                                type="secondary",
+                                key="notif_correcao"):
+                        st.session_state.ir_para_correcoes = True
+                        st.rerun()
+            
+            if atestados_pendentes > 0:
+                with cols[2]:
+                    if st.button(f"⏰ {atestados_pendentes} Atestado(s) Pendente(s)", 
+                                use_container_width=True,
+                                type="secondary",
+                                key="notif_atestado"):
+                        st.session_state.ir_para_atestados = True
+                        st.rerun()
+            
+            st.markdown("---")
+    
+    except Exception as e:
+        logger.error(f"Erro ao exibir widget de notificações: {e}")
+
+
 # Interface principal do funcionário
 def tela_funcionario():
     """Interface principal para funcionários"""
@@ -1175,6 +1295,9 @@ def tela_funcionario():
         <div class="user-info">Funcionário • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Widget de notificações persistentes
+    exibir_widget_notificacoes(horas_extras_system)
 
     # Exibir hora extra em andamento (se houver)
     exibir_hora_extra_em_andamento()
@@ -1226,21 +1349,61 @@ def tela_funcionario():
     with st.sidebar:
         st.markdown("### 📋 Menu Principal")
 
-        # Contar notificações pendentes
-        notificacoes_horas_extras = horas_extras_system.contar_notificacoes_pendentes(
-            st.session_state.usuario)
+        # Contar todas as notificações pendentes
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Horas extras para aprovar
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_horas_extras 
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        he_aprovar = cursor.fetchone()[0]
+        
+        # Solicitações de correção do usuário
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        correcoes_pendentes = cursor.fetchone()[0]
+        
+        # Atestados pendentes
+        cursor.execute("""
+            SELECT COUNT(*) FROM atestado_horas 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        atestados_pendentes = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
+
+        # CSS para badges
+        st.markdown("""
+        <style>
+        .menu-badge {
+            background: #FF4500;
+            color: white;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 12px;
+            font-weight: bold;
+            margin-left: 5px;
+        }
+        </style>
+        """, unsafe_allow_html=True)
 
         opcoes_menu = [
             "🕐 Registrar Ponto",
             "📋 Meus Registros",
-            "🔧 Solicitar Correção de Registro",
+            f"🔧 Solicitar Correção de Registro{f' 🔴{correcoes_pendentes}' if correcoes_pendentes > 0 else ''}",
             "🏥 Registrar Ausência",
-            "⏰ Atestado de Horas",
-            f"🕐 Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
+            f"⏰ Atestado de Horas{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
+            f"🕐 Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
             "📊 Relatórios de Horas Extras",
             "🏦 Meu Banco de Horas",
             "📁 Meus Arquivos",
-            "🔔 Notificações"
+            f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
 
         opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
@@ -1250,16 +1413,35 @@ def tela_funcionario():
                 del st.session_state[key]
             st.rerun()
 
+    # Redirecionar se clicou em algum botão do widget de notificações
+    if st.session_state.get('ir_para_notificacoes'):
+        del st.session_state.ir_para_notificacoes
+        opcao = "🔔 Notificações"
+    elif st.session_state.get('ir_para_correcoes'):
+        del st.session_state.ir_para_correcoes
+        # Encontrar a opção correta (pode ter badge)
+        for opt in opcoes_menu:
+            if opt.startswith("🔧 Solicitar Correção"):
+                opcao = opt
+                break
+    elif st.session_state.get('ir_para_atestados'):
+        del st.session_state.ir_para_atestados
+        # Encontrar a opção correta (pode ter badge)
+        for opt in opcoes_menu:
+            if opt.startswith("⏰ Atestado de Horas"):
+                opcao = opt
+                break
+
     # Conteúdo principal baseado na opção selecionada
     if opcao == "🕐 Registrar Ponto":
         registrar_ponto_interface(calculo_horas_system, horas_extras_system)
     elif opcao == "📋 Meus Registros":
         meus_registros_interface(calculo_horas_system)
-    elif opcao == "🔧 Solicitar Correção de Registro":
+    elif opcao.startswith("🔧 Solicitar Correção"):
         solicitar_correcao_registro_interface()
     elif opcao == "🏥 Registrar Ausência":
         registrar_ausencia_interface(upload_system)
-    elif opcao == "⏰ Atestado de Horas":
+    elif opcao.startswith("⏰ Atestado de Horas"):
         atestado_horas_interface(atestado_system, upload_system)
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
@@ -1270,7 +1452,7 @@ def tela_funcionario():
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
-    elif opcao == "🔔 Notificações":
+    elif opcao.startswith("🔔 Notificações"):
         notificacoes_interface(horas_extras_system)
 
 
@@ -1935,73 +2117,194 @@ def banco_horas_funcionario_interface(banco_horas_system):
 
 
 def notificacoes_interface(horas_extras_system):
-    """Interface de notificações para aprovações pendentes"""
+    """Interface centralizada de notificações - mostra todas as pendências"""
     st.markdown("""
     <div class="feature-card">
-        <h3>🔔 Notificações</h3>
-        <p>Solicitações de horas extras aguardando sua aprovação</p>
+        <h3>🔔 Central de Notificações</h3>
+        <p>Todas as suas solicitações e aprovações pendentes</p>
     </div>
     """, unsafe_allow_html=True)
 
-    # Buscar solicitações pendentes para este usuário
-    solicitacoes_pendentes = horas_extras_system.listar_solicitacoes_para_aprovacao(
-        st.session_state.usuario)
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    # Contar notificações
+    cursor.execute("""
+        SELECT COUNT(*) FROM solicitacoes_horas_extras 
+        WHERE aprovador_solicitado = %s AND status = 'pendente'
+    """, (st.session_state.usuario,))
+    he_aprovar = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+        WHERE usuario = %s AND status = 'pendente'
+    """, (st.session_state.usuario,))
+    correcoes_pendentes = cursor.fetchone()[0]
+    
+    cursor.execute("""
+        SELECT COUNT(*) FROM atestado_horas 
+        WHERE usuario = %s AND status = 'pendente'
+    """, (st.session_state.usuario,))
+    atestados_pendentes = cursor.fetchone()[0]
+    
+    total = he_aprovar + correcoes_pendentes + atestados_pendentes
+    
+    # Resumo
+    col1, col2, col3, col4 = st.columns(4)
+    with col1:
+        st.metric("📊 Total Pendente", total)
+    with col2:
+        st.metric("🕐 Horas Extras", he_aprovar)
+    with col3:
+        st.metric("🔧 Correções", correcoes_pendentes)
+    with col4:
+        st.metric("⏰ Atestados", atestados_pendentes)
+    
+    st.markdown("---")
+    
+    tabs = st.tabs(["🕐 Horas Extras para Aprovar", "🔧 Minhas Correções", "⏰ Meus Atestados"])
+    
+    # Tab 1: Horas Extras para Aprovar
+    with tabs[0]:
+        st.subheader("🕐 Solicitações de Horas Extras Aguardando Aprovação")
+        
+        solicitacoes_pendentes = horas_extras_system.listar_solicitacoes_para_aprovacao(
+            st.session_state.usuario)
 
-    if solicitacoes_pendentes:
-        st.warning(
-            f"⚠️ Você tem {len(solicitacoes_pendentes)} solicitação(ões) de horas extras aguardando aprovação!")
+        if solicitacoes_pendentes:
+            st.warning(
+                f"⚠️ Você tem {len(solicitacoes_pendentes)} solicitação(ões) aguardando sua aprovação!")
 
-        for solicitacao in solicitacoes_pendentes:
-            with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
-                col1, col2 = st.columns([2, 1])
+            for solicitacao in solicitacoes_pendentes:
+                with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
+                    col1, col2 = st.columns([2, 1])
 
-                with col1:
-                    st.write(f"**Funcionário:** {solicitacao['usuario']}")
-                    st.write(f"**Data:** {solicitacao['data']}")
-                    st.write(
-                        f"**Horário:** {solicitacao['hora_inicio']} às {solicitacao['hora_fim']}")
-                    st.write(
-                        f"**Justificativa:** {solicitacao['justificativa']}")
-                    # data_solicitacao pode ser datetime (PostgreSQL) ou string
-                    ds_fmt = safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')
-                    st.write(f"**Solicitado em:** {ds_fmt}")
+                    with col1:
+                        st.write(f"**Funcionário:** {solicitacao['usuario']}")
+                        st.write(f"**Data:** {solicitacao['data']}")
+                        st.write(
+                            f"**Horário:** {solicitacao['hora_inicio']} às {solicitacao['hora_fim']}")
+                        st.write(
+                            f"**Justificativa:** {solicitacao['justificativa']}")
+                        ds_fmt = safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')
+                        st.write(f"**Solicitado em:** {ds_fmt}")
 
-                with col2:
-                    observacoes = st.text_area(
-                        f"Observações", key=f"obs_notif_{solicitacao['id']}")
+                    with col2:
+                        observacoes = st.text_area(
+                            f"Observações", key=f"obs_notif_{solicitacao['id']}")
 
-                    col_aprovar, col_rejeitar = st.columns(2)
-                    with col_aprovar:
-                        if st.button("✅ Aprovar", key=f"aprovar_notif_{solicitacao['id']}"):
-                            resultado = horas_extras_system.aprovar_solicitacao(
-                                solicitacao['id'],
-                                st.session_state.usuario,
-                                observacoes
-                            )
-                            if resultado["success"]:
-                                st.success("✅ Solicitação aprovada!")
-                                st.rerun()
-                            else:
-                                st.error(f"❌ {resultado['message']}")
-
-                    with col_rejeitar:
-                        if st.button("❌ Rejeitar", key=f"rejeitar_notif_{solicitacao['id']}", type="secondary"):
-                            if observacoes.strip():
-                                resultado = horas_extras_system.rejeitar_solicitacao(
+                        col_aprovar, col_rejeitar = st.columns(2)
+                        with col_aprovar:
+                            if st.button("✅ Aprovar", key=f"aprovar_notif_{solicitacao['id']}"):
+                                resultado = horas_extras_system.aprovar_solicitacao(
                                     solicitacao['id'],
                                     st.session_state.usuario,
                                     observacoes
                                 )
                                 if resultado["success"]:
-                                    st.success("❌ Solicitação rejeitada!")
+                                    st.success("✅ Solicitação aprovada!")
                                     st.rerun()
                                 else:
                                     st.error(f"❌ {resultado['message']}")
-                            else:
-                                st.warning(
-                                    "⚠️ Observações são obrigatórias para rejeição")
-    else:
-        st.info("📋 Nenhuma solicitação de horas extras aguardando sua aprovação")
+
+                        with col_rejeitar:
+                            if st.button("❌ Rejeitar", key=f"rejeitar_notif_{solicitacao['id']}", type="secondary"):
+                                if observacoes.strip():
+                                    resultado = horas_extras_system.rejeitar_solicitacao(
+                                        solicitacao['id'],
+                                        st.session_state.usuario,
+                                        observacoes
+                                    )
+                                    if resultado["success"]:
+                                        st.success("❌ Solicitação rejeitada!")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {resultado['message']}")
+                                else:
+                                    st.warning(
+                                        "⚠️ Observações são obrigatórias para rejeição")
+        else:
+            st.info("✅ Nenhuma solicitação de horas extras aguardando sua aprovação")
+    
+    # Tab 2: Correções Pendentes
+    with tabs[1]:
+        st.subheader("� Minhas Solicitações de Correção Pendentes")
+        
+        cursor.execute("""
+            SELECT id, registro_id, data_hora_original, data_hora_nova,
+                   tipo_original, tipo_novo, justificativa, 
+                   data_solicitacao
+            FROM solicitacoes_correcao_registro
+            WHERE usuario = %s AND status = 'pendente'
+            ORDER BY data_solicitacao DESC
+        """, (st.session_state.usuario,))
+        
+        correcoes = cursor.fetchall()
+        
+        if correcoes:
+            st.warning(f"⏳ Você tem {len(correcoes)} solicitação(ões) aguardando aprovação do gestor")
+            
+            for corr in correcoes:
+                sol_id, reg_id, data_orig, data_nova, tipo_orig, tipo_novo, just, data_sol = corr
+                
+                with st.expander(f"⏳ {data_orig} → {data_nova}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write("**Dados Originais:**")
+                        st.write(f"- Data/Hora: {data_orig}")
+                        st.write(f"- Tipo: {tipo_orig}")
+                    
+                    with col2:
+                        st.write("**Correção Solicitada:**")
+                        st.write(f"- Nova Data/Hora: {data_nova}")
+                        st.write(f"- Novo Tipo: {tipo_novo}")
+                    
+                    st.write(f"**Justificativa:** {just}")
+                    st.write(f"**Solicitado em:** {data_sol}")
+                    st.info("⏳ Aguardando aprovação do gestor...")
+        else:
+            st.info("✅ Nenhuma correção aguardando aprovação")
+    
+    # Tab 3: Atestados Pendentes
+    with tabs[2]:
+        st.subheader("⏰ Meus Atestados de Horas Pendentes")
+        
+        cursor.execute("""
+            SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
+                   arquivo_comprovante, data_registro
+            FROM atestado_horas
+            WHERE usuario = %s AND status = 'pendente'
+            ORDER BY data_registro DESC
+        """, (st.session_state.usuario,))
+        
+        atestados = cursor.fetchall()
+        
+        if atestados:
+            st.warning(f"⏳ Você tem {len(atestados)} atestado(s) aguardando aprovação do gestor")
+            
+            for at in atestados:
+                at_id, data, h_inicio, h_fim, total_h, motivo, arquivo, data_reg = at
+                
+                with st.expander(f"⏳ {data} - {format_time_duration(total_h)}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.write(f"**Data:** {data}")
+                        st.write(f"**Horário:** {h_inicio} às {h_fim}")
+                        st.write(f"**Total:** {format_time_duration(total_h)}")
+                    
+                    with col2:
+                        st.write(f"**Motivo:** {motivo}")
+                        st.write(f"**Registrado em:** {data_reg}")
+                        if arquivo:
+                            st.write(f"**Comprovante:** ✅ Anexado")
+                    
+                    st.info("⏳ Aguardando aprovação do gestor...")
+        else:
+            st.info("✅ Nenhum atestado aguardando aprovação")
+    
+    conn.close()
 
 # Continuar com as outras interfaces...
 
@@ -2134,40 +2437,23 @@ def atestado_horas_interface(atestado_system, upload_system):
                 col1, col2 = st.columns(2)
 
                 with col1:
-                    data_atestado = st.date_input(
-                        "📅 Data da Ausência",
-                        value=date.today(),
-                        max_value=date.today() + timedelta(days=3)
-                    )
-
-                    # Campo de texto livre para hora de início
+                    data_atestado = st.date_input("📅 Data da Ausência")
                     hora_inicio_input = st.text_input(
-                        "🕐 Horário de Início da Ausência (HH:MM)",
+                        "⏰ Horário de Início da Ausência",
                         value="08:00",
-                        help="Digite no formato HH:MM (ex: 08:30, 14:45)"
+                        help="Digite no formato HH:MM (ex: 08:30)"
                     )
 
                 with col2:
-                    # Campo de texto livre para hora de fim
+                    st.write("")  # Espaçamento
+                    st.write("")  # Espaçamento
                     hora_fim_input = st.text_input(
-                        "🕕 Horário de Fim da Ausência (HH:MM)",
+                        "⏰ Horário de Fim da Ausência",
                         value="12:00",
-                        help="Digite no formato HH:MM (ex: 12:30, 18:15)"
+                        help="Digite no formato HH:MM (ex: 17:30)"
                     )
 
-                    # Calcular horas automaticamente
-                    try:
-                        hora_inicio_time = datetime.strptime(hora_inicio_input, "%H:%M").time()
-                        hora_fim_time = datetime.strptime(hora_fim_input, "%H:%M").time()
-                        
-                        total_horas = atestado_system.calcular_horas_ausencia(
-                            hora_inicio_input,
-                            hora_fim_input
-                        )
-                        st.info(
-                            f"⏱️ Total de horas: {format_time_duration(total_horas)}")
-                    except ValueError:
-                        st.warning("⚠️ Digite horários válidos no formato HH:MM")
+                st.warning("⚠️ Digite horários válidos no formato HH:MM")
 
                 motivo = st.text_area("📝 Motivo da Ausência",
                                       placeholder="Descreva o motivo da ausência...")
@@ -2253,40 +2539,6 @@ def atestado_horas_interface(atestado_system, upload_system):
                                 st.error(f"❌ {resultado['message']}")
                     except ValueError:
                         st.error("❌ Formato de hora inválido. Use HH:MM (ex: 08:30)")
-                            usuario=st.session_state.usuario,
-                            original_filename=uploaded_file.name,
-                            categoria='atestado_horas',
-                            relacionado_a='atestado_horas'
-                        )
-
-                        if upload_result["success"]:
-                            arquivo_comprovante = upload_result["path"]
-                            st.success(
-                                f"📎 Arquivo enviado: {uploaded_file.name}")
-                        else:
-                            st.error(
-                                f"❌ Erro no upload: {upload_result['message']}")
-                            return
-
-                    # Registrar atestado
-                    resultado = atestado_system.registrar_atestado_horas(
-                        usuario=st.session_state.usuario,
-                        data=data_atestado.strftime("%Y-%m-%d"),
-                        hora_inicio=hora_inicio.strftime("%H:%M"),
-                        hora_fim=hora_fim.strftime("%H:%M"),
-                        motivo=motivo,
-                        arquivo_comprovante=arquivo_comprovante,
-                        nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
-                        ) and nao_possui_comprovante else 0
-                    )
-
-                    if resultado["success"]:
-                        st.success(f"✅ {resultado['message']}")
-                        st.info(
-                            f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
-                        st.rerun()
-                    else:
-                        st.error(f"❌ {resultado['message']}")
 
         with tab2:
             st.subheader("📋 Meus Atestados de Horas")
