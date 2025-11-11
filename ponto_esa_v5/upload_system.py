@@ -190,6 +190,9 @@ class UploadSystem:
     def save_file(self, file_content, usuario, original_filename, categoria='documento', relacionado_a=None, relacionado_id=None):
         """Salva arquivo no sistema"""
         try:
+            # Garantir que a tabela existe e tem estrutura correta
+            self.init_database()
+            
             file_size = len(file_content)
 
             # Validar arquivo
@@ -277,24 +280,41 @@ class UploadSystem:
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
-        conn = get_connection()
-        cursor = conn.cursor()
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT id, nome_original, caminho FROM uploads 
-            WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
-        ''', (file_hash, usuario))
+            # Verificar se a coluna caminho existe
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'uploads' AND column_name = 'caminho'
+            """)
+            
+            if not cursor.fetchone():
+                # Coluna não existe, não fazer verificação de duplicata
+                conn.close()
+                return None
 
-        result = cursor.fetchone()
-        conn.close()
+            cursor.execute('''
+                SELECT id, nome_original, caminho FROM uploads 
+                WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
+            ''', (file_hash, usuario))
 
-        if result:
-            return {
-                "id": result[0],
-                "nome_original": result[1],
-                "caminho": result[2]
-            }
-        return None
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                return {
+                    "id": result[0],
+                    "nome_original": result[1],
+                    "caminho": result[2]
+                }
+            return None
+        except Exception as e:
+            # Em caso de erro, apenas retornar None e permitir upload
+            print(f"Aviso ao verificar duplicata: {e}")
+            return None
 
     def get_user_uploads(self, usuario, categoria=None, relacionado_a=None, relacionado_id=None):
         """Lista uploads de um usuário"""
