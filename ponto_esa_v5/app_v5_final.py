@@ -4907,6 +4907,13 @@ def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
     
+    # Garantir que o UploadSystem tenha a estrutura correta da tabela
+    try:
+        upload_system_init = UploadSystem()
+        logger.info("✅ Sistema de uploads inicializado")
+    except Exception as e:
+        logger.error(f"Erro ao inicializar sistema de uploads: {e}")
+    
     # Aplicar migration da tabela uploads se necessário
     try:
         from apply_uploads_migration import apply_uploads_migration
