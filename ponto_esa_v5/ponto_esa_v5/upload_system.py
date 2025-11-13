@@ -214,15 +214,25 @@ class UploadSystem:
         cursor = conn.cursor()
 
         try:
-            cursor.execute('''
-                INSERT INTO uploads 
-                (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
-                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-            ''', (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
+            params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
 
-            upload_id = cursor.lastrowid
-            conn.commit()
-            return upload_id
+            # Construir query com o placeholder correto
+            query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
+
+            if USE_POSTGRESQL:
+                # Em PostgreSQL, usar RETURNING id para obter o id inserido
+                query = query + " RETURNING id"
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                upload_id = result[0] if result else None
+                conn.commit()
+                return upload_id
+            else:
+                # SQLite: executar e usar lastrowid
+                cursor.execute(query, params)
+                upload_id = cursor.lastrowid
+                conn.commit()
+                return upload_id
 
         except Exception as e:
             raise e
@@ -289,13 +299,30 @@ class UploadSystem:
         """Obtém informações de um arquivo específico"""
         conn = get_connection()
         cursor = conn.cursor()
+        # upload_id pode ser um inteiro (id) ou uma string (caminho)
+        params = []
 
-        query = f"SELECT * FROM uploads WHERE id = {SQL_PLACEHOLDER}"
-        params = [upload_id]
+        # Detectar se foi passado o caminho do arquivo em vez do id
+        use_caminho = False
+        try:
+            # Se for convertível para int, tratar como id
+            int(upload_id)
+        except Exception:
+            # Não é inteiro: provavelmente é um caminho
+            use_caminho = True
 
-        if usuario:
-            query += f" AND usuario = {SQL_PLACEHOLDER}"
-            params.append(usuario)
+        if use_caminho:
+            query = f"SELECT * FROM uploads WHERE caminho = {SQL_PLACEHOLDER}"
+            params = [upload_id]
+            if usuario:
+                query += f" AND usuario = {SQL_PLACEHOLDER}"
+                params.append(usuario)
+        else:
+            query = f"SELECT * FROM uploads WHERE id = {SQL_PLACEHOLDER}"
+            params = [int(upload_id)]
+            if usuario:
+                query += f" AND usuario = {SQL_PLACEHOLDER}"
+                params.append(usuario)
 
         cursor.execute(query, params)
         upload = cursor.fetchone()
@@ -316,8 +343,13 @@ class UploadSystem:
 
         try:
             # Verificar se arquivo pertence ao usuário
-            cursor.execute(
-                "SELECT caminho FROM uploads WHERE id = %s AND usuario = %s", (upload_id, usuario))
+            # Suporta upload_id como id ou caminho
+            try:
+                cursor.execute(
+                    "SELECT caminho FROM uploads WHERE id = %s AND usuario = %s", (int(upload_id), usuario))
+            except Exception:
+                cursor.execute(
+                    "SELECT caminho FROM uploads WHERE caminho = %s AND usuario = %s", (upload_id, usuario))
             result = cursor.fetchone()
 
             if not result:
@@ -346,6 +378,7 @@ class UploadSystem:
 
     def get_file_content(self, upload_id, usuario=None):
         """Obtém conteúdo de um arquivo para download"""
+        # Suporta upload_id como id (int) ou caminho (str)
         file_info = self.get_file_info(upload_id, usuario)
 
         if not file_info:
@@ -355,7 +388,7 @@ class UploadSystem:
             with open(file_info['caminho'], 'rb') as f:
                 content = f.read()
             return content, file_info
-        except:
+        except Exception:
             return None, None
 
     def cleanup_temp_files(self, max_age_hours=24):

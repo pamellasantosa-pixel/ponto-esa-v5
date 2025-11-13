@@ -1140,7 +1140,8 @@ def registrar_ausencia_interface(upload_system):
             st.error(f"❌ Erro no upload: {upload_result.get('message', 'desconhecido')}")
             return
 
-        arquivo_comprovante = upload_result.get("filename")
+        # Preferir armazenar o caminho completo no banco; fallback para filename se necessário
+        arquivo_comprovante = upload_result.get("path") or upload_result.get("filename")
         if arquivo_comprovante:
             st.success(f"📎 Arquivo recebido: {uploaded_file.name}")
 
@@ -2109,7 +2110,8 @@ def atestado_horas_interface(atestado_system, upload_system):
                             )
 
                             if upload_result["success"]:
-                                arquivo_comprovante = upload_result["filename"]
+                                # Armazenar o caminho completo quando disponível
+                                arquivo_comprovante = upload_result.get("path") or upload_result.get("filename")
                                 st.success(
                                     f"📎 Arquivo enviado: {uploaded_file.name}")
                             else:
@@ -3018,26 +3020,26 @@ def aprovar_atestados_interface(atestado_system):
                             st.markdown("---")
                             st.markdown("**📎 Documento Anexado:**")
 
-                            # Buscar informações do arquivo
+                            # Buscar informações do arquivo pelo caminho (caminho é armazenado em arquivo_comprovante)
                             conn = get_connection()
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT nome_original, tamanho, tipo_mime FROM uploads WHERE id = %s",
+                                "SELECT id, nome_original, tamanho, tipo_mime FROM uploads WHERE caminho = %s",
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
                             conn.close()
 
                             if arquivo_info:
-                                nome_arq, tamanho, tipo_mime = arquivo_info
+                                id_arquivo, nome_arq, tamanho, tipo_mime = arquivo_info
                                 st.write(
                                     f"{get_file_icon(tipo_mime)} **{nome_arq}** ({format_file_size(tamanho)})")
 
                                 # Botão de download
                                 from upload_system import UploadSystem
                                 upload_sys = UploadSystem()
-                                content = upload_sys.get_file_content(
-                                    arquivo_id, usuario)
+                                content, _ = upload_sys.get_file_content(
+                                    id_arquivo, usuario)
                                 if content:
                                     st.download_button(
                                         label="⬇️ Baixar Documento",
@@ -3824,7 +3826,7 @@ def gerenciar_arquivos_interface(upload_system):
 
                 with col2:
                     # Botão de download
-                    content = upload_system.get_file_content(
+                    content, _ = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
                         st.download_button(
@@ -3855,7 +3857,7 @@ def gerenciar_arquivos_interface(upload_system):
 
                 # Visualização de imagens
                 if is_image_file(tipo_mime):
-                    content = upload_system.get_file_content(
+                    content, _ = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
                         st.image(content, caption=nome, width=400)

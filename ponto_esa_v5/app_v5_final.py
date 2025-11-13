@@ -3237,6 +3237,9 @@ def tela_gestor():
     </div>
     """, unsafe_allow_html=True)
 
+    # Widget de notificações persistentes para gestor
+    exibir_widget_notificacoes(horas_extras_system)
+
     # Verificar se há solicitações de hora extra pendentes
     conn = None
     solicitacoes_pendentes_count = 0
@@ -3293,21 +3296,51 @@ def tela_gestor():
     # Menu lateral
     with st.sidebar:
         st.markdown("### 🎛️ Menu do Gestor")
-        opcao = st.selectbox(
-            "Escolha uma opção:",
-            [
-                "📊 Dashboard",
-                "👥 Todos os Registros",
-                "✅ Aprovar Atestados",
-                "🕐 Aprovar Horas Extras",
-                "🏦 Banco de Horas Geral",
-                "📁 Gerenciar Arquivos",
-                "🏢 Gerenciar Projetos",
-                "👤 Gerenciar Usuários",
-                "🔧 Corrigir Registros",
-                "⚙️ Sistema"
-            ]
-        )
+        
+        # Contar pendências para badges
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Horas extras para aprovar
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_horas_extras 
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        he_aprovar = cursor.fetchone()[0]
+        
+        # Atestados pendentes
+        cursor.execute("""
+            SELECT COUNT(*) FROM atestado_horas 
+            WHERE status = 'pendente'
+        """)
+        atestados_pendentes = cursor.fetchone()[0]
+        
+        # Correções pendentes (todas - gestor aprova todas)
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+            WHERE status = 'pendente'
+        """)
+        correcoes_pendentes = cursor.fetchone()[0]
+        
+        conn.close()
+        
+        total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
+        
+        opcoes_menu = [
+            "📊 Dashboard",
+            "👥 Todos os Registros",
+            f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
+            f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
+            "🏦 Banco de Horas Geral",
+            "📁 Gerenciar Arquivos",
+            "🏢 Gerenciar Projetos",
+            "👤 Gerenciar Usuários",
+            f"🔧 Corrigir Registros{f' 🔴{correcoes_pendentes}' if correcoes_pendentes > 0 else ''}",
+            f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}",
+            "⚙️ Sistema"
+        ]
+        
+        opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -3317,23 +3350,25 @@ def tela_gestor():
     # Conteúdo baseado na opção
     if opcao == "📊 Dashboard":
         dashboard_gestor(banco_horas_system, calculo_horas_system)
-    elif opcao == "👥 Todos os Registros":
+    elif opcao.startswith("👥 Todos os Registros"):
         todos_registros_interface(calculo_horas_system)
-    elif opcao == "✅ Aprovar Atestados":
+    elif opcao.startswith("✅ Aprovar Atestados"):
         aprovar_atestados_interface(atestado_system)
-    elif opcao == "🕐 Aprovar Horas Extras":
+    elif opcao.startswith("🕐 Aprovar Horas Extras"):
         aprovar_horas_extras_interface(horas_extras_system)
-    elif opcao == "🏦 Banco de Horas Geral":
+    elif opcao.startswith("🏦 Banco de Horas Geral"):
         banco_horas_gestor_interface(banco_horas_system)
-    elif opcao == "� Corrigir Registros":
-        corrigir_registros_interface()
-    elif opcao == "�📁 Gerenciar Arquivos":
+    elif opcao.startswith("🔧 Corrigir Registros"):
+        aprovar_correcoes_registros_interface()
+    elif opcao.startswith("📁 Gerenciar Arquivos"):
         gerenciar_arquivos_interface(upload_system)
-    elif opcao == "🏢 Gerenciar Projetos":
+    elif opcao.startswith("🏢 Gerenciar Projetos"):
         gerenciar_projetos_interface()
-    elif opcao == "👤 Gerenciar Usuários":
+    elif opcao.startswith("👤 Gerenciar Usuários"):
         gerenciar_usuarios_interface()
-    elif opcao == "⚙️ Sistema":
+    elif opcao.startswith("🔔 Notificações"):
+        notificacoes_gestor_interface(horas_extras_system, atestado_system)
+    elif opcao.startswith("⚙️ Sistema"):
         sistema_interface()
 
 
@@ -3700,6 +3735,387 @@ def aprovar_horas_extras_interface(horas_extras_system):
     else:
         st.info("📋 Nenhuma solicitação de horas extras aguardando aprovação")
 
+
+def aprovar_correcoes_registros_interface():
+    """Interface para gestor aprovar correções de registros solicitadas por funcionários"""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🔧 Aprovar Correções de Registros</h3>
+        <p>Gerencie solicitações de correção de ponto dos funcionários</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Abas para diferentes status
+    tab1, tab2, tab3 = st.tabs([
+        "⏳ Pendentes",
+        "✅ Aprovadas",
+        "❌ Rejeitadas"
+    ])
+
+    with tab1:
+        st.markdown("### ⏳ Correções Aguardando Aprovação")
+
+        # Buscar correções pendentes
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                   c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                   c.projeto_original, c.projeto_novo, c.justificativa, 
+                   c.data_solicitacao, u.nome_completo
+            FROM solicitacoes_correcao_registro c
+            LEFT JOIN usuarios u ON c.usuario = u.usuario
+            WHERE c.status = 'pendente'
+            ORDER BY c.data_solicitacao DESC
+        """)
+        pendentes = cursor.fetchall()
+        conn.close()
+
+        if pendentes:
+            st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
+
+            for correcao in pendentes:
+                (correcao_id, usuario, registro_id, dt_original, dt_nova, 
+                 tipo_orig, tipo_novo, mod_orig, mod_nova, proj_orig, proj_novo,
+                 justificativa, data_solicitacao, nome_completo) = correcao
+
+                with st.expander(f"⏳ {nome_completo or usuario} - {safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')}"):
+                    col1, col2 = st.columns([2, 1])
+
+                    with col1:
+                        st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                        st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                        
+                        st.markdown("---")
+                        st.markdown("### 🔄 Alterações Solicitadas")
+                        
+                        # Data/Hora
+                        if dt_original != dt_nova:
+                            dt_orig_fmt = safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')
+                            dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
+                            st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                        
+                        # Tipo
+                        if tipo_orig != tipo_novo:
+                            st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
+                        
+                        # Modalidade
+                        if mod_orig != mod_nova:
+                            st.markdown(f"**Modalidade:** `{mod_orig or 'N/A'}` → `{mod_nova or 'N/A'}`")
+                        
+                        # Projeto
+                        if proj_orig != proj_novo:
+                            st.markdown(f"**Projeto:** `{proj_orig or 'N/A'}` → `{proj_novo or 'N/A'}`")
+                        
+                        st.markdown("---")
+                        st.markdown("**Justificativa:**")
+                        st.info(justificativa or "Sem justificativa")
+
+                    with col2:
+                        st.markdown("### 🎯 Ações")
+
+                        # Observações do gestor
+                        observacoes = st.text_area(
+                            "Observações:",
+                            placeholder="Adicione comentários (opcional)",
+                            key=f"obs_corr_{correcao_id}",
+                            height=100
+                        )
+
+                        st.markdown("---")
+
+                        # Botões de aprovação/rejeição
+                        col_a, col_b = st.columns(2)
+
+                        with col_a:
+                            if st.button("✅ Aprovar", key=f"aprovar_corr_{correcao_id}", use_container_width=True, type="primary"):
+                                try:
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
+                                    
+                                    # Atualizar registro original com novos dados
+                                    cursor.execute("""
+                                        UPDATE registros_ponto 
+                                        SET data_hora = %s, tipo = %s, modalidade = %s, projeto = %s
+                                        WHERE id = %s
+                                    """, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
+                                    
+                                    # Marcar correção como aprovada
+                                    cursor.execute("""
+                                        UPDATE solicitacoes_correcao_registro
+                                        SET status = 'aprovado', aprovado_por = %s, 
+                                            data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                        WHERE id = %s
+                                    """, (st.session_state.usuario, observacoes, correcao_id))
+                                    
+                                    conn.commit()
+                                    conn.close()
+                                    
+                                    st.success("✅ Correção aprovada e registro atualizado!")
+                                    st.rerun()
+                                    
+                                except Exception as e:
+                                    st.error(f"❌ Erro ao aprovar: {str(e)}")
+
+                        with col_b:
+                            if st.button("❌ Rejeitar", key=f"rejeitar_corr_{correcao_id}", use_container_width=True):
+                                st.session_state[f'confirm_reject_corr_{correcao_id}'] = True
+
+                        # Confirmação de rejeição
+                        if st.session_state.get(f'confirm_reject_corr_{correcao_id}'):
+                            st.warning("⚠️ Confirmar rejeição?")
+                            motivo = st.text_area(
+                                "Motivo da rejeição:",
+                                key=f"motivo_corr_{correcao_id}",
+                                placeholder="Explique o motivo (obrigatório)"
+                            )
+
+                            col_c, col_d = st.columns(2)
+                            with col_c:
+                                if st.button("Sim, rejeitar", key=f"confirm_yes_corr_{correcao_id}"):
+                                    if not motivo:
+                                        st.error("❌ Motivo é obrigatório!")
+                                    else:
+                                        try:
+                                            conn = get_connection()
+                                            cursor = conn.cursor()
+                                            
+                                            cursor.execute("""
+                                                UPDATE solicitacoes_correcao_registro
+                                                SET status = 'rejeitado', aprovado_por = %s,
+                                                    data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                                WHERE id = %s
+                                            """, (st.session_state.usuario, motivo, correcao_id))
+                                            
+                                            conn.commit()
+                                            conn.close()
+                                            
+                                            st.success("❌ Correção rejeitada")
+                                            del st.session_state[f'confirm_reject_corr_{correcao_id}']
+                                            st.rerun()
+                                            
+                                        except Exception as e:
+                                            st.error(f"❌ Erro ao rejeitar: {str(e)}")
+
+                            with col_d:
+                                if st.button("Cancelar", key=f"confirm_no_corr_{correcao_id}"):
+                                    del st.session_state[f'confirm_reject_corr_{correcao_id}']
+                                    st.rerun()
+        else:
+            st.success("✅ Nenhuma correção aguardando aprovação!")
+
+    with tab2:
+        st.markdown("### ✅ Correções Aprovadas")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                   c.tipo_original, c.tipo_novo, c.data_solicitacao, 
+                   c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
+            FROM solicitacoes_correcao_registro c
+            LEFT JOIN usuarios u ON c.usuario = u.usuario
+            WHERE c.status = 'aprovado'
+            ORDER BY c.data_aprovacao DESC
+            LIMIT 50
+        """)
+        aprovadas = cursor.fetchall()
+        conn.close()
+        
+        if aprovadas:
+            st.info(f"✅ {len(aprovadas)} correção(ões) aprovada(s)")
+            
+            for correcao in aprovadas:
+                (correcao_id, usuario, dt_original, dt_nova, tipo_orig, tipo_novo,
+                 data_solicitacao, data_aprovacao, aprovado_por, observacoes, nome_completo) = correcao
+                
+                with st.expander(f"✅ {nome_completo or usuario} - {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y')}"):
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                        dt_orig_fmt = safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')
+                        dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
+                        st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                        if tipo_orig != tipo_novo:
+                            st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
+                    
+                    with col2:
+                        st.markdown(f"**Aprovado por:** {aprovado_por}")
+                        st.markdown(f"**Data aprovação:** {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y %H:%M')}")
+                        if observacoes:
+                            st.markdown(f"**Observações:** {observacoes}")
+        else:
+            st.info("📋 Nenhuma correção aprovada ainda")
+
+    with tab3:
+        st.markdown("### ❌ Correções Rejeitadas")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                   c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
+                   c.observacoes, u.nome_completo
+            FROM solicitacoes_correcao_registro c
+            LEFT JOIN usuarios u ON c.usuario = u.usuario
+            WHERE c.status = 'rejeitado'
+            ORDER BY c.data_aprovacao DESC
+            LIMIT 50
+        """)
+        rejeitadas = cursor.fetchall()
+        conn.close()
+        
+        if rejeitadas:
+            st.warning(f"❌ {len(rejeitadas)} correção(ões) rejeitada(s)")
+            
+            for correcao in rejeitadas:
+                (correcao_id, usuario, dt_original, dt_nova, data_solicitacao,
+                 data_rejeicao, rejeitado_por, motivo, nome_completo) = correcao
+                
+                with st.expander(f"❌ {nome_completo or usuario} - {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y')}"):
+                    st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                    st.markdown(f"**Rejeitado por:** {rejeitado_por}")
+                    st.markdown(f"**Data rejeição:** {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(f"**Motivo:** {motivo}")
+        else:
+            st.info("📋 Nenhuma correção rejeitada")
+
+
+def notificacoes_gestor_interface(horas_extras_system, atestado_system):
+    """Interface centralizada de notificações para o gestor"""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🔔 Central de Notificações</h3>
+        <p>Visualize e gerencie todas as solicitações pendentes</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    # Abas para diferentes tipos de notificações
+    tab1, tab2, tab3 = st.tabs([
+        "🕐 Horas Extras",
+        "🔧 Correções de Registro",
+        "✅ Atestados de Horas"
+    ])
+
+    with tab1:
+        st.markdown("### 🕐 Solicitações de Horas Extras Pendentes")
+        
+        # Buscar horas extras pendentes
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
+                   h.data_solicitacao, u.nome_completo
+            FROM solicitacoes_horas_extras h
+            LEFT JOIN usuarios u ON h.usuario = u.usuario
+            WHERE h.status = 'pendente'
+            ORDER BY h.data_solicitacao DESC
+        """)
+        he_pendentes = cursor.fetchall()
+        conn.close()
+        
+        if he_pendentes:
+            st.info(f"📋 {len(he_pendentes)} solicitação(ões) de horas extras")
+            
+            for he in he_pendentes:
+                he_id, usuario, data, horas, justificativa, data_solicitacao, nome_completo = he
+                
+                with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                    st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                    st.markdown(f"**Data:** {data}")
+                    st.markdown(f"**Horas:** {format_time_duration(horas)}")
+                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown("**Justificativa:**")
+                    st.info(justificativa)
+                    
+                    if st.button("Ver detalhes completos", key=f"ver_he_{he_id}"):
+                        st.session_state['opcao_menu'] = "🕐 Aprovar Horas Extras"
+                        st.rerun()
+        else:
+            st.success("✅ Nenhuma solicitação de horas extras pendente")
+
+    with tab2:
+        st.markdown("### 🔧 Solicitações de Correção de Registro Pendentes")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                   c.justificativa, c.data_solicitacao, u.nome_completo
+            FROM solicitacoes_correcao_registro c
+            LEFT JOIN usuarios u ON c.usuario = u.usuario
+            WHERE c.status = 'pendente'
+            ORDER BY c.data_solicitacao DESC
+        """)
+        corr_pendentes = cursor.fetchall()
+        conn.close()
+        
+        if corr_pendentes:
+            st.info(f"📋 {len(corr_pendentes)} solicitação(ões) de correção")
+            
+            for correcao in corr_pendentes:
+                corr_id, usuario, dt_orig, dt_nova, justificativa, data_solicitacao, nome_completo = correcao
+                
+                with st.expander(f"⏳ {nome_completo or usuario} - {safe_datetime_parse(dt_orig).strftime('%d/%m/%Y %H:%M')}"):
+                    st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                    dt_orig_fmt = safe_datetime_parse(dt_orig).strftime('%d/%m/%Y %H:%M')
+                    dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
+                    st.markdown(f"**Alteração:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown("**Justificativa:**")
+                    st.info(justificativa)
+                    
+                    if st.button("Ver detalhes completos", key=f"ver_corr_{corr_id}"):
+                        st.session_state['opcao_menu'] = "🔧 Corrigir Registros"
+                        st.rerun()
+        else:
+            st.success("✅ Nenhuma solicitação de correção pendente")
+
+    with tab3:
+        st.markdown("### ✅ Atestados de Horas Pendentes")
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT a.id, a.usuario, a.data, a.total_horas, a.motivo,
+                   a.data_registro, u.nome_completo
+            FROM atestado_horas a
+            LEFT JOIN usuarios u ON a.usuario = u.usuario
+            WHERE a.status = 'pendente'
+            ORDER BY a.data_registro DESC
+        """)
+        atestados_pendentes = cursor.fetchall()
+        conn.close()
+        
+        if atestados_pendentes:
+            st.info(f"📋 {len(atestados_pendentes)} atestado(s) pendente(s)")
+            
+            for atestado in atestados_pendentes:
+                atestado_id, usuario, data, horas, motivo, data_registro, nome_completo = atestado
+                
+                with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                    st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                    st.markdown(f"**Data:** {data_fmt}")
+                    st.markdown(f"**Horas:** {format_time_duration(horas)}")
+                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_registro).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown("**Motivo:**")
+                    st.info(motivo or "Sem motivo especificado")
+                    
+                    if st.button("Ver detalhes completos", key=f"ver_atestado_{atestado_id}"):
+                        st.session_state['opcao_menu'] = "✅ Aprovar Atestados"
+                        st.rerun()
+        else:
+            st.success("✅ Nenhum atestado pendente")
+
+
 # Outras interfaces do gestor (simplificadas)
 
 
@@ -3768,18 +4184,18 @@ def aprovar_atestados_interface(atestado_system):
                             st.markdown("---")
                             st.markdown("**📎 Documento Anexado:**")
 
-                            # Buscar informações do arquivo
+                            # Buscar informações do arquivo pelo caminho
                             conn = get_connection()
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT nome_original, tamanho, tipo_arquivo FROM uploads WHERE id = %s",
+                                "SELECT id, nome_original, tamanho, tipo_arquivo FROM uploads WHERE caminho = %s",
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
                             conn.close()
 
                             if arquivo_info:
-                                nome_arq, tamanho, tipo_arquivo = arquivo_info
+                                id_arquivo, nome_arq, tamanho, tipo_arquivo = arquivo_info
                                 st.write(
                                     f"{get_file_icon(tipo_arquivo)} **{nome_arq}** ({format_file_size(tamanho)})")
 
@@ -3787,7 +4203,7 @@ def aprovar_atestados_interface(atestado_system):
                                 from upload_system import UploadSystem
                                 upload_sys = UploadSystem()
                                 content = upload_sys.get_file_content(
-                                    arquivo_id, usuario)
+                                    id_arquivo, usuario)
                                 if content:
                                     st.download_button(
                                         label="⬇️ Baixar Documento",
@@ -3801,6 +4217,10 @@ def aprovar_atestados_interface(atestado_system):
                                     if is_image_file(tipo_arquivo):
                                         st.image(
                                             content, caption=nome_arq, width=400)
+                            else:
+                                st.warning(f"⚠️ Arquivo não encontrado no sistema: {arquivo_id}")
+                        else:
+                            st.info("ℹ️ Sem comprovante anexado")
 
                     with col2:
                         st.markdown("### 🎯 Ações")
