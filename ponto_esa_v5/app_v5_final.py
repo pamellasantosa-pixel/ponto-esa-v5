@@ -4202,7 +4202,7 @@ def aprovar_atestados_interface(atestado_system):
                                 # Botão de download
                                 from upload_system import UploadSystem
                                 upload_sys = UploadSystem()
-                                content = upload_sys.get_file_content(
+                                content, _ = upload_sys.get_file_content(
                                     id_arquivo, usuario)
                                 if content:
                                     st.download_button(
@@ -4986,7 +4986,7 @@ def gerenciar_arquivos_interface(upload_system):
 
                 with col2:
                     # Botão de download
-                    content = upload_system.get_file_content(
+                    content, _ = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
                         st.download_button(
@@ -5017,7 +5017,7 @@ def gerenciar_arquivos_interface(upload_system):
 
                 # Visualização de imagens
                 if is_image_file(tipo_arquivo):
-                    content = upload_system.get_file_content(
+                    content, _ = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
                         st.image(content, caption=nome, width=400)
