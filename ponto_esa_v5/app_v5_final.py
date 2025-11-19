@@ -5306,12 +5306,22 @@ def todos_registros_interface(calculo_horas_system):
 
     with col1:
         # Buscar lista de usuários
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
-        usuarios_list = cursor.fetchall()
-        conn.close()
+        usuarios_list = None
+        
+        if REFACTORING_ENABLED:
+            try:
+                query_usuarios = "SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo"
+                usuarios_list = execute_query(query_usuarios)
+            except Exception as e:
+                log_error("Erro ao buscar lista de usuários para filtro", e, {"tipo": "funcionario"})
+                usuarios_list = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
+            usuarios_list = cursor.fetchall()
+            conn.close()
 
         usuario_options = ["Todos"] + \
             [f"{u[1] or u[0]} ({u[0]})" for u in usuarios_list]
@@ -5337,35 +5347,67 @@ def todos_registros_interface(calculo_horas_system):
         )
 
     # Buscar registros
-    conn = get_connection()
-    cursor = conn.cursor()
+    registros = None
+    
+    if REFACTORING_ENABLED:
+        try:
+            query = """
+                SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
+                       r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
+                       u.nome_completo
+                FROM registros_ponto r
+                LEFT JOIN usuarios u ON r.usuario = u.usuario
+                WHERE DATE(r.data_hora) BETWEEN %s AND %s
+            """
+            params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
 
-    query = """
-        SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
-               r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
-               u.nome_completo
-        FROM registros_ponto r
-        LEFT JOIN usuarios u ON r.usuario = u.usuario
-        WHERE DATE(r.data_hora) BETWEEN %s AND %s
-    """
-    params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
+            # Aplicar filtro de usuário
+            if usuario_filter != "Todos":
+                usuario_login = usuario_filter.split("(")[1].rstrip(")")
+                query += " AND r.usuario = %s"
+                params.append(usuario_login)
 
-    # Aplicar filtro de usuário
-    if usuario_filter != "Todos":
-        usuario_login = usuario_filter.split("(")[1].rstrip(")")
-        query += " AND r.usuario = %s"
-        params.append(usuario_login)
+            # Aplicar filtro de tipo
+            if tipo_registro != "Todos":
+                query += " AND r.tipo = %s"
+                params.append(tipo_registro)
 
-    # Aplicar filtro de tipo
-    if tipo_registro != "Todos":
-        query += " AND r.tipo = %s"
-        params.append(tipo_registro)
+            query += " ORDER BY r.data_hora DESC LIMIT 500"
 
-    query += " ORDER BY r.data_hora DESC LIMIT 500"
+            registros = execute_query(query, tuple(params))
+        except Exception as e:
+            log_error("Erro ao buscar registros de ponto", e, {"filtros": "data_range"})
+            registros = []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    cursor.execute(query, params)
-    registros = cursor.fetchall()
-    conn.close()
+        query = """
+            SELECT r.id, r.usuario, r.data_hora, r.tipo, r.modalidade, 
+                   r.projeto, r.atividade, r.localizacao, r.latitude, r.longitude,
+                   u.nome_completo
+            FROM registros_ponto r
+            LEFT JOIN usuarios u ON r.usuario = u.usuario
+            WHERE DATE(r.data_hora) BETWEEN %s AND %s
+        """
+        params = [data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")]
+
+        # Aplicar filtro de usuário
+        if usuario_filter != "Todos":
+            usuario_login = usuario_filter.split("(")[1].rstrip(")")
+            query += " AND r.usuario = %s"
+            params.append(usuario_login)
+
+        # Aplicar filtro de tipo
+        if tipo_registro != "Todos":
+            query += " AND r.tipo = %s"
+            params.append(tipo_registro)
+
+        query += " ORDER BY r.data_hora DESC LIMIT 500"
+
+        cursor.execute(query, params)
+        registros = cursor.fetchall()
+        conn.close()
 
     # Estatísticas gerais
     st.markdown("### 📊 Estatísticas do Período")
