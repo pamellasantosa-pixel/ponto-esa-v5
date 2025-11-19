@@ -6633,17 +6633,33 @@ def sistema_interface():
     """, unsafe_allow_html=True)
 
     # Criar tabela de configurações se não existir
-    conn = get_connection()
-    cursor = conn.cursor()
+    if REFACTORING_ENABLED:
+        try:
+            query_create = """
+                CREATE TABLE IF NOT EXISTS configuracoes (
+                    chave TEXT PRIMARY KEY,
+                    valor TEXT,
+                    descricao TEXT,
+                    data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """
+            execute_update(query_create)
+        except Exception as e:
+            log_error("Erro ao criar tabela de configurações", e, {"table": "configuracoes"})
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    cursor.execute("""
-        CREATE TABLE IF NOT EXISTS configuracoes (
-            chave TEXT PRIMARY KEY,
-            valor TEXT,
-            descricao TEXT,
-            data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        )
-    """)
+        cursor.execute("""
+            CREATE TABLE IF NOT EXISTS configuracoes (
+                chave TEXT PRIMARY KEY,
+                valor TEXT,
+                descricao TEXT,
+                data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+        conn.commit()
+        conn.close()
 
     # Configurações padrão
     configs_padrao = [
@@ -6663,20 +6679,42 @@ def sistema_interface():
         ('dias_historico_padrao', '30', 'Dias de histórico exibidos por padrão'),
     ]
 
-    for chave, valor, descricao in configs_padrao:
-        cursor.execute("""
-            INSERT INTO configuracoes (chave, valor, descricao)
-            VALUES (%s, %s, %s)
-            ON CONFLICT (chave) DO NOTHING
-        """, (chave, valor, descricao))
+    if REFACTORING_ENABLED:
+        try:
+            for chave, valor, descricao in configs_padrao:
+                query_insert = """
+                    INSERT INTO configuracoes (chave, valor, descricao)
+                    VALUES (%s, %s, %s)
+                    ON CONFLICT (chave) DO NOTHING
+                """
+                execute_update(query_insert, (chave, valor, descricao))
+        except Exception as e:
+            log_error("Erro ao inserir configurações padrão", e, {"context": "init_configs"})
+    else:
+        for chave, valor, descricao in configs_padrao:
+            cursor.execute("""
+                INSERT INTO configuracoes (chave, valor, descricao)
+                VALUES (%s, %s, %s)
+                ON CONFLICT (chave) DO NOTHING
+            """, (chave, valor, descricao))
 
-    conn.commit()
+        conn.commit()
 
     # Buscar configurações atuais
-    cursor.execute(
-        "SELECT chave, valor, descricao FROM configuracoes ORDER BY chave")
-    configs = cursor.fetchall()
-    conn.close()
+    configs = None
+    
+    if REFACTORING_ENABLED:
+        try:
+            query_configs = "SELECT chave, valor, descricao FROM configuracoes ORDER BY chave"
+            configs = execute_query(query_configs)
+        except Exception as e:
+            log_error("Erro ao buscar configurações", e, {})
+            configs = []
+    else:
+        cursor.execute(
+            "SELECT chave, valor, descricao FROM configuracoes ORDER BY chave")
+        configs = cursor.fetchall()
+        conn.close()
 
     # Organizar por categorias
     st.markdown("### ⏰ Configurações de Jornada")
@@ -6714,9 +6752,6 @@ def sistema_interface():
             )
 
         if st.form_submit_button("💾 Salvar Configurações de Jornada", use_container_width=True):
-            conn = get_connection()
-            cursor = conn.cursor()
-
             configs_jornada = [
                 ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
                 ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
@@ -6724,18 +6759,35 @@ def sistema_interface():
                 ('dias_historico_padrao', str(dias_historico)),
             ]
 
-            for chave, valor in configs_jornada:
-                cursor.execute(f"""
-                    UPDATE configuracoes 
-                    SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                    WHERE chave = {SQL_PLACEHOLDER}
-                """, (valor, chave))
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in configs_jornada:
+                        query_update = f"""
+                            UPDATE configuracoes 
+                            SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
+                            WHERE chave = %s
+                        """
+                        execute_update(query_update, (valor, chave))
+                    log_security_event("SYSTEM_CONFIG_UPDATED", usuario=st.session_state.get('usuario', 'sistema'), context={"configs": [c[0] for c in configs_jornada]})
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
 
-            conn.commit()
-            conn.close()
+                    for chave, valor in configs_jornada:
+                        cursor.execute(f"""
+                            UPDATE configuracoes 
+                            SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
+                            WHERE chave = %s
+                        """, (valor, chave))
 
-            st.success("✅ Configurações de jornada salvas!")
-            st.rerun()
+                    conn.commit()
+                    conn.close()
+
+                st.success("✅ Configurações de jornada salvas!")
+                st.rerun()
+            except Exception as e:
+                log_error("Erro ao salvar configurações de jornada", e, {"context": "config_update"})
+                st.error(f"❌ Erro ao salvar: {str(e)}")
 
     st.markdown("---")
     st.markdown("### 🕐 Configurações de Horas Extras")
