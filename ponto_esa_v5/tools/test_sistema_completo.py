@@ -33,18 +33,18 @@ try:
     )
     from ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore[import]
 except ImportError:  # pragma: no cover - fallback para execução direta dos testes
-    from ponto_esa_v5.ponto_esa_v5.banco_horas_system import BancoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.calculo_horas_system import CalculoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.atestado_horas_system import AtestadoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.ajuste_registros_system import AjusteRegistrosSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.horas_extras_system import HorasExtrasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.database_postgresql import (  # type: ignore
+    from ponto_esa_v5.banco_horas_system import BancoHorasSystem  # type: ignore
+    from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem  # type: ignore
+    from ponto_esa_v5.atestado_horas_system import AtestadoHorasSystem  # type: ignore
+    from ponto_esa_v5.ajuste_registros_system import AjusteRegistrosSystem  # type: ignore
+    from ponto_esa_v5.horas_extras_system import HorasExtrasSystem  # type: ignore
+    from ponto_esa_v5.database_postgresql import (  # type: ignore
         get_connection,
         init_db,
         USE_POSTGRESQL,
         hash_password,
     )
-    from ponto_esa_v5.ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore
+    from ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore
 
 # Definir placeholder correto
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
