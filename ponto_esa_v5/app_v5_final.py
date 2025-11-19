@@ -2870,16 +2870,26 @@ def notificacoes_interface(horas_extras_system):
     with tabs[1]:
         st.subheader("� Minhas Solicitações de Correção Pendentes")
         
-        cursor.execute("""
-            SELECT id, registro_id, data_hora_original, data_hora_nova,
-                   tipo_original, tipo_novo, justificativa, 
-                   data_solicitacao
-            FROM solicitacoes_correcao_registro
-            WHERE usuario = %s AND status = 'pendente'
-            ORDER BY data_solicitacao DESC
-        """, (st.session_state.usuario,))
-        
-        correcoes = cursor.fetchall()
+        if REFACTORING_ENABLED:
+            correcoes = execute_query("""
+                SELECT id, registro_id, data_hora_original, data_hora_nova,
+                       tipo_original, tipo_novo, justificativa, 
+                       data_solicitacao
+                FROM solicitacoes_correcao_registro
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_solicitacao DESC
+            """, (st.session_state.usuario,))
+        else:
+            cursor.execute("""
+                SELECT id, registro_id, data_hora_original, data_hora_nova,
+                       tipo_original, tipo_novo, justificativa, 
+                       data_solicitacao
+                FROM solicitacoes_correcao_registro
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_solicitacao DESC
+            """, (st.session_state.usuario,))
+            
+            correcoes = cursor.fetchall()
         
         if correcoes:
             st.warning(f"⏳ Você tem {len(correcoes)} solicitação(ões) aguardando aprovação do gestor")

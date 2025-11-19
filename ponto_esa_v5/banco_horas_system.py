@@ -10,6 +10,10 @@ class BancoHorasSystem:
     def __init__(self, connection_manager=None):
         self.connection_manager = connection_manager
     
+    def obter_saldo_atual(self, usuario):
+        """Obtém saldo atual do banco de horas do usuário"""
+        return self.obter_saldo(usuario)
+    
     def obter_saldo(self, usuario):
         """Obtém saldo do banco de horas do usuário"""
         return 0.0

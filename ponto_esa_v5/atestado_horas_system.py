@@ -27,8 +27,11 @@ def format_time_duration(minutos):
     if minutos is None:
         return "0h 0m"
     
-    horas = minutos // 60
-    mins = minutos % 60
+    # Garantir que seja float
+    minutos = float(minutos)
+    
+    horas = int(minutos // 60)
+    mins = int(minutos % 60)
     return f"{horas}h {mins:02d}m"
 
 def get_status_color(status):
