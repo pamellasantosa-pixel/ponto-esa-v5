@@ -5398,74 +5398,142 @@ def gerenciar_arquivos_interface(upload_system):
         data_filter = st.date_input("📅 Data específica:", value=None)
 
     # Buscar arquivos
-    conn = get_connection()
-    cursor = conn.cursor()
+    if REFACTORING_ENABLED:
+        try:
+            query = """
+                SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
+                       u.data_upload, u.tamanho, u.tipo_arquivo as tipo_arquivo, 
+                       us.nome_completo
+                FROM uploads u
+                LEFT JOIN usuarios us ON u.usuario = us.usuario
+                WHERE u.status = 'ativo'
+            """
+            params = []
 
-    query = """
-        SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
-               u.data_upload, u.tamanho, u.tipo_arquivo as tipo_arquivo, 
-               us.nome_completo
-        FROM uploads u
-        LEFT JOIN usuarios us ON u.usuario = us.usuario
-        WHERE u.status = 'ativo'
-    """
-    params = []
+            # Aplicar filtros
+            if categoria_filter != "Todas":
+                categoria_map = {
+                    "Atestados Médicos": "atestado",
+                    "Comprovantes de Ausência": "ausencia",
+                    "Documentos": "documento"
+                }
+                query += f" AND u.relacionado_a = {SQL_PLACEHOLDER}"
+                params.append(categoria_map[categoria_filter])
 
-    # Aplicar filtros
-    if categoria_filter != "Todas":
-        categoria_map = {
-            "Atestados Médicos": "atestado",
-            "Comprovantes de Ausência": "ausencia",
-            "Documentos": "documento"
-        }
-        query += " AND u.relacionado_a = %s"
-        params.append(categoria_map[categoria_filter])
+            if usuario_filter:
+                query += f" AND (u.usuario LIKE {SQL_PLACEHOLDER} OR us.nome_completo LIKE {SQL_PLACEHOLDER})"
+                params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
 
-    if usuario_filter:
-        query += " AND (u.usuario LIKE %s OR us.nome_completo LIKE %s)"
-        params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
+            if data_filter:
+                query += f" AND DATE(u.data_upload) = {SQL_PLACEHOLDER}"
+                params.append(data_filter.strftime("%Y-%m-%d"))
 
-    if data_filter:
-        query += " AND DATE(u.data_upload) = %s"
-        params.append(data_filter.strftime("%Y-%m-%d"))
+            query += " ORDER BY u.data_upload DESC LIMIT 100"
 
-    query += " ORDER BY u.data_upload DESC LIMIT 100"
+            arquivos = execute_query(query, tuple(params))
+            if not arquivos:
+                arquivos = []
+        except Exception as e:
+            log_error("Erro ao buscar arquivos", e, {"usuario_filter": usuario_filter})
+            st.error("❌ Erro ao buscar arquivos")
+            return
+    else:
+        # Fallback original
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    cursor.execute(query, params)
-    arquivos = cursor.fetchall()
-    conn.close()
+        query = """
+            SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
+                   u.data_upload, u.tamanho, u.tipo_arquivo as tipo_arquivo, 
+                   us.nome_completo
+            FROM uploads u
+            LEFT JOIN usuarios us ON u.usuario = us.usuario
+            WHERE u.status = 'ativo'
+        """
+        params = []
+
+        # Aplicar filtros
+        if categoria_filter != "Todas":
+            categoria_map = {
+                "Atestados Médicos": "atestado",
+                "Comprovantes de Ausência": "ausencia",
+                "Documentos": "documento"
+            }
+            query += " AND u.relacionado_a = %s"
+            params.append(categoria_map[categoria_filter])
+
+        if usuario_filter:
+            query += " AND (u.usuario LIKE %s OR us.nome_completo LIKE %s)"
+            params.extend([f"%{usuario_filter}%", f"%{usuario_filter}%"])
+
+        if data_filter:
+            query += " AND DATE(u.data_upload) = %s"
+            params.append(data_filter.strftime("%Y-%m-%d"))
+
+        query += " ORDER BY u.data_upload DESC LIMIT 100"
+
+        cursor.execute(query, params)
+        arquivos = cursor.fetchall()
+        conn.close()
 
     # Estatísticas
     st.markdown("### 📊 Estatísticas")
     col1, col2, col3, col4 = st.columns(4)
 
-    conn = get_connection()
-    cursor = conn.cursor()
+    if REFACTORING_ENABLED:
+        try:
+            with col1:
+                result = execute_query("SELECT COUNT(*) FROM uploads", fetch_one=True)
+                total = result[0] if result else 0
+                st.metric("Total de Arquivos", total)
 
-    with col1:
-        cursor.execute("SELECT COUNT(*) FROM uploads")
-        total = cursor.fetchone()[0]
-        st.metric("Total de Arquivos", total)
+            with col2:
+                result = execute_query("SELECT COUNT(DISTINCT usuario) FROM uploads", fetch_one=True)
+                usuarios = result[0] if result else 0
+                st.metric("Usuários com Uploads", usuarios)
 
-    with col2:
-        cursor.execute("SELECT COUNT(DISTINCT usuario) FROM uploads")
-        usuarios = cursor.fetchone()[0]
-        st.metric("Usuários com Uploads", usuarios)
+            with col3:
+                result = execute_query("SELECT SUM(tamanho) FROM uploads", fetch_one=True)
+                tamanho_total = (result[0] if result and result[0] else 0)
+                st.metric("Espaço Utilizado", format_file_size(tamanho_total))
 
-    with col3:
-        cursor.execute("SELECT SUM(tamanho) FROM uploads")
-        tamanho_total = cursor.fetchone()[0] or 0
-        st.metric("Espaço Utilizado", format_file_size(tamanho_total))
+            with col4:
+                hoje_str = date.today().strftime("%Y-%m-%d")
+                query_hoje = f"SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = {SQL_PLACEHOLDER}"
+                result = execute_query(query_hoje, (hoje_str,), fetch_one=True)
+                hoje = result[0] if result else 0
+                st.metric("Uploads Hoje", hoje)
+        except Exception as e:
+            log_error("Erro ao buscar estatísticas", e, {})
+    else:
+        # Fallback original
+        conn = get_connection()
+        cursor = conn.cursor()
 
-    with col4:
-        # Evitar funções específicas de SQLite (DATE('now')) e usar parâmetro
-        hoje_str = date.today().strftime("%Y-%m-%d")
-        cursor.execute(
-            "SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = %s", (hoje_str,))
-        hoje = cursor.fetchone()[0]
-        st.metric("Uploads Hoje", hoje)
+        with col1:
+            cursor.execute("SELECT COUNT(*) FROM uploads")
+            total = cursor.fetchone()[0]
+            st.metric("Total de Arquivos", total)
 
-    conn.close()
+        with col2:
+            cursor.execute("SELECT COUNT(DISTINCT usuario) FROM uploads")
+            usuarios = cursor.fetchone()[0]
+            st.metric("Usuários com Uploads", usuarios)
+
+        with col3:
+            cursor.execute("SELECT SUM(tamanho) FROM uploads")
+            tamanho_total = cursor.fetchone()[0] or 0
+            st.metric("Espaço Utilizado", format_file_size(tamanho_total))
+
+        with col4:
+            # Evitar funções específicas de SQLite (DATE('now')) e usar parâmetro
+            hoje_str = date.today().strftime("%Y-%m-%d")
+            cursor.execute(
+                "SELECT COUNT(*) FROM uploads WHERE DATE(data_upload) = %s", (hoje_str,))
+            hoje = cursor.fetchone()[0]
+            st.metric("Uploads Hoje", hoje)
+
+        conn.close()
 
     # Listagem de arquivos
     st.markdown("### 📋 Arquivos")
@@ -5510,6 +5578,7 @@ def gerenciar_arquivos_interface(upload_system):
                         with col_a:
                             if st.button("✅ Sim", key=f"yes_{arquivo_id}"):
                                 if upload_system.delete_file(arquivo_id, usuario):
+                                    log_security_event("FILE_DELETED", usuario=st.session_state.usuario, context={"file_id": arquivo_id})
                                     st.success("Arquivo excluído!")
                                     del st.session_state[f"confirm_delete_{arquivo_id}"]
                                     st.rerun()
@@ -6321,17 +6390,32 @@ def configurar_jornada_interface():
     """, unsafe_allow_html=True)
     
     # Buscar funcionários ativos
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT id, usuario, nome_completo
-        FROM usuarios
-        WHERE tipo = 'funcionario' AND ativo = 1
-        ORDER BY nome_completo
-    """)
-    usuarios_result = cursor.fetchall()
-    conn.close()
+    if REFACTORING_ENABLED:
+        try:
+            query = """
+                SELECT id, usuario, nome_completo
+                FROM usuarios
+                WHERE tipo = 'funcionario' AND ativo = 1
+                ORDER BY nome_completo
+            """
+            usuarios_result = execute_query(query)
+        except Exception as e:
+            log_error("Erro ao buscar funcionários", e, {})
+            st.error("❌ Erro ao buscar funcionários")
+            return
+    else:
+        # Fallback original
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT id, usuario, nome_completo
+            FROM usuarios
+            WHERE tipo = 'funcionario' AND ativo = 1
+            ORDER BY nome_completo
+        """)
+        usuarios_result = cursor.fetchall()
+        conn.close()
     
     if not usuarios_result:
         st.warning("❌ Nenhum funcionário ativo encontrado")
@@ -6433,6 +6517,7 @@ def configurar_jornada_interface():
                         
                         # Salvar no banco
                         if salvar_jornada_semanal(usuario_id, jornada_atual):
+                            log_security_event("SCHEDULE_UPDATED", usuario=st.session_state.usuario, context={"target_user": usuario_username, "dia": dia})
                             st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
                             st.rerun()
                         else:
