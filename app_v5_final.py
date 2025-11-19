@@ -24,6 +24,10 @@ from io import BytesIO
 import sys
 from dotenv import load_dotenv
 import pytz  # Para gerenciar fusos horários
+import logging
+
+# Configurar logger
+logger = logging.getLogger(__name__)
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -41,6 +45,11 @@ else:
     from database import init_db, get_connection
     # SQLite usa ? como placeholder
     SQL_PLACEHOLDER = '?'
+
+# Adicionar ao namespace global para que outros módulos possam acessar
+import sys
+current_module = sys.modules[__name__]
+current_module.SQL_PLACEHOLDER = SQL_PLACEHOLDER
 
 # Adicionar o diretório atual ao path para permitir importações
 if os.path.dirname(__file__) not in sys.path:
@@ -384,11 +393,6 @@ function getStoredGPS() {
     const timestamp = sessionStorage.getItem('gps_timestamp');
     
     // Verificar se os dados são recentes (menos de 5 minutos)
-    if (lat && lng && timestamp) {
-        const age = Date.now() - parseInt(timestamp);
-        if (age < 300000) { // 5 minutos
-            return {
-                latitude: parseFloat(lat),
                 longitude: parseFloat(lng),
                 timestamp: parseInt(timestamp)
             };
@@ -592,6 +596,573 @@ def tela_login():
                     st.warning("⚠️ Preencha todos os campos")
 
 
+def validar_limites_horas_extras(usuario):
+    """
+    Valida se o usuário pode fazer hora extra segundo limites da CLT
+    - Máximo 2h extras por dia
+    - Máximo 10h extras por semana
+    """
+    from datetime import datetime, timedelta
+    
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        agora = get_datetime_br()
+        hoje = agora.date()
+        
+        # Início da semana (segunda-feira)
+        inicio_semana = hoje - timedelta(days=hoje.weekday())
+        
+        # Horas extras hoje
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND DATE(data_inicio) = {SQL_PLACEHOLDER}
+            AND status IN ('encerrada', 'em_execucao')
+        """, (usuario, hoje))
+        
+        horas_hoje_ativas = cursor.fetchone()[0] or 0
+        
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+            )) / 3600), 0)
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data = {SQL_PLACEHOLDER}
+            AND status = 'aprovado'
+        """, (usuario, hoje))
+        
+        horas_hoje_historico = cursor.fetchone()[0] or 0
+        horas_hoje_total = horas_hoje_ativas + horas_hoje_historico
+        
+        # Horas extras esta semana
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND DATE(data_inicio) >= {SQL_PLACEHOLDER}
+            AND status IN ('encerrada', 'em_execucao')
+        """, (usuario, inicio_semana))
+        
+        horas_semana_ativas = cursor.fetchone()[0] or 0
+        
+        cursor.execute(f"""
+            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+            )) / 3600), 0)
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data >= {SQL_PLACEHOLDER}
+            AND status = 'aprovado'
+        """, (usuario, inicio_semana))
+        
+        horas_semana_historico = cursor.fetchone()[0] or 0
+        horas_semana_total = horas_semana_ativas + horas_semana_historico
+        
+        # Verificar limites CLT
+        LIMITE_DIA = 2.0  # 2 horas por dia
+        LIMITE_SEMANA = 10.0  # 10 horas por semana
+        
+        pode_fazer = True
+        mensagem = ""
+        
+        if horas_hoje_total >= LIMITE_DIA:
+            pode_fazer = False
+            mensagem = f"Limite diário de horas extras atingido ({horas_hoje_total:.1f}h de {LIMITE_DIA}h)"
+        elif horas_semana_total >= LIMITE_SEMANA:
+            pode_fazer = False
+            mensagem = f"Limite semanal de horas extras atingido ({horas_semana_total:.1f}h de {LIMITE_SEMANA}h)"
+        
+        return {
+            'pode_fazer_hora_extra': pode_fazer,
+            'mensagem': mensagem,
+            'horas_hoje': horas_hoje_total,
+            'horas_semana': horas_semana_total,
+            'limite_dia': LIMITE_DIA,
+            'limite_semana': LIMITE_SEMANA
+        }
+        
+    except Exception as e:
+        logger.error(f"Erro ao validar limites de horas extras: {str(e)}")
+        # Em caso de erro, permitir (não bloquear por erro de sistema)
+        return {
+            'pode_fazer_hora_extra': True,
+            'mensagem': '',
+            'horas_hoje': 0,
+            'horas_semana': 0,
+            'limite_dia': 2.0,
+            'limite_semana': 10.0
+        }
+    finally:
+        if conn:
+            conn.close()
+
+
+def iniciar_hora_extra_interface():
+    """Interface para iniciar hora extra com seleção de aprovador e justificativa"""
+    from datetime import datetime
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🕐 Iniciar Hora Extra</h3>
+        <p>Solicite autorização para trabalhar além do horário previsto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Buscar gestores disponíveis para aprovação
+    gestores = obter_usuarios_para_aprovacao()
+    
+    if not gestores:
+        st.error("❌ Nenhum gestor disponível para aprovar hora extra")
+        if st.button("⬅️ Voltar"):
+            st.session_state.solicitar_horas_extras = False
+            st.rerun()
+        return
+    
+    # Mostrar informação do horário de saída previsto
+    horario_previsto = st.session_state.get('horario_saida_previsto', 'não definido')
+    st.info(f"📅 Seu horário de saída previsto para hoje: **{horario_previsto}**")
+    
+    with st.form("form_iniciar_hora_extra"):
+        st.markdown("### 👤 Selecione o Gestor para Aprovação")
+        
+        aprovador = st.selectbox(
+            "Gestor Responsável:",
+            options=[g['usuario'] for g in gestores],
+            format_func=lambda x: next(g['nome_completo'] for g in gestores if g['usuario'] == x)
+        )
+        
+        st.markdown("### 📝 Justificativa da Hora Extra")
+        justificativa = st.text_area(
+            "Por que você precisa fazer hora extra?",
+            placeholder="Ex: Finalizar relatório urgente solicitado pela diretoria para entrega amanhã...",
+            height=120,
+            help="Seja específico sobre o motivo e a urgência da hora extra"
+        )
+        
+        st.markdown("---")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            submitted = st.form_submit_button(
+                "✅ Iniciar Hora Extra", 
+                use_container_width=True, 
+                type="primary"
+            )
+        with col2:
+            cancelar = st.form_submit_button(
+                "❌ Cancelar", 
+                use_container_width=True
+            )
+        
+        if cancelar:
+            st.session_state.solicitar_horas_extras = False
+            st.rerun()
+        
+        if submitted:
+            if not justificativa.strip():
+                st.error("❌ A justificativa é obrigatória!")
+            else:
+                # Validar limites CLT de horas extras
+                validacao = validar_limites_horas_extras(st.session_state.usuario)
+                
+                if not validacao['pode_fazer_hora_extra']:
+                    st.error(f"❌ {validacao['mensagem']}")
+                    st.warning("⚠️ **Limite Legal Atingido:** A CLT estabelece limites de horas extras para proteção do trabalhador.")
+                    
+                    with st.expander("📋 Ver detalhes dos limites"):
+                        st.write(f"**Horas extras hoje:** {validacao['horas_hoje']:.1f}h de 2h permitidas")
+                        st.write(f"**Horas extras esta semana:** {validacao['horas_semana']:.1f}h de 10h permitidas")
+                        st.markdown("""
+                        **Limites CLT:**
+                        - Máximo de 2 horas extras por dia
+                        - Máximo de 10 horas extras por semana
+                        - Descanso mínimo entre jornadas: 11 horas
+                        """)
+                else:
+                    # Mostrar aviso se estiver próximo do limite
+                    if validacao['horas_hoje'] >= 1.5:
+                        st.warning(f"⚠️ Você já fez {validacao['horas_hoje']:.1f}h extras hoje. Limite: 2h")
+                    if validacao['horas_semana'] >= 8:
+                        st.warning(f"⚠️ Você já fez {validacao['horas_semana']:.1f}h extras esta semana. Limite: 10h")
+                    
+                    # Registrar hora extra ativa
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                try:
+                    agora = get_datetime_br()
+                    agora_sem_tz = agora.replace(tzinfo=None)
+                    
+                    cursor.execute(f"""
+                        INSERT INTO horas_extras_ativas
+                        (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                    """, (
+                        st.session_state.usuario,
+                        aprovador,
+                        justificativa,
+                        agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                        agora_sem_tz.strftime('%H:%M')
+                    ))
+                    
+                    # Obter ID da hora extra criada
+                    cursor.execute("SELECT last_insert_rowid()")
+                    hora_extra_id = cursor.fetchone()[0]
+                    
+                    conn.commit()
+                    
+                    # Criar notificação para o gestor
+                    try:
+                        from notifications import NotificationManager
+                        notif_manager = NotificationManager()
+                        notif_manager.criar_notificacao(
+                            usuario_destino=aprovador,
+                            tipo='aprovacao_hora_extra',
+                            titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
+                            mensagem=f"Justificativa: {justificativa}",
+                            dados_extras={'hora_extra_id': hora_extra_id}
+                        )
+                    except Exception as e:
+                        # Não bloquear se notificação falhar
+                        print(f"Erro ao criar notificação: {e}")
+                    
+                    st.session_state.hora_extra_ativa_id = hora_extra_id
+                    st.session_state.solicitar_horas_extras = False
+                    
+                    st.success("✅ Solicitação de hora extra enviada com sucesso!")
+                    st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
+                    st.balloons()
+                    
+                    if st.button("🔙 Voltar para o Menu Principal"):
+                        st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"❌ Erro ao registrar hora extra: {e}")
+                finally:
+                    conn.close()
+
+
+def exibir_hora_extra_em_andamento():
+    """Exibe contador de hora extra em andamento com opção de encerrar"""
+    from datetime import datetime
+    
+    # Verificar se tem hora extra ativa
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Verificar se tabela existe (compatibilidade com bancos antigos)
+        try:
+            cursor.execute(f"""
+                SELECT id, aprovador, justificativa, data_inicio, status
+                FROM horas_extras_ativas
+                WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
+                ORDER BY data_inicio DESC
+                LIMIT 1
+            """, (st.session_state.usuario,))
+            
+            hora_extra = cursor.fetchone()
+        except Exception as e:
+            # Tabela não existe ou erro de acesso - retornar silenciosamente
+            if 'does not exist' in str(e) or 'no such table' in str(e):
+                return
+            raise e
+        
+        if not hora_extra:
+            return
+        
+        # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+        try:
+            from streamlit_autorefresh import st_autorefresh
+            st_autorefresh(interval=30000, key="hora_extra_counter")
+        except ImportError:
+            # Biblioteca não instalada - continuar sem auto-refresh
+            pass
+        
+        he_id, aprovador, justificativa, data_inicio, status = hora_extra
+        
+        # Calcular tempo decorrido
+        from calculo_horas_system import safe_datetime_parse
+        inicio = safe_datetime_parse(data_inicio)
+        agora = datetime.now()
+        tempo_decorrido = agora - inicio
+        
+        horas = int(tempo_decorrido.total_seconds() // 3600)
+        minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+        
+        if status == 'aguardando_aprovacao':
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
+                <p style="margin: 10px 0; font-size: 16px;">
+                    <strong>Gestor:</strong> {aprovador}<br>
+                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                    <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
+                    <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        elif status == 'em_execucao':
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            ">
+                <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
+                <p style="margin: 10px 0; font-size: 16px;">
+                    <strong>Aprovada por:</strong> {aprovador}<br>
+                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                    <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                    # Encerrar hora extra
+                    conn_encerrar = get_connection()
+                    cursor_encerrar = conn_encerrar.cursor()
+                    
+                    try:
+                        agora = get_datetime_br()
+                        agora_sem_tz = agora.replace(tzinfo=None)
+                        tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
+                        
+                        cursor_encerrar.execute(f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'encerrada',
+                                data_fim = {SQL_PLACEHOLDER},
+                                hora_fim = {SQL_PLACEHOLDER},
+                                tempo_decorrido_minutos = {SQL_PLACEHOLDER}
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """, (
+                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                            agora_sem_tz.strftime('%H:%M'),
+                            tempo_total_minutos,
+                            he_id
+                        ))
+                        
+                        # Registrar na tabela de solicitações de horas extras
+                        cursor_encerrar.execute(f"""
+                            INSERT INTO solicitacoes_horas_extras
+                            (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        """, (
+                            st.session_state.usuario,
+                            inicio.strftime('%Y-%m-%d'),
+                            inicio.strftime('%H:%M'),
+                            agora_sem_tz.strftime('%H:%M'),
+                            justificativa,
+                            aprovador,
+                            aprovador,
+                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
+                        ))
+                        
+                        conn_encerrar.commit()
+                        
+                        st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
+                        st.balloons()
+                        
+                        # Aguardar um pouco para mostrar a mensagem
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erro ao encerrar hora extra: {e}")
+                    finally:
+                        conn_encerrar.close()
+            
+            with col2:
+                st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
+    
+    except Exception as e:
+        logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+
+
+def aprovar_hora_extra_rapida_interface():
+    """Interface rápida para gestor aprovar/rejeitar hora extra"""
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+        padding: 20px;
+        border-radius: 10px;
+        margin: 20px 0;
+        color: white;
+    ">
+        <h2 style="margin: 0; color: white;">📋 Aprovar Hora Extra</h2>
+        <p style="margin: 10px 0;">Você tem solicitações de hora extra aguardando aprovação</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Buscar solicitações pendentes para este gestor
+        cursor.execute(f"""
+            SELECT 
+                he.id,
+                u.nome_completo,
+                he.justificativa,
+                he.data_inicio,
+                he.hora_inicio
+            FROM horas_extras_ativas he
+            JOIN usuarios u ON u.usuario = he.usuario
+            WHERE he.aprovador = {SQL_PLACEHOLDER}
+            AND he.status = 'aguardando_aprovacao'
+            ORDER BY he.data_criacao DESC
+        """, (st.session_state.usuario,))
+        
+        solicitacoes = cursor.fetchall()
+        
+        if not solicitacoes:
+            st.info("✅ Nenhuma solicitação pendente no momento")
+            
+            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if 'aprovar_hora_extra' in st.session_state:
+                    del st.session_state.aprovar_hora_extra
+                st.rerun()
+            return
+        
+        # Exibir cada solicitação
+        for idx, sol in enumerate(solicitacoes):
+            he_id, nome_funcionario, justificativa, data_inicio, hora_inicio = sol
+            
+            # Converter data/hora
+            data_inicio_obj = safe_datetime_parse(data_inicio) if isinstance(data_inicio, str) else data_inicio
+            hora_inicio_obj = safe_datetime_parse(hora_inicio) if isinstance(hora_inicio, str) else hora_inicio
+            
+            data_formatada = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else 'N/A'
+            hora_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+            
+            st.markdown(f"""
+            <div style="
+                background: white;
+                padding: 20px;
+                border-radius: 10px;
+                margin: 15px 0;
+                border-left: 5px solid #f5576c;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+            ">
+                <h4 style="margin: 0 0 10px 0; color: #333;">👤 {nome_funcionario}</h4>
+                <p style="margin: 5px 0; color: #666;">
+                    <strong>📅 Data:</strong> {data_formatada} às {hora_formatada}<br>
+                    <strong>💬 Justificativa:</strong> {justificativa if justificativa else 'Não informada'}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                    # Atualizar status para em_execucao
+                    cursor.execute(f"""
+                        UPDATE horas_extras_ativas
+                        SET status = 'em_execucao'
+                        WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    conn.commit()
+                    
+                    # Criar notificação para o funcionário
+                    from notifications import NotificationManager
+                    notification_manager = NotificationManager()
+                    
+                    funcionario = None
+                    cursor.execute(f"""
+                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        funcionario = result[0]
+                        
+                        notification_manager.criar_notificacao(
+                            usuario=funcionario,
+                            tipo='hora_extra_aprovada',
+                            titulo='✅ Hora Extra Aprovada',
+                            mensagem=f'Sua solicitação de hora extra foi aprovada por {st.session_state.nome_completo}. O contador está rodando!',
+                            dados_extra={'hora_extra_id': he_id}
+                        )
+                    
+                    st.success(f"✅ Hora extra de {nome_funcionario} aprovada com sucesso!")
+                    st.balloons()
+                    time.sleep(1.5)
+                    st.rerun()
+            
+            with col2:
+                if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                    # Atualizar status para rejeitada
+                    cursor.execute(f"""
+                        UPDATE horas_extras_ativas
+                        SET status = 'rejeitada'
+                        WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    conn.commit()
+                    
+                    # Criar notificação para o funcionário
+                    from notifications import NotificationManager
+                    notification_manager = NotificationManager()
+                    
+                    funcionario = None
+                    cursor.execute(f"""
+                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                    """, (he_id,))
+                    result = cursor.fetchone()
+                    if result:
+                        funcionario = result[0]
+                        
+                        notification_manager.criar_notificacao(
+                            usuario=funcionario,
+                            tipo='hora_extra_rejeitada',
+                            titulo='❌ Hora Extra Rejeitada',
+                            mensagem=f'Sua solicitação de hora extra foi rejeitada por {st.session_state.nome_completo}.',
+                            dados_extra={'hora_extra_id': he_id}
+                        )
+                    
+                    st.warning(f"❌ Hora extra de {nome_funcionario} rejeitada")
+                    time.sleep(1.5)
+                    st.rerun()
+            
+            st.markdown("---")
+        
+        # Botão para voltar
+        if st.button("↩️ Voltar ao Menu", use_container_width=True):
+            if 'aprovar_hora_extra' in st.session_state:
+                del st.session_state.aprovar_hora_extra
+            st.rerun()
+    
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar solicitações: {str(e)}")
+        logger.error(f"Erro em aprovar_hora_extra_rapida_interface: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+
+
 # Interface principal do funcionário
 def tela_funcionario():
     """Interface principal para funcionários"""
@@ -605,13 +1176,51 @@ def tela_funcionario():
     </div>
     """, unsafe_allow_html=True)
 
-    # Verificar notificação de fim de jornada
-    verificacao_jornada = horas_extras_system.verificar_fim_jornada(
-        st.session_state.usuario)
-    if verificacao_jornada["deve_notificar"]:
-        st.warning(f"⏰ {verificacao_jornada['message']}")
-        if st.button("🕐 Solicitar Horas Extras"):
-            st.session_state.solicitar_horas_extras = True
+    # Exibir hora extra em andamento (se houver)
+    exibir_hora_extra_em_andamento()
+
+    # Verificar se está próximo do horário de saída (usa jornada semanal configurada)
+    from jornada_semanal_system import verificar_horario_saida_proximo
+    
+    verificacao_saida = verificar_horario_saida_proximo(
+        st.session_state.usuario, 
+        margem_minutos=5  # Alerta 5 minutos antes do fim da jornada
+    )
+    
+    if verificacao_saida['proximo']:
+        minutos = verificacao_saida['minutos_restantes']
+        
+        # Criar card destacado para hora extra
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+        ">
+            <h3 style="margin: 0; color: white;">⏰ Horário de Saída Próximo</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                Seu horário de saída é às <strong>{verificacao_saida['horario_saida']}</strong>
+                <br>Faltam aproximadamente <strong>{minutos} minutos</strong>
+            </p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2 = st.columns([1, 1])
+        with col1:
+            if st.button("🕐 Solicitar Hora Extra", type="primary", use_container_width=True, key="btn_solicitar_he"):
+                st.session_state.solicitar_horas_extras = True
+                st.session_state.horario_saida_previsto = verificacao_saida['horario_saida']
+                st.rerun()
+        with col2:
+            st.info(f"💡 Precisa trabalhar além das {verificacao_saida['horario_saida']}? Solicite hora extra agora!")
+    
+    # Se clicou em solicitar hora extra, mostrar formulário de solicitação
+    if st.session_state.get('solicitar_horas_extras'):
+        iniciar_hora_extra_interface()
+        return  # Não exibir resto da interface
 
     # Menu lateral
     with st.sidebar:
@@ -627,6 +1236,7 @@ def tela_funcionario():
             "🏥 Registrar Ausência",
             "⏰ Atestado de Horas",
             f"🕐 Horas Extras{f' ({notificacoes_horas_extras})' if notificacoes_horas_extras > 0 else ''}",
+            "📊 Relatórios de Horas Extras",
             "🏦 Meu Banco de Horas",
             "📁 Meus Arquivos",
             "🔔 Notificações"
@@ -650,6 +1260,9 @@ def tela_funcionario():
         atestado_horas_interface(atestado_system, upload_system)
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
+    elif opcao == "📊 Relatórios de Horas Extras":
+        from relatorios_horas_extras import relatorios_horas_extras_interface
+        relatorios_horas_extras_interface()
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
@@ -839,6 +1452,217 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             f"📋 Nenhum registro encontrado para {data_selecionada.strftime('%d/%m/%Y')}")
 
 
+def historico_horas_extras_interface():
+    """Interface completa de histórico de horas extras com filtros avançados"""
+    st.markdown("""
+    <div style="
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+        padding: 20px;
+        border-radius: 10px;
+        color: white;
+        margin-bottom: 20px;
+    ">
+        <h2 style="margin: 0; color: white;">📊 Histórico Completo de Horas Extras</h2>
+        <p style="margin: 10px 0;">Visualize todas as suas horas extras: ativas, aprovadas, rejeitadas e finalizadas</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Filtros avançados
+    st.markdown("### 🔍 Filtros")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        status_filtro = st.multiselect(
+            "Status",
+            ["aguardando_aprovacao", "em_execucao", "encerrada", "rejeitada", "pendente", "aprovado", "rejeitado"],
+            default=["aguardando_aprovacao", "em_execucao", "encerrada"]
+        )
+    
+    with col2:
+        data_inicio_filtro = st.date_input(
+            "Data Início",
+            value=date.today() - timedelta(days=30)
+        )
+    
+    with col3:
+        data_fim_filtro = st.date_input(
+            "Data Fim",
+            value=date.today()
+        )
+    
+    # Buscar dados de ambas as tabelas
+    conn = None
+    horas_extras_completo = []
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Buscar de horas_extras_ativas
+        cursor.execute(f"""
+            SELECT 
+                'ativa' as origem,
+                id,
+                aprovador,
+                justificativa,
+                data_inicio,
+                hora_inicio,
+                status,
+                data_fim,
+                hora_fim,
+                tempo_decorrido_minutos,
+                data_criacao
+            FROM horas_extras_ativas
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data_inicio BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+        
+        ativas = cursor.fetchall()
+        
+        # Buscar de solicitacoes_horas_extras
+        cursor.execute(f"""
+            SELECT 
+                'historico' as origem,
+                id,
+                aprovador_solicitado,
+                justificativa,
+                data,
+                hora_inicio,
+                status,
+                NULL as data_fim,
+                hora_fim,
+                NULL as tempo_decorrido,
+                data_solicitacao
+            FROM solicitacoes_horas_extras
+            WHERE usuario = {SQL_PLACEHOLDER}
+            AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+        
+        historico = cursor.fetchall()
+        
+        # Combinar e filtrar por status
+        for registro in ativas + historico:
+            origem, id_reg, aprovador, justificativa, data_reg, hora_inicio, status, data_fim, hora_fim, tempo_min, data_criacao = registro
+            
+            if status in status_filtro:
+                horas_extras_completo.append({
+                    'origem': origem,
+                    'id': id_reg,
+                    'aprovador': aprovador,
+                    'justificativa': justificativa,
+                    'data': data_reg,
+                    'hora_inicio': hora_inicio,
+                    'status': status,
+                    'data_fim': data_fim,
+                    'hora_fim': hora_fim,
+                    'tempo_minutos': tempo_min,
+                    'data_criacao': data_criacao
+                })
+        
+        # Ordenar por data decrescente
+        horas_extras_completo.sort(key=lambda x: x['data'], reverse=True)
+        
+    except Exception as e:
+        st.error(f"❌ Erro ao buscar histórico: {str(e)}")
+        logger.error(f"Erro em historico_horas_extras_interface: {str(e)}")
+        return
+    finally:
+        if conn:
+            conn.close()
+    
+    # Exibir resumo
+    if horas_extras_completo:
+        st.markdown("### 📈 Resumo do Período")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        total_horas = sum([r['tempo_minutos'] or 0 for r in horas_extras_completo if r['status'] in ['encerrada', 'aprovado']]) / 60
+        aguardando = len([r for r in horas_extras_completo if r['status'] == 'aguardando_aprovacao'])
+        em_execucao = len([r for r in horas_extras_completo if r['status'] == 'em_execucao'])
+        finalizadas = len([r for r in horas_extras_completo if r['status'] in ['encerrada', 'aprovado']])
+        
+        with col1:
+            st.metric("⏱️ Total de Horas", f"{total_horas:.1f}h")
+        with col2:
+            st.metric("⏳ Aguardando", aguardando)
+        with col3:
+            st.metric("▶️ Em Execução", em_execucao)
+        with col4:
+            st.metric("✅ Finalizadas", finalizadas)
+        
+        st.markdown("---")
+        st.markdown(f"### 📋 Registros Encontrados ({len(horas_extras_completo)})")
+        
+        # Exibir registros em cards
+        for he in horas_extras_completo:
+            # Definir cor do card baseado no status
+            if he['status'] == 'aguardando_aprovacao':
+                bg_color = "#fff3cd"
+                border_color = "#ffc107"
+                icon = "⏳"
+            elif he['status'] == 'em_execucao':
+                bg_color = "#d1ecf1"
+                border_color = "#17a2b8"
+                icon = "▶️"
+            elif he['status'] in ['encerrada', 'aprovado']:
+                bg_color = "#d4edda"
+                border_color = "#28a745"
+                icon = "✅"
+            else:
+                bg_color = "#f8d7da"
+                border_color = "#dc3545"
+                icon = "❌"
+            
+            # Converter datas
+            from calculo_horas_system import safe_datetime_parse
+            data_obj = safe_datetime_parse(he['data']) if isinstance(he['data'], str) else he['data']
+            data_formatada = data_obj.strftime('%d/%m/%Y') if data_obj else 'N/A'
+            
+            hora_inicio_obj = safe_datetime_parse(he['hora_inicio']) if isinstance(he['hora_inicio'], str) else he['hora_inicio']
+            hora_inicio_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+            
+            hora_fim_formatada = 'N/A'
+            if he['hora_fim']:
+                hora_fim_obj = safe_datetime_parse(he['hora_fim']) if isinstance(he['hora_fim'], str) else he['hora_fim']
+                hora_fim_formatada = hora_fim_obj.strftime('%H:%M') if hora_fim_obj else 'N/A'
+            
+            tempo_texto = "Em andamento"
+            if he['tempo_minutos']:
+                horas = he['tempo_minutos'] // 60
+                minutos = he['tempo_minutos'] % 60
+                tempo_texto = f"{int(horas)}h {int(minutos)}min"
+            
+            st.markdown(f"""
+            <div style="
+                background: {bg_color};
+                padding: 15px;
+                border-radius: 8px;
+                border-left: 5px solid {border_color};
+                margin-bottom: 15px;
+            ">
+                <div style="display: flex; justify-content: space-between; align-items: center;">
+                    <h4 style="margin: 0; color: #333;">{icon} {data_formatada} - {he['status'].replace('_', ' ').title()}</h4>
+                    <span style="background: {border_color}; color: white; padding: 5px 10px; border-radius: 5px; font-size: 12px;">
+                        {he['origem'].upper()}
+                    </span>
+                </div>
+                <p style="margin: 10px 0; color: #666;">
+                    <strong>⏰ Horário:</strong> {hora_inicio_formatada} {f'até {hora_fim_formatada}' if hora_fim_formatada != 'N/A' else ''}<br>
+                    <strong>⏱️ Duração:</strong> {tempo_texto}<br>
+                    <strong>👤 Aprovador:</strong> {he['aprovador'] if he['aprovador'] else 'Não definido'}<br>
+                    <strong>💬 Justificativa:</strong> {he['justificativa'] if he['justificativa'] else 'Não informada'}
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+        
+    else:
+        st.info("📋 Nenhum registro encontrado para os filtros selecionados")
+    
+    # Botão voltar
+    if st.button("↩️ Voltar ao Menu", use_container_width=True):
+        st.rerun()
+
+
 def horas_extras_interface(horas_extras_system):
     """Interface para solicitação e acompanhamento de horas extras"""
     st.markdown("""
@@ -847,6 +1671,20 @@ def horas_extras_interface(horas_extras_system):
         <p>Solicite aprovação para horas extras trabalhadas</p>
     </div>
     """, unsafe_allow_html=True)
+    
+    # Botão para acessar histórico completo
+    if st.button("📊 Ver Histórico Completo", use_container_width=True, type="secondary"):
+        st.session_state.ver_historico_completo = True
+        st.rerun()
+    
+    # Se clicou em ver histórico, mostrar interface de histórico
+    if st.session_state.get('ver_historico_completo'):
+        historico_horas_extras_interface()
+        # Botão para voltar
+        if st.button("↩️ Voltar para Horas Extras"):
+            del st.session_state.ver_historico_completo
+            st.rerun()
+        return
 
     tab1, tab2 = st.tabs(["📝 Nova Solicitação", "📋 Minhas Solicitações"])
 
@@ -949,10 +1787,25 @@ def horas_extras_interface(horas_extras_system):
         # Aplicar filtro de período
         if periodo != "Todos":
             dias = 7 if periodo == "Últimos 7 dias" else 30
-            data_limite = (get_datetime_br() - timedelta(days=dias)
-                           ).strftime("%Y-%m-%d")
+            data_limite = (get_datetime_br() - timedelta(days=dias)).date()
+
+            def parse_data_value(value):
+                if isinstance(value, datetime):
+                    return value.date()
+                if isinstance(value, date):
+                    return value
+                try:
+                    return safe_datetime_parse(value).date()
+                except Exception:
+                    try:
+                        return datetime.strptime(str(value), "%Y-%m-%d").date()
+                    except Exception:
+                        return None
+
             solicitacoes = [
-                s for s in solicitacoes if s["data"] >= data_limite]
+                s for s in solicitacoes
+                if (parsed := parse_data_value(s["data"])) is not None and parsed >= data_limite
+            ]
 
         if solicitacoes:
             for solicitacao in solicitacoes:
@@ -1176,59 +2029,87 @@ def registrar_ausencia_interface(upload_system):
         motivo = st.text_area("📝 Motivo da Ausência",
                               placeholder="Descreva o motivo da ausência...")
 
-        # Removido: opção de não possuir comprovante e upload (será tratado via Atestado)
+        # Checkbox para indicar que não possui comprovante
+        nao_possui_comprovante = st.checkbox(
+            "❌ Não possuo comprovante físico no momento",
+            help="Marque se não houver documento para anexar agora"
+        )
+        
+        # Upload de comprovante (se não marcou o checkbox)
         uploaded_file = None
+        if not nao_possui_comprovante:
+            uploaded_file = st.file_uploader(
+                "📎 Anexar Comprovante (Atestado Médico, etc.)",
+                type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
+                help="Tamanho máximo: 10MB"
+            )
+        else:
+            st.warning(
+                "⚠️ Ausência será registrada sem documento. "
+                "Lembre-se de apresentar o comprovante assim que possível."
+            )
 
         submitted = st.form_submit_button(
             "✅ Registrar Ausência", use_container_width=True)
 
-        if submitted:
-            if not motivo.strip():
-                st.error("❌ O motivo é obrigatório")
-            elif data_inicio > data_fim:
-                st.error(
-                    "❌ Data de início deve ser anterior ou igual à data de fim")
-            else:
-                arquivo_comprovante = None
+    if submitted:
+        if not motivo.strip():
+            st.error("❌ O motivo é obrigatório")
+        elif data_inicio > data_fim:
+            st.error(
+                "❌ Data de início deve ser anterior ou igual à data de fim")
+        else:
+            arquivo_comprovante = None
+            
+            # Se upload foi feito, processar arquivo
+            if uploaded_file is not None:
+                file_content = uploaded_file.read()
+                upload_result = upload_system.save_file(
+                    file_content=file_content,
+                    usuario=st.session_state.usuario,
+                    original_filename=uploaded_file.name,
+                    categoria='ausencia',
+                    relacionado_a='ausencia'
+                )
 
-                # Não há upload de comprovante nesta tela; arquivo_comprovante permanece None.
-                # Nota: anteriormente havia um checkbox "Não possuo comprovante" aqui. Para evitar
-                # referências indefinidas e manter compatibilidade do schema, definimos o valor
-                # padrão para a coluna `nao_possui_comprovante` como 0 (falso).
-                nao_possui_comprovante = 0
+                if upload_result["success"]:
+                    arquivo_comprovante = upload_result["path"]
+                else:
+                    st.error(f"❌ Erro ao enviar comprovante: {upload_result['message']}")
+                    return
 
-                # Registrar ausência no banco
-                conn = get_connection()
-                cursor = conn.cursor()
+            # Registrar ausência no banco
+            conn = get_connection()
+            cursor = conn.cursor()
 
-                try:
-                    cursor.execute("""
-                        INSERT INTO ausencias 
-                        (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """, (
-                        st.session_state.usuario,
-                        data_inicio.strftime("%Y-%m-%d"),
-                        data_fim.strftime("%Y-%m-%d"),
-                        tipo_ausencia,
-                        motivo,
-                        arquivo_comprovante,
-                        1 if nao_possui_comprovante else 0
-                    ))
+            try:
+                cursor.execute("""
+                    INSERT INTO ausencias 
+                    (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                """, (
+                    st.session_state.usuario,
+                    data_inicio.strftime("%Y-%m-%d"),
+                    data_fim.strftime("%Y-%m-%d"),
+                    tipo_ausencia,
+                    motivo,
+                    arquivo_comprovante,
+                    1 if nao_possui_comprovante else 0
+                ))
 
-                    conn.commit()
-                    st.success("✅ Ausência registrada com sucesso!")
+                conn.commit()
+                st.success("✅ Ausência registrada com sucesso!")
 
-                    if nao_possui_comprovante:
-                        st.info(
-                            "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
+                if nao_possui_comprovante:
+                    st.info(
+                        "💡 Lembre-se de apresentar o comprovante assim que possível para regularizar sua situação.")
 
-                    st.rerun()
+                st.rerun()
 
-                except Exception as e:
-                    st.error(f"❌ Erro ao registrar ausência: {str(e)}")
-                finally:
-                    conn.close()
+            except Exception as e:
+                st.error(f"❌ Erro ao registrar ausência: {str(e)}")
+            finally:
+                conn.close()
 
 
 def atestado_horas_interface(atestado_system, upload_system):
@@ -1271,83 +2152,83 @@ def atestado_horas_interface(atestado_system, upload_system):
                         st.info(
                             f"⏱️ Total de horas: {format_time_duration(total_horas)}")
 
-                    motivo = st.text_area("📝 Motivo da Ausência",
-                                          placeholder="Descreva o motivo da ausência...")
+                motivo = st.text_area("📝 Motivo da Ausência",
+                                      placeholder="Descreva o motivo da ausência...")
 
-                    # Upload de comprovante (opcional)
-                    st.markdown("📎 **Comprovante (Opcional)**")
+                # Upload de comprovante (opcional)
+                st.markdown("📎 **Comprovante**")
+                
+                # Checkbox para indicar que não possui atestado físico
+                nao_possui_comprovante = st.checkbox(
+                    "❌ Não possuo atestado físico no momento",
+                    help="Marque se não houver documento para anexar agora"
+                )
+                
+                # Mostrar upload apenas se NÃO marcou o checkbox
+                uploaded_file = None
+                if not nao_possui_comprovante:
                     uploaded_file = st.file_uploader(
                         "Anexe um comprovante (atestado médico, declaração, etc.)",
                         type=['pdf', 'jpg', 'jpeg', 'png', 'doc', 'docx'],
                         help="Tamanho máximo: 10MB"
                     )
+                else:
+                    st.warning(
+                        "⚠️ Atestado será registrado sem documento. "
+                        "O gestor receberá notificação para análise. "
+                        "As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante."
+                    )
 
-                    submitted = st.form_submit_button(
-                        "✅ Registrar Atestado", use_container_width=True)
+                submitted = st.form_submit_button(
+                    "✅ Registrar Atestado", use_container_width=True)
 
-                if submitted:
-                    if not motivo.strip():
-                        st.error("❌ O motivo é obrigatório")
-                    elif hora_inicio >= hora_fim:
-                        st.error(
-                            "❌ Horário de início deve ser anterior ao horário de fim")
-                    else:
-                        arquivo_comprovante = None
-
-                        # Checkbox para indicar que não possui atestado físico
-                        nao_possui_comprovante = st.checkbox(
-                            "❌ Não possuo atestado físico",
-                            help="Marque se não houver documento a anexar"
-                        )
-
-                        # Nota explicativa (exibida sempre, antes da submissão)
-                        st.caption(
-                            "Nota: Ao marcar 'Não possuo atestado físico' o atestado será registrado sem documento. "
-                            "O gestor será notificado e as horas poderão ser lançadas como débito no banco de horas até a apresentação do comprovante."
-                        )
-
-                        if nao_possui_comprovante:
-                            # Aviso visível ao usuário quando opta por não anexar o atestado físico.
-                            st.warning(
-                                "⚠️ Você marcou que não possui o comprovante físico. O atestado será registrado sem documento; o gestor receberá uma notificação para análise. As horas podem ser lançadas como débito no banco de horas até apresentação do comprovante.")
-                            uploaded_file = None
-
-                        # Processar upload se houver e se não marcou nao_possui_comprovante
-                        if uploaded_file and not nao_possui_comprovante:
-                            upload_result = upload_system.save_file(
-                                file_content=uploaded_file.read(),
-                                usuario=st.session_state.usuario,
-                                original_filename=uploaded_file.name,
-                                categoria='atestado_horas'
-                            )
-
-                            if upload_result["success"]:
-                                arquivo_comprovante = upload_result["filename"]
-                                st.success(
-                                    f"📎 Arquivo enviado: {uploaded_file.name}")
-                            else:
-                                st.error(
-                                    f"❌ Erro no upload: {upload_result['message']}")
-
-                        # Registrar atestado
-                        resultado = atestado_system.registrar_atestado_horas(
+            if submitted:
+                if not motivo.strip():
+                    st.error("❌ O motivo é obrigatório")
+                elif hora_inicio >= hora_fim:
+                    st.error(
+                        "❌ Horário de início deve ser anterior ao horário de fim")
+                else:
+                    arquivo_comprovante = None
+                    
+                    # Processar upload se houver e se não marcou nao_possui_comprovante
+                    if uploaded_file and not nao_possui_comprovante:
+                        upload_result = upload_system.save_file(
+                            file_content=uploaded_file.read(),
                             usuario=st.session_state.usuario,
-                            data=data_atestado.strftime("%Y-%m-%d"),
-                            hora_inicio=hora_inicio.strftime("%H:%M"),
-                            hora_fim=hora_fim.strftime("%H:%M"),
-                            motivo=motivo,
-                            arquivo_comprovante=arquivo_comprovante,
-                            nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
-                            ) and nao_possui_comprovante else 0
+                            original_filename=uploaded_file.name,
+                            categoria='atestado_horas',
+                            relacionado_a='atestado_horas'
                         )
 
-                        if resultado["success"]:
-                            st.success(f"✅ {resultado['message']}")
-                            st.info(
-                                f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
-                            st.rerun()
+                        if upload_result["success"]:
+                            arquivo_comprovante = upload_result["path"]
+                            st.success(
+                                f"📎 Arquivo enviado: {uploaded_file.name}")
                         else:
-                            st.error(f"❌ {resultado['message']}")
+                            st.error(
+                                f"❌ Erro no upload: {upload_result['message']}")
+                            return
+
+                    # Registrar atestado
+                    resultado = atestado_system.registrar_atestado_horas(
+                        usuario=st.session_state.usuario,
+                        data=data_atestado.strftime("%Y-%m-%d"),
+                        hora_inicio=hora_inicio.strftime("%H:%M"),
+                        hora_fim=hora_fim.strftime("%H:%M"),
+                        motivo=motivo,
+                        arquivo_comprovante=arquivo_comprovante,
+                        nao_possui_comprovante=1 if 'nao_possui_comprovante' in locals(
+                        ) and nao_possui_comprovante else 0
+                    )
+
+                    if resultado["success"]:
+                        st.success(f"✅ {resultado['message']}")
+                        st.info(
+                            f"⏱️ Total de horas registradas: {format_time_duration(resultado['total_horas'])}")
+                        st.rerun()
+                    else:
+                        st.error(f"❌ {resultado['message']}")
 
         with tab2:
             st.subheader("📋 Meus Atestados de Horas")
@@ -1393,8 +2274,15 @@ def atestado_horas_interface(atestado_system, upload_system):
                                 st.write(
                                     f"**Aprovado por:** {atestado['aprovado_por']}")
                             if atestado['data_aprovacao']:
+                                data_aprovacao = atestado['data_aprovacao']
+                                if isinstance(data_aprovacao, datetime):
+                                    data_aprovacao_fmt = data_aprovacao.strftime('%d/%m/%Y %H:%M')
+                                elif isinstance(data_aprovacao, date):
+                                    data_aprovacao_fmt = data_aprovacao.strftime('%d/%m/%Y')
+                                else:
+                                    data_aprovacao_fmt = str(data_aprovacao)[:16]
                                 st.write(
-                                    f"**Data aprovação:** {atestado['data_aprovacao'][:10]}")
+                                    f"**Data aprovação:** {data_aprovacao_fmt}")
 
                         if atestado['motivo']:
                             st.write(f"**Motivo:** {atestado['motivo']}")
@@ -1805,6 +2693,59 @@ def tela_gestor():
         <div class="user-info">Gestor • {get_datetime_br().strftime('%d/%m/%Y %H:%M')}</div>
     </div>
     """, unsafe_allow_html=True)
+
+    # Verificar se há solicitações de hora extra pendentes
+    conn = None
+    solicitacoes_pendentes_count = 0
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f"""
+            SELECT COUNT(*) FROM horas_extras_ativas
+            WHERE aprovador = {SQL_PLACEHOLDER}
+            AND status = 'aguardando_aprovacao'
+        """, (st.session_state.usuario,))
+        result = cursor.fetchone()
+        solicitacoes_pendentes_count = result[0] if result else 0
+    except Exception as e:
+        logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
+    finally:
+        if conn:
+            conn.close()
+    
+    # Se houver solicitações pendentes, exibir alerta destacado
+    if solicitacoes_pendentes_count > 0:
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            padding: 20px;
+            border-radius: 10px;
+            margin: 10px 0;
+            color: white;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            animation: pulse 2s infinite;
+        ">
+            <h3 style="margin: 0; color: white;">🔔 Solicitações de Hora Extra Pendentes</h3>
+            <p style="margin: 10px 0; font-size: 16px;">
+                Você tem <strong>{solicitacoes_pendentes_count}</strong> solicitação{'ões' if solicitacoes_pendentes_count > 1 else ''} aguardando aprovação
+            </p>
+        </div>
+        <style>
+            @keyframes pulse {{
+                0%, 100% {{ box-shadow: 0 4px 6px rgba(0,0,0,0.1); }}
+                50% {{ box-shadow: 0 6px 12px rgba(245, 87, 108, 0.4); }}
+            }}
+        </style>
+        """, unsafe_allow_html=True)
+        
+        if st.button("📋 Aprovar Agora", type="primary", use_container_width=True, key="btn_aprovar_rapido"):
+            st.session_state.aprovar_hora_extra = True
+            st.rerun()
+    
+    # Se clicou em aprovar hora extra, mostrar interface de aprovação
+    if st.session_state.get('aprovar_hora_extra'):
+        aprovar_hora_extra_rapida_interface()
+        return  # Não exibir resto da interface
 
     # Menu lateral
     with st.sidebar:
@@ -2288,16 +3229,16 @@ def aprovar_atestados_interface(atestado_system):
                             conn = get_connection()
                             cursor = conn.cursor()
                             cursor.execute(
-                                "SELECT nome_original, tamanho, tipo_mime FROM uploads WHERE id = %s",
+                                "SELECT nome_original, tamanho, tipo_arquivo FROM uploads WHERE id = %s",
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
                             conn.close()
 
                             if arquivo_info:
-                                nome_arq, tamanho, tipo_mime = arquivo_info
+                                nome_arq, tamanho, tipo_arquivo = arquivo_info
                                 st.write(
-                                    f"{get_file_icon(tipo_mime)} **{nome_arq}** ({format_file_size(tamanho)})")
+                                    f"{get_file_icon(tipo_arquivo)} **{nome_arq}** ({format_file_size(tamanho)})")
 
                                 # Botão de download
                                 from upload_system import UploadSystem
@@ -2309,12 +3250,12 @@ def aprovar_atestados_interface(atestado_system):
                                         label="⬇️ Baixar Documento",
                                         data=content,
                                         file_name=nome_arq,
-                                        mime=tipo_mime,
+                                        mime=tipo_arquivo,
                                         key=f"download_{atestado_id}"
                                     )
 
                                     # Visualização de imagem
-                                    if is_image_file(tipo_mime):
+                                    if is_image_file(tipo_arquivo):
                                         st.image(
                                             content, caption=nome_arq, width=400)
 
@@ -2877,6 +3818,12 @@ def todos_registros_interface(calculo_horas_system):
                         jornada_inicio_str = jornada[0]
                         jornada_fim_str = jornada[1]
 
+                        # Converter para string se for time object
+                        if isinstance(jornada_inicio_str, time):
+                            jornada_inicio_str = jornada_inicio_str.strftime('%H:%M')
+                        if isinstance(jornada_fim_str, time):
+                            jornada_fim_str = jornada_fim_str.strftime('%H:%M')
+
                         # Calcular horas previstas
                         h_inicio, m_inicio = map(
                             int, jornada_inicio_str.split(':'))
@@ -2990,7 +3937,7 @@ def gerenciar_arquivos_interface(upload_system):
 
     query = """
         SELECT u.id, u.usuario, u.nome_original, u.tipo_arquivo, 
-               u.data_upload, u.tamanho, u.tipo_arquivo as tipo_mime, 
+               u.data_upload, u.tamanho, u.tipo_arquivo as tipo_arquivo, 
                us.nome_completo
         FROM uploads u
         LEFT JOIN usuarios us ON u.usuario = us.usuario
@@ -3061,9 +4008,9 @@ def gerenciar_arquivos_interface(upload_system):
         st.info(f"Exibindo {len(arquivos)} arquivo(s)")
 
         for arquivo in arquivos:
-            arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_mime, nome_completo = arquivo
+            arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_arquivo, nome_completo = arquivo
 
-            with st.expander(f"{get_file_icon(tipo_mime)} {nome} - {nome_completo or usuario}"):
+            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}"):
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
@@ -3072,7 +4019,7 @@ def gerenciar_arquivos_interface(upload_system):
                     st.write(
                         f"**Data:** {safe_datetime_parse(data).strftime('%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
-                    st.write(f"**Formato:** {tipo_mime}")
+                    st.write(f"**Formato:** {tipo_arquivo}")
 
                 with col2:
                     # Botão de download
@@ -3083,7 +4030,7 @@ def gerenciar_arquivos_interface(upload_system):
                             label="⬇️ Baixar",
                             data=content,
                             file_name=nome,
-                            mime=tipo_mime,
+                            mime=tipo_arquivo,
                             use_container_width=True
                         )
 
@@ -3106,7 +4053,7 @@ def gerenciar_arquivos_interface(upload_system):
                                 st.rerun()
 
                 # Visualização de imagens
-                if is_image_file(tipo_mime):
+                if is_image_file(tipo_arquivo):
                     content = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
@@ -3965,6 +4912,20 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
+    
+    # Garantir que o UploadSystem tenha a estrutura correta da tabela
+    try:
+        upload_system_init = UploadSystem()
+        logger.info("✅ Sistema de uploads inicializado")
+    except Exception as e:
+        logger.error(f"Erro ao inicializar sistema de uploads: {e}")
+    
+    # Aplicar migration da tabela uploads se necessário
+    try:
+        from apply_uploads_migration import apply_uploads_migration
+        apply_uploads_migration()
+    except Exception as e:
+        logger.warning(f"Não foi possível aplicar migration de uploads: {e}")
 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False

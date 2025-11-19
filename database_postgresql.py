@@ -14,6 +14,9 @@ load_dotenv()
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
+# Placeholder para queries SQL (PostgreSQL usa %s, SQLite usa ?)
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+
 # Importar psycopg2 se necessário
 if USE_POSTGRESQL:
     import psycopg2
@@ -131,6 +134,23 @@ def init_db_postgresql():
             aprovado_por VARCHAR(255),
             data_aprovacao TIMESTAMP,
             observacoes TEXT
+        )
+    ''')
+
+    # Tabela horas_extras_ativas
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+            id SERIAL PRIMARY KEY,
+            usuario VARCHAR(255) NOT NULL,
+            aprovador VARCHAR(255) NOT NULL,
+            justificativa TEXT NOT NULL,
+            data_inicio TIMESTAMP NOT NULL,
+            hora_inicio TIME NOT NULL,
+            status VARCHAR(50) DEFAULT 'em_execucao',
+            data_fim TIMESTAMP,
+            hora_fim TIME,
+            tempo_decorrido_minutos INTEGER,
+            data_criacao TIMESTAMP DEFAULT NOW()
         )
     ''')
 
@@ -278,6 +298,10 @@ def init_db():
 if __name__ == '__main__':
     print(f"🔧 Modo: {'PostgreSQL' if USE_POSTGRESQL else 'SQLite'}")
     if USE_POSTGRESQL:
-        print(
-            f"📊 Conectando em: {DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['database']}")
+        database_url = os.getenv('DATABASE_URL')
+        if database_url:
+            print(f"📊 Conectando via DATABASE_URL")
+        else:
+            print(
+                f"📊 Conectando em: {os.getenv('DB_HOST', 'localhost')}:{os.getenv('DB_PORT', '5432')}/{os.getenv('DB_NAME', 'ponto_esa')}")
     init_db()

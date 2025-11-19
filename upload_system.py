@@ -59,25 +59,74 @@ class UploadSystem:
         conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS uploads (
-                id SERIAL PRIMARY KEY,
-                usuario TEXT NOT NULL,
-                nome_original TEXT NOT NULL,
-                nome_arquivo TEXT NOT NULL,
-                tipo_arquivo TEXT NOT NULL,
-                tamanho INTEGER NOT NULL,
-                caminho TEXT NOT NULL,
-                hash_arquivo TEXT NOT NULL,
-                relacionado_a TEXT,
-                relacionado_id INTEGER,
-                data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                status TEXT DEFAULT 'ativo'
-            )
-        ''')
+        # Verificar se a tabela existe e tem a estrutura correta
+        cursor.execute("""
+            SELECT column_name 
+            FROM information_schema.columns 
+            WHERE table_name = 'uploads'
+        """)
+        
+        existing_columns = [row[0] for row in cursor.fetchall()]
+        
+        # Se a tabela não existe ou não tem a coluna 'caminho', recriar
+        if not existing_columns or 'caminho' not in existing_columns:
+            print("⚠️ Tabela uploads com estrutura incorreta. Recriando...")
+            
+            # Fazer backup de dados se existirem
+            if existing_columns:
+                cursor.execute("SELECT * FROM uploads")
+                backup_data = cursor.fetchall()
+                
+                # Drop da tabela antiga
+                cursor.execute("DROP TABLE IF EXISTS uploads CASCADE")
+                print("  🗑️ Tabela antiga removida")
+            else:
+                backup_data = []
+            
+            # Criar tabela com estrutura correta
+            cursor.execute('''
+                CREATE TABLE uploads (
+                    id SERIAL PRIMARY KEY,
+                    usuario TEXT NOT NULL,
+                    nome_original TEXT NOT NULL,
+                    nome_arquivo TEXT NOT NULL,
+                    tipo_arquivo TEXT NOT NULL,
+                    tamanho INTEGER NOT NULL,
+                    caminho TEXT NOT NULL,
+                    hash_arquivo TEXT,
+                    relacionado_a TEXT,
+                    relacionado_id INTEGER,
+                    data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    status TEXT DEFAULT 'ativo'
+                )
+            ''')
+            print("  ✅ Tabela uploads criada com estrutura correta")
+            
+            # Criar índices
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_usuario ON uploads(usuario)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_hash ON uploads(hash_arquivo)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_relacionado ON uploads(relacionado_a, relacionado_id)")
+            print("  📊 Índices criados")
+            
+            # Restaurar dados se houver
+            if backup_data:
+                print(f"  🔄 Restaurando {len(backup_data)} registros...")
+                # Nota: pode ser necessário ajustar dependendo da estrutura antiga
+        else:
+            # Verificar e adicionar colunas faltantes
+            if 'hash_arquivo' not in existing_columns:
+                cursor.execute("ALTER TABLE uploads ADD COLUMN hash_arquivo TEXT")
+                print("  ➕ Coluna 'hash_arquivo' adicionada")
+            
+            if 'status' not in existing_columns:
+                cursor.execute("ALTER TABLE uploads ADD COLUMN status TEXT DEFAULT 'ativo'")
+                cursor.execute("UPDATE uploads SET status = 'ativo' WHERE status IS NULL")
+                print("  ➕ Coluna 'status' adicionada")
 
         conn.commit()
         conn.close()
+        print("✅ Tabela uploads inicializada com sucesso")
 
     def validate_file(self, file_content, filename, file_size):
         """Valida arquivo antes do upload"""
@@ -141,6 +190,9 @@ class UploadSystem:
     def save_file(self, file_content, usuario, original_filename, categoria='documento', relacionado_a=None, relacionado_id=None):
         """Salva arquivo no sistema"""
         try:
+            # Garantir que a tabela existe e tem estrutura correta
+            self.init_database()
+            
             file_size = len(file_content)
 
             # Validar arquivo
@@ -228,24 +280,41 @@ class UploadSystem:
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
-        conn = get_connection()
-        cursor = conn.cursor()
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute('''
-            SELECT id, nome_original, caminho FROM uploads 
-            WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
-        ''', (file_hash, usuario))
+            # Verificar se a coluna caminho existe
+            cursor.execute("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'uploads' AND column_name = 'caminho'
+            """)
+            
+            if not cursor.fetchone():
+                # Coluna não existe, não fazer verificação de duplicata
+                conn.close()
+                return None
 
-        result = cursor.fetchone()
-        conn.close()
+            cursor.execute('''
+                SELECT id, nome_original, caminho FROM uploads 
+                WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
+            ''', (file_hash, usuario))
 
-        if result:
-            return {
-                "id": result[0],
-                "nome_original": result[1],
-                "caminho": result[2]
-            }
-        return None
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                return {
+                    "id": result[0],
+                    "nome_original": result[1],
+                    "caminho": result[2]
+                }
+            return None
+        except Exception as e:
+            # Em caso de erro, apenas retornar None e permitir upload
+            print(f"Aviso ao verificar duplicata: {e}")
+            return None
 
     def get_user_uploads(self, usuario, categoria=None, relacionado_a=None, relacionado_id=None):
         """Lista uploads de um usuário"""

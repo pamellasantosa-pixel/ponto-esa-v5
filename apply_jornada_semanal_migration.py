@@ -103,22 +103,47 @@ def aplicar_migration_horas_extras_ativas():
     
     print("\n🔄 Criando tabela de horas extras ativas...")
     
+    # Detectar tipo de banco
+    import os
+    usa_postgres = os.getenv('DATABASE_URL') is not None
+    
     try:
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS horas_extras_ativas (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT NOT NULL,
-                aprovador TEXT NOT NULL,
-                justificativa TEXT NOT NULL,
-                data_inicio TIMESTAMP NOT NULL,
-                hora_inicio TIME NOT NULL,
-                status TEXT DEFAULT 'em_execucao',
-                data_fim TIMESTAMP,
-                hora_fim TIME,
-                tempo_decorrido_minutos INTEGER,
-                data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        if usa_postgres:
+            # PostgreSQL
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+                    id SERIAL PRIMARY KEY,
+                    usuario VARCHAR(255) NOT NULL,
+                    aprovador VARCHAR(255) NOT NULL,
+                    justificativa TEXT NOT NULL,
+                    data_inicio TIMESTAMP NOT NULL,
+                    hora_inicio TIME NOT NULL,
+                    status VARCHAR(50) DEFAULT 'em_execucao',
+                    data_fim TIMESTAMP,
+                    hora_fim TIME,
+                    tempo_decorrido_minutos INTEGER,
+                    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (usuario) REFERENCES usuarios(usuario),
+                    FOREIGN KEY (aprovador) REFERENCES usuarios(usuario)
+                )
+            """)
+        else:
+            # SQLite
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario TEXT NOT NULL,
+                    aprovador TEXT NOT NULL,
+                    justificativa TEXT NOT NULL,
+                    data_inicio TIMESTAMP NOT NULL,
+                    hora_inicio TIME NOT NULL,
+                    status TEXT DEFAULT 'em_execucao',
+                    data_fim TIMESTAMP,
+                    hora_fim TIME,
+                    tempo_decorrido_minutos INTEGER,
+                    data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
         print("  ✅ Tabela 'horas_extras_ativas' criada")
     except Exception as e:
         print(f"  ⚠️  Erro ao criar tabela: {e}")

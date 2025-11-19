@@ -9,6 +9,9 @@ load_dotenv()
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
+# Placeholder para queries SQL (PostgreSQL usa %s, SQLite usa ?)
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+
 if USE_POSTGRESQL:
     import psycopg2
     import psycopg2.extras

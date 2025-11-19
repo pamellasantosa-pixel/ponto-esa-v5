@@ -3,8 +3,76 @@ Sistema de Jornada Semanal Variável
 Permite configurar horários diferentes para cada dia da semana
 """
 
-from database import get_connection, SQL_PLACEHOLDER
+import os
+import logging
 from datetime import datetime, time
+
+# Verificar se usa PostgreSQL e importar o módulo correto
+USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+
+if USE_POSTGRESQL:
+    from database_postgresql import get_connection, SQL_PLACEHOLDER
+else:
+    from database import get_connection, SQL_PLACEHOLDER
+
+logger = logging.getLogger(__name__)
+
+JORNADA_COLUMNS = [
+    ("trabalha_seg", "INTEGER DEFAULT 1"),
+    ("jornada_seg_inicio", "TIME"),
+    ("jornada_seg_fim", "TIME"),
+    ("trabalha_ter", "INTEGER DEFAULT 1"),
+    ("jornada_ter_inicio", "TIME"),
+    ("jornada_ter_fim", "TIME"),
+    ("trabalha_qua", "INTEGER DEFAULT 1"),
+    ("jornada_qua_inicio", "TIME"),
+    ("jornada_qua_fim", "TIME"),
+    ("trabalha_qui", "INTEGER DEFAULT 1"),
+    ("jornada_qui_inicio", "TIME"),
+    ("jornada_qui_fim", "TIME"),
+    ("trabalha_sex", "INTEGER DEFAULT 1"),
+    ("jornada_sex_inicio", "TIME"),
+    ("jornada_sex_fim", "TIME"),
+    ("trabalha_sab", "INTEGER DEFAULT 0"),
+    ("jornada_sab_inicio", "TIME"),
+    ("jornada_sab_fim", "TIME"),
+    ("trabalha_dom", "INTEGER DEFAULT 0"),
+    ("jornada_dom_inicio", "TIME"),
+    ("jornada_dom_fim", "TIME"),
+]
+
+
+def ensure_jornada_columns():
+    """Garante que as colunas da jornada semanal existam no banco de dados."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        if USE_POSTGRESQL:
+            for column, definition in JORNADA_COLUMNS:
+                cursor.execute(
+                    f"ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS {column} {definition}"
+                )
+        else:
+            for column, definition in JORNADA_COLUMNS:
+                try:
+                    cursor.execute(f"ALTER TABLE usuarios ADD COLUMN {column} {definition}")
+                except Exception:
+                    # Coluna já existe (SQLite não possui IF NOT EXISTS para ADD COLUMN)
+                    continue
+
+        conn.commit()
+    except Exception as exc:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        logger.warning("Não foi possível garantir colunas de jornada semanal: %s", exc)
+    finally:
+        conn.close()
+
+
+ensure_jornada_columns()
 
 DIAS_SEMANA = {
     0: 'seg',  # Segunda-feira
@@ -252,9 +320,43 @@ def verificar_horario_saida_proximo(usuario, margem_minutos=30):
         return {'proximo': False, 'horario_saida': None, 'minutos_restantes': None}
     
     # Converter horário de saída para datetime de hoje
-    horario_saida_str = jornada_dia['fim']
-    hora, minuto = map(int, horario_saida_str.split(':'))
+    horario_saida_val = jornada_dia['fim']
+
+    def parse_hora_minuto(value):
+        if isinstance(value, time):
+            return value.hour, value.minute
+
+        value_str = str(value).strip() if value is not None else ''
+        if not value_str:
+            return None
+
+        try:
+            # Suporta formatos ISO (ex: 17:30:00 ou 17:30:00+00:00)
+            hora_iso = datetime.fromisoformat(value_str)
+            return hora_iso.hour, hora_iso.minute
+        except (ValueError, TypeError):
+            partes = value_str.split(':')
+            if len(partes) >= 2:
+                try:
+                    return int(partes[0]), int(partes[1])
+                except ValueError:
+                    return None
+        return None
+
+    hora_minuto = parse_hora_minuto(horario_saida_val)
+    if hora_minuto is None:
+        logger.warning(
+            "Horário de saída inválido para usuário %s: %s", usuario, horario_saida_val
+        )
+        return {
+            'proximo': False,
+            'horario_saida': None,
+            'minutos_restantes': None
+        }
+
+    hora, minuto = hora_minuto
     horario_saida = agora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
+    horario_saida_str = f"{hora:02d}:{minuto:02d}"
     
     # Calcular diferença
     diferenca = horario_saida - agora

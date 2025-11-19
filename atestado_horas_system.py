@@ -128,10 +128,9 @@ class AtestadoHorasSystem:
         atestados = cursor.fetchall()
         conn.close()
 
-        # Converter para lista de dicionários
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'total_horas',
-                   'motivo', 'arquivo_comprovante', 'status', 'data_registro',
-                   'aprovado_por', 'data_aprovacao', 'observacoes']
+                'motivo', 'arquivo_comprovante', 'nao_possui_comprovante', 'status', 'data_registro',
+                'aprovado_por', 'data_aprovacao', 'observacoes']
 
         return [dict(zip(colunas, atestado)) for atestado in atestados]
 
@@ -154,7 +153,7 @@ class AtestadoHorasSystem:
         conn.close()
 
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'total_horas',
-                   'motivo', 'arquivo_comprovante', 'status', 'data_registro',
+                   'motivo', 'arquivo_comprovante', 'nao_possui_comprovante', 'status', 'data_registro',
                    'aprovado_por', 'data_aprovacao', 'observacoes']
 
         return [dict(zip(colunas, atestado)) for atestado in atestados]
