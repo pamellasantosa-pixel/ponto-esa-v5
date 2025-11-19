@@ -5853,35 +5853,69 @@ def gerenciar_usuarios_interface():
             busca = st.text_input("🔍 Buscar:")
 
         # Buscar usuários
-        conn = get_connection()
-        cursor = conn.cursor()
+        if REFACTORING_ENABLED:
+            try:
+                query = """
+                    SELECT id, usuario, nome_completo, tipo, ativo, 
+                           jornada_inicio_previsto, jornada_fim_previsto
+                    FROM usuarios WHERE 1=1
+                """
+                params = []
 
-        query = """
-            SELECT id, usuario, nome_completo, tipo, ativo, 
-                   jornada_inicio_previsto, jornada_fim_previsto
-            FROM usuarios WHERE 1=1
-        """
-        params = []
+                if tipo_filter == "Funcionários":
+                    query += " AND tipo = 'funcionario'"
+                elif tipo_filter == "Gestores":
+                    query += " AND tipo = 'gestor'"
 
-        if tipo_filter == "Funcionários":
-            query += " AND tipo = 'funcionario'"
-        elif tipo_filter == "Gestores":
-            query += " AND tipo = 'gestor'"
+                if status_filter == "Ativos":
+                    query += " AND ativo = 1"
+                elif status_filter == "Inativos":
+                    query += " AND ativo = 0"
 
-        if status_filter == "Ativos":
-            query += " AND ativo = 1"
-        elif status_filter == "Inativos":
-            query += " AND ativo = 0"
+                if busca:
+                    query += f" AND (usuario LIKE {SQL_PLACEHOLDER} OR nome_completo LIKE {SQL_PLACEHOLDER})"
+                    params.extend([f"%{busca}%", f"%{busca}%"])
 
-        if busca:
-            query += " AND (usuario LIKE %s OR nome_completo LIKE %s)"
-            params.extend([f"%{busca}%", f"%{busca}%"])
+                query += " ORDER BY nome_completo"
 
-        query += " ORDER BY nome_completo"
+                usuarios = execute_query(query, tuple(params))
+                if not usuarios:
+                    usuarios = []
+            except Exception as e:
+                log_error("Erro ao buscar usuários", e, {"busca": busca})
+                st.error("❌ Erro ao buscar usuários")
+                return
+        else:
+            # Fallback original
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute(query, params)
-        usuarios = cursor.fetchall()
-        conn.close()
+            query = """
+                SELECT id, usuario, nome_completo, tipo, ativo, 
+                       jornada_inicio_previsto, jornada_fim_previsto
+                FROM usuarios WHERE 1=1
+            """
+            params = []
+
+            if tipo_filter == "Funcionários":
+                query += " AND tipo = 'funcionario'"
+            elif tipo_filter == "Gestores":
+                query += " AND tipo = 'gestor'"
+
+            if status_filter == "Ativos":
+                query += " AND ativo = 1"
+            elif status_filter == "Inativos":
+                query += " AND ativo = 0"
+
+            if busca:
+                query += " AND (usuario LIKE %s OR nome_completo LIKE %s)"
+                params.extend([f"%{busca}%", f"%{busca}%"])
+
+            query += " ORDER BY nome_completo"
+
+            cursor.execute(query, params)
+            usuarios = cursor.fetchall()
+            conn.close()
 
         # Estatísticas
         col1, col2, col3, col4 = st.columns(4)
@@ -6054,20 +6088,33 @@ def gerenciar_usuarios_interface():
                             elif nova_senha != confirmar_senha:
                                 st.error("❌ As senhas não conferem!")
                             else:
-                                conn = get_connection()
-                                cursor = conn.cursor()
+                                if REFACTORING_ENABLED:
+                                    try:
+                                        senha_hash = hashlib.sha256(
+                                            nova_senha.encode()).hexdigest()
+                                        update_query = "UPDATE usuarios SET senha = %s WHERE id = %s"
+                                        execute_update(update_query, (senha_hash, usuario_id))
+                                        log_security_event("PASSWORD_CHANGED", usuario=st.session_state.usuario, context={"target_user_id": usuario_id})
+                                        st.success("✅ Senha alterada com sucesso!")
+                                    except Exception as e:
+                                        log_error("Erro ao alterar senha", e, {"usuario_id": usuario_id})
+                                        st.error(f"❌ Erro: {e}")
+                                else:
+                                    # Fallback original
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
 
-                                senha_hash = hashlib.sha256(
-                                    nova_senha.encode()).hexdigest()
-                                cursor.execute(
-                                    "UPDATE usuarios SET senha = %s WHERE id = %s",
-                                    (senha_hash, usuario_id)
-                                )
+                                    senha_hash = hashlib.sha256(
+                                        nova_senha.encode()).hexdigest()
+                                    cursor.execute(
+                                        "UPDATE usuarios SET senha = %s WHERE id = %s",
+                                        (senha_hash, usuario_id)
+                                    )
 
-                                conn.commit()
-                                conn.close()
+                                    conn.commit()
+                                    conn.close()
 
-                                st.success("✅ Senha alterada com sucesso!")
+                                    st.success("✅ Senha alterada com sucesso!")
 
                     with col2:
                         st.write("")
@@ -6075,32 +6122,61 @@ def gerenciar_usuarios_interface():
 
                         # Botão de salvar
                         if st.button("💾 Salvar", key=f"save_{usuario_id}", use_container_width=True):
-                            conn = get_connection()
-                            cursor = conn.cursor()
+                            if REFACTORING_ENABLED:
+                                try:
+                                    update_query = """
+                                        UPDATE usuarios 
+                                        SET nome_completo = %s, tipo = %s, ativo = %s,
+                                            jornada_inicio_previsto = %s, jornada_fim_previsto = %s
+                                        WHERE id = %s
+                                    """
+                                    execute_update(update_query, (
+                                        novo_nome,
+                                        novo_tipo,
+                                        int(novo_ativo),
+                                        nova_jornada_inicio.strftime("%H:%M"),
+                                        nova_jornada_fim.strftime("%H:%M"),
+                                        usuario_id
+                                    ))
+                                    
+                                    # Salvar jornada semanal
+                                    from jornada_semanal_system import salvar_jornada_semanal
+                                    salvar_jornada_semanal(usuario_id, jornada_config)
+                                    
+                                    log_security_event("USER_UPDATED", usuario=st.session_state.usuario, context={"target_user_id": usuario_id, "target_type": novo_tipo})
+                                    st.success("✅ Usuário atualizado!")
+                                    st.rerun()
+                                except Exception as e:
+                                    log_error("Erro ao atualizar usuário", e, {"usuario_id": usuario_id})
+                                    st.error(f"❌ Erro ao atualizar: {e}")
+                            else:
+                                # Fallback original
+                                conn = get_connection()
+                                cursor = conn.cursor()
 
-                            cursor.execute("""
-                                UPDATE usuarios 
-                                SET nome_completo = %s, tipo = %s, ativo = %s,
-                                    jornada_inicio_previsto = %s, jornada_fim_previsto = %s
-                                WHERE id = %s
-                            """, (
-                                novo_nome,
-                                novo_tipo,
-                                int(novo_ativo),
-                                nova_jornada_inicio.strftime("%H:%M"),
-                                nova_jornada_fim.strftime("%H:%M"),
-                                usuario_id
-                            ))
+                                cursor.execute("""
+                                    UPDATE usuarios 
+                                    SET nome_completo = %s, tipo = %s, ativo = %s,
+                                        jornada_inicio_previsto = %s, jornada_fim_previsto = %s
+                                    WHERE id = %s
+                                """, (
+                                    novo_nome,
+                                    novo_tipo,
+                                    int(novo_ativo),
+                                    nova_jornada_inicio.strftime("%H:%M"),
+                                    nova_jornada_fim.strftime("%H:%M"),
+                                    usuario_id
+                                ))
 
-                            conn.commit()
-                            conn.close()
-                            
-                            # Salvar jornada semanal
-                            from jornada_semanal_system import salvar_jornada_semanal
-                            salvar_jornada_semanal(usuario_id, jornada_config)
+                                conn.commit()
+                                conn.close()
+                                
+                                # Salvar jornada semanal
+                                from jornada_semanal_system import salvar_jornada_semanal
+                                salvar_jornada_semanal(usuario_id, jornada_config)
 
-                            st.success("✅ Usuário atualizado!")
-                            st.rerun()
+                                st.success("✅ Usuário atualizado!")
+                                st.rerun()
 
                         # Botão de excluir
                         if st.button("🗑️ Excluir", key=f"del_{usuario_id}", use_container_width=True):
@@ -6109,16 +6185,29 @@ def gerenciar_usuarios_interface():
                         if st.session_state.get(f"confirm_del_user_{usuario_id}"):
                             st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{usuario_id}"):
-                                conn = get_connection()
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}", (usuario_id,))
-                                conn.commit()
-                                conn.close()
+                                if REFACTORING_ENABLED:
+                                    try:
+                                        delete_query = f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}"
+                                        execute_update(delete_query, (usuario_id,))
+                                        log_security_event("USER_DELETED", usuario=st.session_state.usuario, context={"deleted_user_id": usuario_id})
+                                        del st.session_state[f"confirm_del_user_{usuario_id}"]
+                                        st.success("✅ Usuário excluído!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        log_error("Erro ao deletar usuário", e, {"usuario_id": usuario_id})
+                                        st.error(f"❌ Erro ao deletar: {e}")
+                                else:
+                                    # Fallback original
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
+                                    cursor.execute(
+                                        f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}", (usuario_id,))
+                                    conn.commit()
+                                    conn.close()
 
-                                del st.session_state[f"confirm_del_user_{usuario_id}"]
-                                st.success("✅ Usuário excluído!")
-                                st.rerun()
+                                    del st.session_state[f"confirm_del_user_{usuario_id}"]
+                                    st.success("✅ Usuário excluído!")
+                                    st.rerun()
         else:
             st.info("👤 Nenhum usuário encontrado")
 
@@ -6164,44 +6253,78 @@ def gerenciar_usuarios_interface():
                 elif nova_senha != confirmar_senha:
                     st.error("❌ As senhas não conferem!")
                 else:
-                    try:
-                        conn = get_connection()
-                        cursor = conn.cursor()
+                    if REFACTORING_ENABLED:
+                        try:
+                            senha_hash = hashlib.sha256(
+                                nova_senha.encode()).hexdigest()
 
-                        senha_hash = hashlib.sha256(
-                            nova_senha.encode()).hexdigest()
+                            insert_query = f"""
+                                INSERT INTO usuarios 
+                                (usuario, senha, tipo, nome_completo, ativo, 
+                                 jornada_inicio_previsto, jornada_fim_previsto)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """
+                            novo_usuario_id = execute_update(insert_query, (
+                                novo_login,
+                                senha_hash,
+                                novo_tipo,
+                                novo_nome,
+                                int(novo_ativo),
+                                jornada_inicio.strftime("%H:%M"),
+                                jornada_fim.strftime("%H:%M")
+                            ), return_id=True)
+                            
+                            # Copiar jornada padrão para dias úteis (seg-sex)
+                            from jornada_semanal_system import copiar_jornada_padrao_para_dias
+                            copiar_jornada_padrao_para_dias(novo_usuario_id, ['seg', 'ter', 'qua', 'qui', 'sex'])
+                            
+                            log_security_event("USER_CREATED", usuario=st.session_state.usuario, context={"new_user": novo_login, "tipo": novo_tipo})
+                            st.success(
+                                f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            log_error("Erro ao cadastrar usuário", e, {"novo_login": novo_login})
+                            st.error(f"❌ Erro ao cadastrar usuário: {e}")
+                    else:
+                        # Fallback original
+                        try:
+                            conn = get_connection()
+                            cursor = conn.cursor()
 
-                        cursor.execute(f"""
-                            INSERT INTO usuarios 
-                            (usuario, senha, tipo, nome_completo, ativo, 
-                             jornada_inicio_previsto, jornada_fim_previsto)
-                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                        """, (
-                            novo_login,
-                            senha_hash,
-                            novo_tipo,
-                            novo_nome,
-                            int(novo_ativo),
-                            jornada_inicio.strftime("%H:%M"),
-                            jornada_fim.strftime("%H:%M")
-                        ))
-                        
-                        # Obter ID do usuário recém-criado
-                        cursor.execute("SELECT last_insert_rowid()")
-                        novo_usuario_id = cursor.fetchone()[0]
+                            senha_hash = hashlib.sha256(
+                                nova_senha.encode()).hexdigest()
 
-                        conn.commit()
-                        conn.close()
-                        
-                        # Copiar jornada padrão para dias úteis (seg-sex)
-                        from jornada_semanal_system import copiar_jornada_padrao_para_dias
-                        copiar_jornada_padrao_para_dias(novo_usuario_id, ['seg', 'ter', 'qua', 'qui', 'sex'])
+                            cursor.execute(f"""
+                                INSERT INTO usuarios 
+                                (usuario, senha, tipo, nome_completo, ativo, 
+                                 jornada_inicio_previsto, jornada_fim_previsto)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """, (
+                                novo_login,
+                                senha_hash,
+                                novo_tipo,
+                                novo_nome,
+                                int(novo_ativo),
+                                jornada_inicio.strftime("%H:%M"),
+                                jornada_fim.strftime("%H:%M")
+                            ))
+                            
+                            # Obter ID do usuário recém-criado
+                            cursor.execute("SELECT last_insert_rowid()")
+                            novo_usuario_id = cursor.fetchone()[0]
 
-                        st.success(
-                            f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Erro ao cadastrar usuário: {e}")
+                            conn.commit()
+                            conn.close()
+                            
+                            # Copiar jornada padrão para dias úteis (seg-sex)
+                            from jornada_semanal_system import copiar_jornada_padrao_para_dias
+                            copiar_jornada_padrao_para_dias(novo_usuario_id, ['seg', 'ter', 'qua', 'qui', 'sex'])
+
+                            st.success(
+                                f"✅ Usuário '{novo_nome}' cadastrado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao cadastrar usuário: {e}")
 
 
 def sistema_interface():
