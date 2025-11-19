@@ -1597,31 +1597,61 @@ def exibir_widget_notificacoes(horas_extras_system):
     """Exibe widget fixo de notificações pendentes até serem respondidas"""
     try:
         # Buscar todas as notificações pendentes
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Solicitações de horas extras pendentes (para aprovar)
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_horas_extras 
-            WHERE aprovador_solicitado = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        he_pendentes = cursor.fetchone()[0]
-        
-        # Solicitações de correção de registro pendentes (enviadas pelo usuário)
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-            WHERE usuario = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        correcoes_pendentes = cursor.fetchone()[0]
-        
-        # Atestados de horas pendentes (enviados pelo usuário)
-        cursor.execute("""
-            SELECT COUNT(*) FROM atestado_horas 
-            WHERE usuario = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        atestados_pendentes = cursor.fetchone()[0]
-        
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                # Solicitações de horas extras pendentes (para aprovar)
+                result_he = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                he_pendentes = result_he[0] if result_he else 0
+                
+                # Solicitações de correção de registro pendentes (enviadas pelo usuário)
+                result_corr = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                correcoes_pendentes = result_corr[0] if result_corr else 0
+                
+                # Atestados de horas pendentes (enviados pelo usuário)
+                result_at = execute_query(
+                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                atestados_pendentes = result_at[0] if result_at else 0
+            except Exception as e:
+                log_error("Erro ao buscar notificações pendentes", e, {"usuario": st.session_state.usuario})
+                he_pendentes = correcoes_pendentes = atestados_pendentes = 0
+        else:
+            # Buscar todas as notificações pendentes
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Solicitações de horas extras pendentes (para aprovar)
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                WHERE aprovador_solicitado = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            he_pendentes = cursor.fetchone()[0]
+            
+            # Solicitações de correção de registro pendentes (enviadas pelo usuário)
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                WHERE usuario = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            correcoes_pendentes = cursor.fetchone()[0]
+            
+            # Atestados de horas pendentes (enviados pelo usuário)
+            cursor.execute("""
+                SELECT COUNT(*) FROM atestado_horas 
+                WHERE usuario = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            atestados_pendentes = cursor.fetchone()[0]
+            
+            conn.close()
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
@@ -1740,31 +1770,60 @@ def tela_funcionario():
         st.markdown("### 📋 Menu Principal")
 
         # Contar todas as notificações pendentes
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Horas extras para aprovar
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_horas_extras 
-            WHERE aprovador_solicitado = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        he_aprovar = cursor.fetchone()[0]
-        
-        # Solicitações de correção do usuário
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-            WHERE usuario = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        correcoes_pendentes = cursor.fetchone()[0]
-        
-        # Atestados pendentes
-        cursor.execute("""
-            SELECT COUNT(*) FROM atestado_horas 
-            WHERE usuario = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        atestados_pendentes = cursor.fetchone()[0]
-        
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                # Horas extras para aprovar
+                result_he = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                he_aprovar = result_he[0] if result_he else 0
+                
+                # Solicitações de correção do usuário
+                result_corr = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                correcoes_pendentes = result_corr[0] if result_corr else 0
+                
+                # Atestados pendentes
+                result_at = execute_query(
+                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                atestados_pendentes = result_at[0] if result_at else 0
+            except Exception as e:
+                log_error("Erro ao contar notificações da sidebar", e, {"usuario": st.session_state.usuario})
+                he_aprovar = correcoes_pendentes = atestados_pendentes = 0
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Horas extras para aprovar
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                WHERE aprovador_solicitado = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            he_aprovar = cursor.fetchone()[0]
+            
+            # Solicitações de correção do usuário
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                WHERE usuario = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            correcoes_pendentes = cursor.fetchone()[0]
+            
+            # Atestados pendentes
+            cursor.execute("""
+                SELECT COUNT(*) FROM atestado_horas 
+                WHERE usuario = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            atestados_pendentes = cursor.fetchone()[0]
+            
+            conn.close()
         
         total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
 
@@ -3884,23 +3943,34 @@ def tela_gestor():
     exibir_widget_notificacoes(horas_extras_system)
 
     # Verificar se há solicitações de hora extra pendentes
-    conn = None
     solicitacoes_pendentes_count = 0
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(f"""
-            SELECT COUNT(*) FROM horas_extras_ativas
-            WHERE aprovador = {SQL_PLACEHOLDER}
-            AND status = 'aguardando_aprovacao'
-        """, (st.session_state.usuario,))
-        result = cursor.fetchone()
-        solicitacoes_pendentes_count = result[0] if result else 0
-    except Exception as e:
-        logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
+    if REFACTORING_ENABLED:
+        try:
+            result = execute_query(
+                f"SELECT COUNT(*) FROM horas_extras_ativas WHERE aprovador = {SQL_PLACEHOLDER} AND status = 'aguardando_aprovacao'",
+                (st.session_state.usuario,),
+                fetch_one=True
+            )
+            solicitacoes_pendentes_count = result[0] if result else 0
+        except Exception as e:
+            log_error("Erro ao verificar solicitações pendentes", e, {"usuario": st.session_state.usuario})
+    else:
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT COUNT(*) FROM horas_extras_ativas
+                WHERE aprovador = {SQL_PLACEHOLDER}
+                AND status = 'aguardando_aprovacao'
+            """, (st.session_state.usuario,))
+            result = cursor.fetchone()
+            solicitacoes_pendentes_count = result[0] if result else 0
+        except Exception as e:
+            logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
     
     # Se houver solicitações pendentes, exibir alerta destacado
     if solicitacoes_pendentes_count > 0:
@@ -3941,31 +4011,58 @@ def tela_gestor():
         st.markdown("### 🎛️ Menu do Gestor")
         
         # Contar pendências para badges
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Horas extras para aprovar
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_horas_extras 
-            WHERE aprovador_solicitado = %s AND status = 'pendente'
-        """, (st.session_state.usuario,))
-        he_aprovar = cursor.fetchone()[0]
-        
-        # Atestados pendentes
-        cursor.execute("""
-            SELECT COUNT(*) FROM atestado_horas 
-            WHERE status = 'pendente'
-        """)
-        atestados_pendentes = cursor.fetchone()[0]
-        
-        # Correções pendentes (todas - gestor aprova todas)
-        cursor.execute("""
-            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-            WHERE status = 'pendente'
-        """)
-        correcoes_pendentes = cursor.fetchone()[0]
-        
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                # Horas extras para aprovar
+                result_he = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                    (st.session_state.usuario,),
+                    fetch_one=True
+                )
+                he_aprovar = result_he[0] if result_he else 0
+                
+                # Atestados pendentes
+                result_at = execute_query(
+                    "SELECT COUNT(*) FROM atestado_horas WHERE status = 'pendente'",
+                    fetch_one=True
+                )
+                atestados_pendentes = result_at[0] if result_at else 0
+                
+                # Correções pendentes (todas - gestor aprova todas)
+                result_corr = execute_query(
+                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE status = 'pendente'",
+                    fetch_one=True
+                )
+                correcoes_pendentes = result_corr[0] if result_corr else 0
+            except Exception as e:
+                log_error("Erro ao contar pendências do gestor", e, {"usuario": st.session_state.usuario})
+                he_aprovar = atestados_pendentes = correcoes_pendentes = 0
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Horas extras para aprovar
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                WHERE aprovador_solicitado = %s AND status = 'pendente'
+            """, (st.session_state.usuario,))
+            he_aprovar = cursor.fetchone()[0]
+            
+            # Atestados pendentes
+            cursor.execute("""
+                SELECT COUNT(*) FROM atestado_horas 
+                WHERE status = 'pendente'
+            """)
+            atestados_pendentes = cursor.fetchone()[0]
+            
+            # Correções pendentes (todas - gestor aprova todas)
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                WHERE status = 'pendente'
+            """)
+            correcoes_pendentes = cursor.fetchone()[0]
+            
+            conn.close()
         
         total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
         
