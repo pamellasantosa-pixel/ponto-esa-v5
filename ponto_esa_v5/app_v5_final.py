@@ -4238,15 +4238,29 @@ def aprovar_horas_extras_interface(horas_extras_system):
     """, unsafe_allow_html=True)
 
     # Buscar todas as solicitações pendentes
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT * FROM solicitacoes_horas_extras 
-        WHERE status = 'pendente'
-        ORDER BY data_solicitacao ASC
-    """)
-    solicitacoes = cursor.fetchall()
-    conn.close()
+    solicitacoes = None
+    
+    if REFACTORING_ENABLED:
+        try:
+            query_solicitacoes = """
+                SELECT * FROM solicitacoes_horas_extras 
+                WHERE status = 'pendente'
+                ORDER BY data_solicitacao ASC
+            """
+            solicitacoes = execute_query(query_solicitacoes)
+        except Exception as e:
+            log_error("Erro ao buscar solicitações de horas extras pendentes", e, {"status": "pendente"})
+            solicitacoes = []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT * FROM solicitacoes_horas_extras 
+            WHERE status = 'pendente'
+            ORDER BY data_solicitacao ASC
+        """)
+        solicitacoes = cursor.fetchall()
+        conn.close()
 
     if solicitacoes:
         st.warning(
@@ -4287,9 +4301,11 @@ def aprovar_horas_extras_interface(horas_extras_system):
                                 observacoes
                             )
                             if resultado["success"]:
+                                log_security_event("HORA_EXTRA_APPROVED", usuario=st.session_state.usuario, context={"solicitacao_id": solicitacao['id'], "funcionario": solicitacao['usuario']})
                                 st.success("✅ Solicitação aprovada!")
                                 st.rerun()
                             else:
+                                log_error("Erro ao aprovar solicitação de hora extra", resultado.get('message', ''), {"solicitacao_id": solicitacao['id']})
                                 st.error(f"❌ {resultado['message']}")
 
                     with col_rejeitar:
@@ -4301,9 +4317,11 @@ def aprovar_horas_extras_interface(horas_extras_system):
                                     observacoes
                                 )
                                 if resultado["success"]:
+                                    log_security_event("HORA_EXTRA_REJECTED", usuario=st.session_state.usuario, context={"solicitacao_id": solicitacao['id'], "funcionario": solicitacao['usuario'], "motivo": observacoes})
                                     st.success("❌ Solicitação rejeitada!")
                                     st.rerun()
                                 else:
+                                    log_error("Erro ao rejeitar solicitação de hora extra", resultado.get('message', ''), {"solicitacao_id": solicitacao['id']})
                                     st.error(f"❌ {resultado['message']}")
                             else:
                                 st.warning(
@@ -4332,21 +4350,40 @@ def aprovar_correcoes_registros_interface():
         st.markdown("### ⏳ Correções Aguardando Aprovação")
 
         # Buscar correções pendentes
-        conn = get_connection()
-        cursor = conn.cursor()
+        pendentes = None
+        
+        if REFACTORING_ENABLED:
+            try:
+                query_pendentes = """
+                    SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                           c.projeto_original, c.projeto_novo, c.justificativa, 
+                           c.data_solicitacao, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'pendente'
+                    ORDER BY c.data_solicitacao DESC
+                """
+                pendentes = execute_query(query_pendentes)
+            except Exception as e:
+                log_error("Erro ao buscar correções de registros pendentes", e, {"status": "pendente"})
+                pendentes = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
-                   c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
-                   c.projeto_original, c.projeto_novo, c.justificativa, 
-                   c.data_solicitacao, u.nome_completo
-            FROM solicitacoes_correcao_registro c
-            LEFT JOIN usuarios u ON c.usuario = u.usuario
-            WHERE c.status = 'pendente'
-            ORDER BY c.data_solicitacao DESC
-        """)
-        pendentes = cursor.fetchall()
-        conn.close()
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                       c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                       c.projeto_original, c.projeto_novo, c.justificativa, 
+                       c.data_solicitacao, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+            """)
+            pendentes = cursor.fetchall()
+            conn.close()
 
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
@@ -4407,31 +4444,52 @@ def aprovar_correcoes_registros_interface():
                         with col_a:
                             if st.button("✅ Aprovar", key=f"aprovar_corr_{correcao_id}", use_container_width=True, type="primary"):
                                 try:
-                                    conn = get_connection()
-                                    cursor = conn.cursor()
-                                    
-                                    # Atualizar registro original com novos dados
-                                    cursor.execute("""
-                                        UPDATE registros_ponto 
-                                        SET data_hora = %s, tipo = %s, modalidade = %s, projeto = %s
-                                        WHERE id = %s
-                                    """, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
-                                    
-                                    # Marcar correção como aprovada
-                                    cursor.execute("""
-                                        UPDATE solicitacoes_correcao_registro
-                                        SET status = 'aprovado', aprovado_por = %s, 
-                                            data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
-                                        WHERE id = %s
-                                    """, (st.session_state.usuario, observacoes, correcao_id))
-                                    
-                                    conn.commit()
-                                    conn.close()
+                                    if REFACTORING_ENABLED:
+                                        # Atualizar registro original com novos dados
+                                        query_update_registro = """
+                                            UPDATE registros_ponto 
+                                            SET data_hora = %s, tipo = %s, modalidade = %s, projeto = %s
+                                            WHERE id = %s
+                                        """
+                                        execute_update(query_update_registro, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
+                                        
+                                        # Marcar correção como aprovada
+                                        query_update_correcao = """
+                                            UPDATE solicitacoes_correcao_registro
+                                            SET status = 'aprovado', aprovado_por = %s, 
+                                                data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                            WHERE id = %s
+                                        """
+                                        execute_update(query_update_correcao, (st.session_state.usuario, observacoes, correcao_id))
+                                        
+                                        log_security_event("CORRECAO_REGISTRO_APPROVED", usuario=st.session_state.usuario, context={"correcao_id": correcao_id, "funcionario": usuario, "registro_id": registro_id})
+                                    else:
+                                        conn = get_connection()
+                                        cursor = conn.cursor()
+                                        
+                                        # Atualizar registro original com novos dados
+                                        cursor.execute("""
+                                            UPDATE registros_ponto 
+                                            SET data_hora = %s, tipo = %s, modalidade = %s, projeto = %s
+                                            WHERE id = %s
+                                        """, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
+                                        
+                                        # Marcar correção como aprovada
+                                        cursor.execute("""
+                                            UPDATE solicitacoes_correcao_registro
+                                            SET status = 'aprovado', aprovado_por = %s, 
+                                                data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                            WHERE id = %s
+                                        """, (st.session_state.usuario, observacoes, correcao_id))
+                                        
+                                        conn.commit()
+                                        conn.close()
                                     
                                     st.success("✅ Correção aprovada e registro atualizado!")
                                     st.rerun()
                                     
                                 except Exception as e:
+                                    log_error("Erro ao aprovar correção de registro", str(e), {"correcao_id": correcao_id})
                                     st.error(f"❌ Erro ao aprovar: {str(e)}")
 
                         with col_b:
@@ -4454,18 +4512,28 @@ def aprovar_correcoes_registros_interface():
                                         st.error("❌ Motivo é obrigatório!")
                                     else:
                                         try:
-                                            conn = get_connection()
-                                            cursor = conn.cursor()
-                                            
-                                            cursor.execute("""
-                                                UPDATE solicitacoes_correcao_registro
-                                                SET status = 'rejeitado', aprovado_por = %s,
-                                                    data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
-                                                WHERE id = %s
-                                            """, (st.session_state.usuario, motivo, correcao_id))
-                                            
-                                            conn.commit()
-                                            conn.close()
+                                            if REFACTORING_ENABLED:
+                                                query_reject = """
+                                                    UPDATE solicitacoes_correcao_registro
+                                                    SET status = 'rejeitado', aprovado_por = %s,
+                                                        data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                                    WHERE id = %s
+                                                """
+                                                execute_update(query_reject, (st.session_state.usuario, motivo, correcao_id))
+                                                log_security_event("CORRECAO_REGISTRO_REJECTED", usuario=st.session_state.usuario, context={"correcao_id": correcao_id, "funcionario": usuario, "motivo": motivo})
+                                            else:
+                                                conn = get_connection()
+                                                cursor = conn.cursor()
+                                                
+                                                cursor.execute("""
+                                                    UPDATE solicitacoes_correcao_registro
+                                                    SET status = 'rejeitado', aprovado_por = %s,
+                                                        data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                                    WHERE id = %s
+                                                """, (st.session_state.usuario, motivo, correcao_id))
+                                                
+                                                conn.commit()
+                                                conn.close()
                                             
                                             st.success("❌ Correção rejeitada")
                                             del st.session_state[f'confirm_reject_corr_{correcao_id}']
@@ -4484,21 +4552,40 @@ def aprovar_correcoes_registros_interface():
     with tab2:
         st.markdown("### ✅ Correções Aprovadas")
         
-        conn = get_connection()
-        cursor = conn.cursor()
+        aprovadas = None
         
-        cursor.execute("""
-            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                   c.tipo_original, c.tipo_novo, c.data_solicitacao, 
-                   c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
-            FROM solicitacoes_correcao_registro c
-            LEFT JOIN usuarios u ON c.usuario = u.usuario
-            WHERE c.status = 'aprovado'
-            ORDER BY c.data_aprovacao DESC
-            LIMIT 50
-        """)
-        aprovadas = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query_aprovadas = """
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.data_solicitacao, 
+                           c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'aprovado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """
+                aprovadas = execute_query(query_aprovadas)
+            except Exception as e:
+                log_error("Erro ao buscar correções de registros aprovadas", e, {"status": "aprovado"})
+                aprovadas = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.tipo_original, c.tipo_novo, c.data_solicitacao, 
+                       c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'aprovado'
+                ORDER BY c.data_aprovacao DESC
+                LIMIT 50
+            """)
+            aprovadas = cursor.fetchall()
+            conn.close()
         
         if aprovadas:
             st.info(f"✅ {len(aprovadas)} correção(ões) aprovada(s)")
@@ -4529,21 +4616,40 @@ def aprovar_correcoes_registros_interface():
     with tab3:
         st.markdown("### ❌ Correções Rejeitadas")
         
-        conn = get_connection()
-        cursor = conn.cursor()
+        rejeitadas = None
         
-        cursor.execute("""
-            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                   c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
-                   c.observacoes, u.nome_completo
-            FROM solicitacoes_correcao_registro c
-            LEFT JOIN usuarios u ON c.usuario = u.usuario
-            WHERE c.status = 'rejeitado'
-            ORDER BY c.data_aprovacao DESC
-            LIMIT 50
-        """)
-        rejeitadas = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query_rejeitadas = """
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
+                           c.observacoes, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'rejeitado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """
+                rejeitadas = execute_query(query_rejeitadas)
+            except Exception as e:
+                log_error("Erro ao buscar correções de registros rejeitadas", e, {"status": "rejeitado"})
+                rejeitadas = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
+                       c.observacoes, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'rejeitado'
+                ORDER BY c.data_aprovacao DESC
+                LIMIT 50
+            """)
+            rejeitadas = cursor.fetchall()
+            conn.close()
         
         if rejeitadas:
             st.warning(f"❌ {len(rejeitadas)} correção(ões) rejeitada(s)")
@@ -4581,19 +4687,36 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
         st.markdown("### 🕐 Solicitações de Horas Extras Pendentes")
         
         # Buscar horas extras pendentes
-        conn = get_connection()
-        cursor = conn.cursor()
+        he_pendentes = None
         
-        cursor.execute("""
-            SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
-                   h.data_solicitacao, u.nome_completo
-            FROM solicitacoes_horas_extras h
-            LEFT JOIN usuarios u ON h.usuario = u.usuario
-            WHERE h.status = 'pendente'
-            ORDER BY h.data_solicitacao DESC
-        """)
-        he_pendentes = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query_he = """
+                    SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
+                           h.data_solicitacao, u.nome_completo
+                    FROM solicitacoes_horas_extras h
+                    LEFT JOIN usuarios u ON h.usuario = u.usuario
+                    WHERE h.status = 'pendente'
+                    ORDER BY h.data_solicitacao DESC
+                """
+                he_pendentes = execute_query(query_he)
+            except Exception as e:
+                log_error("Erro ao buscar horas extras pendentes nas notificações", e, {"status": "pendente"})
+                he_pendentes = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
+                       h.data_solicitacao, u.nome_completo
+                FROM solicitacoes_horas_extras h
+                LEFT JOIN usuarios u ON h.usuario = u.usuario
+                WHERE h.status = 'pendente'
+                ORDER BY h.data_solicitacao DESC
+            """)
+            he_pendentes = cursor.fetchall()
+            conn.close()
         
         if he_pendentes:
             st.info(f"📋 {len(he_pendentes)} solicitação(ões) de horas extras")
@@ -4618,19 +4741,36 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
     with tab2:
         st.markdown("### 🔧 Solicitações de Correção de Registro Pendentes")
         
-        conn = get_connection()
-        cursor = conn.cursor()
+        corr_pendentes = None
         
-        cursor.execute("""
-            SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                   c.justificativa, c.data_solicitacao, u.nome_completo
-            FROM solicitacoes_correcao_registro c
-            LEFT JOIN usuarios u ON c.usuario = u.usuario
-            WHERE c.status = 'pendente'
-            ORDER BY c.data_solicitacao DESC
-        """)
-        corr_pendentes = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query_corr = """
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.justificativa, c.data_solicitacao, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'pendente'
+                    ORDER BY c.data_solicitacao DESC
+                """
+                corr_pendentes = execute_query(query_corr)
+            except Exception as e:
+                log_error("Erro ao buscar correções de registros pendentes nas notificações", e, {"status": "pendente"})
+                corr_pendentes = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.justificativa, c.data_solicitacao, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+            """)
+            corr_pendentes = cursor.fetchall()
+            conn.close()
         
         if corr_pendentes:
             st.info(f"📋 {len(corr_pendentes)} solicitação(ões) de correção")
@@ -4656,19 +4796,36 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
     with tab3:
         st.markdown("### ✅ Atestados de Horas Pendentes")
         
-        conn = get_connection()
-        cursor = conn.cursor()
+        atestados_pendentes = None
         
-        cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.total_horas, a.motivo,
-                   a.data_registro, u.nome_completo
-            FROM atestado_horas a
-            LEFT JOIN usuarios u ON a.usuario = u.usuario
-            WHERE a.status = 'pendente'
-            ORDER BY a.data_registro DESC
-        """)
-        atestados_pendentes = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query_atestados = """
+                    SELECT a.id, a.usuario, a.data, a.total_horas, a.motivo,
+                           a.data_registro, u.nome_completo
+                    FROM atestado_horas a
+                    LEFT JOIN usuarios u ON a.usuario = u.usuario
+                    WHERE a.status = 'pendente'
+                    ORDER BY a.data_registro DESC
+                """
+                atestados_pendentes = execute_query(query_atestados)
+            except Exception as e:
+                log_error("Erro ao buscar atestados de horas pendentes nas notificações", e, {"status": "pendente"})
+                atestados_pendentes = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT a.id, a.usuario, a.data, a.total_horas, a.motivo,
+                       a.data_registro, u.nome_completo
+                FROM atestado_horas a
+                LEFT JOIN usuarios u ON a.usuario = u.usuario
+                WHERE a.status = 'pendente'
+                ORDER BY a.data_registro DESC
+            """)
+            atestados_pendentes = cursor.fetchall()
+            conn.close()
         
         if atestados_pendentes:
             st.info(f"📋 {len(atestados_pendentes)} atestado(s) pendente(s)")
