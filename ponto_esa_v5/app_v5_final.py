@@ -1970,17 +1970,26 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                         
                         # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
                         tolerancia_minutos = 5  # padrão
-                        try:
-                            cursor = get_db_connection().cursor()
-                            cursor.execute(
-                                "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
-                            )
-                            resultado = cursor.fetchone()
-                            if resultado:
-                                tolerancia_minutos = int(resultado[0])
-                            cursor.close()
-                        except Exception as e:
-                            logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
+                        if REFACTORING_ENABLED:
+                            try:
+                                query = "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+                                result = execute_query(query, fetch_one=True)
+                                if result:
+                                    tolerancia_minutos = int(result[0])
+                            except Exception as e:
+                                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
+                        else:
+                            try:
+                                cursor = get_db_connection().cursor()
+                                cursor.execute(
+                                    "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+                                )
+                                resultado = cursor.fetchone()
+                                if resultado:
+                                    tolerancia_minutos = int(resultado[0])
+                                cursor.close()
+                            except Exception as e:
+                                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
                         
                         # Detectar hora extra COM a tolerância correta
                         resultado_hora_extra = JornadaSemanalCalculoSystem.detectar_hora_extra_dia(
