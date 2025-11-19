@@ -6,13 +6,21 @@ Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
 Deploy: Render.com | Banco: PostgreSQL
 """
 
-from ponto_esa_v5.notifications import notification_manager
+from notifications import notification_manager
 from calculo_horas_system import CalculoHorasSystem
 from banco_horas_system import BancoHorasSystem, format_saldo_display
 from horas_extras_system import HorasExtrasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
 from streamlit_utils import safe_download_button
 from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
+from ajuste_registros_system import AjusteRegistrosSystem
+from timer_integration_functions import (
+    exibir_button_solicitar_hora_extra,
+    exibir_modal_timer_hora_extra,
+    exibir_dialog_justificativa_hora_extra,
+    exibir_popup_continuar_hora_extra,
+    exibir_notificacoes_hora_extra_pendente,
+)
 import streamlit as st
 import os
 import hashlib
