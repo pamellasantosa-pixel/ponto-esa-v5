@@ -94,6 +94,11 @@ def q(sql_text: str) -> str:
     return sql_text.replace('%s', SQL_PLACEHOLDER)
 
 
+def hash_password(password: str) -> str:
+    """Hash a password using SHA256."""
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
 def init_db():
     conn = get_connection()
     c = conn.cursor()
@@ -262,9 +267,6 @@ def init_db():
     ''')
 
     # Inserir usuários padrão se não existirem
-    def hash_password(password):
-        return hashlib.sha256(password.encode()).hexdigest()
-
     c.execute("SELECT COUNT(*) FROM usuarios")
     if c.fetchone()[0] == 0:
         usuarios_padrao = [

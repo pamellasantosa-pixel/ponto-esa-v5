@@ -46,7 +46,7 @@ def reset_passwords():
     print()
     
     try:
-        from database_postgresql import get_connection
+        from database import get_connection
         conn = get_connection()
         cursor = conn.cursor()
         
