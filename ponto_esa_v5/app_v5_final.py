@@ -3870,69 +3870,121 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
     """, unsafe_allow_html=True)
 
     # Métricas gerais com tratamento robusto de erros
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    # Total de usuários ativos
     total_usuarios = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
-        resultado = cursor.fetchone()
-        if resultado:
-            total_usuarios = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar total de usuários: {e}")
-
-    # Registros hoje
     registros_hoje = 0
-    try:
-        hoje = date.today().strftime("%Y-%m-%d")
-        cursor.execute(
-            "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s", (hoje,))
-        resultado = cursor.fetchone()
-        if resultado:
-            registros_hoje = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar registros de hoje: {e}")
-
-    # Ausências pendentes
     ausencias_pendentes = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
-        resultado = cursor.fetchone()
-        if resultado:
-            ausencias_pendentes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar ausências pendentes: {e}")
-
-    # Horas extras pendentes - corrigido
     horas_extras_pendentes = 0
-    try:
-        cursor.execute(
-            "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
-        resultado = cursor.fetchone()
-        if resultado:
-            horas_extras_pendentes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar horas extras pendentes: {e}")
-
-    # Atestados do mês
     atestados_mes = 0
-    try:
-        primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
-        cursor.execute("""
-            SELECT COUNT(*) FROM ausencias 
-            WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
-        """, (primeiro_dia_mes,))
-        resultado = cursor.fetchone()
-        if resultado:
-            atestados_mes = resultado[0]
-    except Exception as e:
-        st.error(f"Erro ao buscar atestados do mês: {e}")
+    hoje = date.today().strftime("%Y-%m-%d")
+    
+    if REFACTORING_ENABLED:
+        try:
+            # Total de usuários ativos
+            query_usuarios = "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'"
+            resultado = execute_query(query_usuarios, fetch_one=True)
+            if resultado:
+                total_usuarios = resultado[0]
+        except Exception as e:
+            log_error("Erro ao buscar total de usuários", e, {"context": "dashboard_gestor"})
+            st.error(f"Erro ao buscar total de usuários: {e}")
 
-    conn.close()
+        try:
+            # Registros hoje
+            query_registros = "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s"
+            resultado = execute_query(query_registros, (hoje,), fetch_one=True)
+            if resultado:
+                registros_hoje = resultado[0]
+        except Exception as e:
+            log_error("Erro ao buscar registros de hoje", e, {"data": hoje})
+            st.error(f"Erro ao buscar registros de hoje: {e}")
+
+        try:
+            # Ausências pendentes
+            query_ausencias = "SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'"
+            resultado = execute_query(query_ausencias, fetch_one=True)
+            if resultado:
+                ausencias_pendentes = resultado[0]
+        except Exception as e:
+            log_error("Erro ao buscar ausências pendentes", e, {"status": "pendente"})
+            st.error(f"Erro ao buscar ausências pendentes: {e}")
+
+        try:
+            # Horas extras pendentes
+            query_he = "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'"
+            resultado = execute_query(query_he, fetch_one=True)
+            if resultado:
+                horas_extras_pendentes = resultado[0]
+        except Exception as e:
+            log_error("Erro ao buscar horas extras pendentes", e, {"status": "pendente"})
+            st.error(f"Erro ao buscar horas extras pendentes: {e}")
+
+        try:
+            # Atestados do mês
+            primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+            query_atestados = """
+                SELECT COUNT(*) FROM ausencias 
+                WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
+            """
+            resultado = execute_query(query_atestados, (primeiro_dia_mes,), fetch_one=True)
+            if resultado:
+                atestados_mes = resultado[0]
+        except Exception as e:
+            log_error("Erro ao buscar atestados do mês", e, {"context": "dashboard_gestor"})
+            st.error(f"Erro ao buscar atestados do mês: {e}")
+    else:
+        # Fallback original
+        conn = get_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'")
+            resultado = cursor.fetchone()
+            if resultado:
+                total_usuarios = resultado[0]
+        except Exception as e:
+            st.error(f"Erro ao buscar total de usuários: {e}")
+
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s", (hoje,))
+            resultado = cursor.fetchone()
+            if resultado:
+                registros_hoje = resultado[0]
+        except Exception as e:
+            st.error(f"Erro ao buscar registros de hoje: {e}")
+
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM ausencias WHERE status = 'pendente'")
+            resultado = cursor.fetchone()
+            if resultado:
+                ausencias_pendentes = resultado[0]
+        except Exception as e:
+            st.error(f"Erro ao buscar ausências pendentes: {e}")
+
+        try:
+            cursor.execute(
+                "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
+            resultado = cursor.fetchone()
+            if resultado:
+                horas_extras_pendentes = resultado[0]
+        except Exception as e:
+            st.error(f"Erro ao buscar horas extras pendentes: {e}")
+
+        try:
+            primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+            cursor.execute("""
+                SELECT COUNT(*) FROM ausencias 
+                WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'
+            """, (primeiro_dia_mes,))
+            resultado = cursor.fetchone()
+            if resultado:
+                atestados_mes = resultado[0]
+        except Exception as e:
+            st.error(f"Erro ao buscar atestados do mês: {e}")
+
+        conn.close()
 
     col1, col2, col3, col4, col5 = st.columns(5)
     with col1:
@@ -3951,17 +4003,28 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
 
     # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
     limiar_discrepancia = 15  # padrão
-    try:
-        cursor = get_db_connection().cursor()
-        cursor.execute(
-            "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
-        )
-        resultado = cursor.fetchone()
-        if resultado:
-            limiar_discrepancia = int(resultado[0])
-        cursor.close()
-    except Exception as e:
-        logger.warning(f"Não foi possível obter tolerância do gestor no dashboard: {e}")
+    
+    if REFACTORING_ENABLED:
+        try:
+            query_config = "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+            resultado = execute_query(query_config, fetch_one=True)
+            if resultado:
+                limiar_discrepancia = int(resultado[0])
+        except Exception as e:
+            log_error("Erro ao obter tolerância configurada", e, {"chave": "tolerancia_atraso_minutos"})
+            logger.warning(f"Não foi possível obter tolerância do gestor no dashboard: {e}")
+    else:
+        try:
+            cursor = get_db_connection().cursor()
+            cursor.execute(
+                "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+            )
+            resultado = cursor.fetchone()
+            if resultado:
+                limiar_discrepancia = int(resultado[0])
+            cursor.close()
+        except Exception as e:
+            logger.warning(f"Não foi possível obter tolerância do gestor no dashboard: {e}")
 
     # Buscar registros de hoje com possíveis discrepâncias
     registros_hoje_detalhados = obter_registros_usuario(
@@ -3980,12 +4043,22 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
 
         if calculo_dia["total_registros"] >= 2:
             # Verificar jornada prevista
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s", (usuario,))
-            jornada = cursor.fetchone()
-            conn.close()
+            jornada = None
+            
+            if REFACTORING_ENABLED:
+                try:
+                    query_jornada = "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s"
+                    jornada = execute_query(query_jornada, (usuario,), fetch_one=True)
+                except Exception as e:
+                    log_error("Erro ao buscar jornada do usuário", e, {"usuario": usuario})
+                    jornada = None
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s", (usuario,))
+                jornada = cursor.fetchone()
+                conn.close()
 
             if jornada:
                 jornada_inicio = jornada[0] or "08:00"
@@ -4643,20 +4716,40 @@ def aprovar_atestados_interface(atestado_system):
         st.markdown("### ⏳ Solicitações Pendentes de Aprovação")
 
         # Buscar atestados pendentes
-        conn = get_connection()
-        cursor = conn.cursor()
+        if REFACTORING_ENABLED:
+            try:
+                query = """
+                    SELECT a.id, a.usuario, a.data, a.total_horas, 
+                           a.motivo, a.data_registro, a.arquivo_comprovante,
+                           u.nome_completo
+                    FROM atestado_horas a
+                    LEFT JOIN usuarios u ON a.usuario = u.usuario
+                    WHERE a.status = 'pendente'
+                    ORDER BY a.data_registro DESC
+                """
+                pendentes = execute_query(query)
+                if not pendentes:
+                    pendentes = []
+            except Exception as e:
+                log_error("Erro ao buscar atestados pendentes", e, {})
+                st.error("❌ Erro ao buscar atestados")
+                return
+        else:
+            # Fallback original
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT a.id, a.usuario, a.data, a.total_horas, 
-                   a.motivo, a.data_registro, a.arquivo_comprovante,
-                   u.nome_completo
-            FROM atestado_horas a
-            LEFT JOIN usuarios u ON a.usuario = u.usuario
-            WHERE a.status = 'pendente'
-            ORDER BY a.data_registro DESC
-        """)
-        pendentes = cursor.fetchall()
-        conn.close()
+            cursor.execute("""
+                SELECT a.id, a.usuario, a.data, a.total_horas, 
+                       a.motivo, a.data_registro, a.arquivo_comprovante,
+                       u.nome_completo
+                FROM atestado_horas a
+                LEFT JOIN usuarios u ON a.usuario = u.usuario
+                WHERE a.status = 'pendente'
+                ORDER BY a.data_registro DESC
+            """)
+            pendentes = cursor.fetchall()
+            conn.close()
 
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
@@ -4750,10 +4843,12 @@ def aprovar_atestados_interface(atestado_system):
                                 )
 
                                 if resultado['success']:
+                                    log_security_event("ATTESTATION_APPROVED", usuario=st.session_state.usuario, context={"atestado_id": atestado_id, "usuario_afetado": usuario})
                                     st.success(
                                         "✅ Atestado aprovado com sucesso!")
                                     st.rerun()
                                 else:
+                                    log_error("Erro ao aprovar atestado", resultado.get('message', ''), {"atestado_id": atestado_id})
                                     st.error(f"❌ Erro: {resultado['message']}")
 
                         with col_b:
@@ -4782,10 +4877,12 @@ def aprovar_atestados_interface(atestado_system):
                                         )
 
                                         if resultado['success']:
+                                            log_security_event("ATTESTATION_REJECTED", usuario=st.session_state.usuario, context={"atestado_id": atestado_id, "usuario_afetado": usuario, "motivo": motivo[:100]})
                                             st.success("❌ Atestado rejeitado")
                                             del st.session_state[f'confirm_reject_{atestado_id}']
                                             st.rerun()
                                         else:
+                                            log_error("Erro ao rejeitar atestado", resultado.get('message', ''), {"atestado_id": atestado_id})
                                             st.error(
                                                 f"❌ Erro: {resultado['message']}")
 
