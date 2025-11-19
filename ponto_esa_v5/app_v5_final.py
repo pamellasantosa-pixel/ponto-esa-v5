@@ -5621,26 +5621,51 @@ def gerenciar_projetos_interface():
             busca = st.text_input("🔍 Buscar projeto:")
 
         # Buscar projetos
-        conn = get_connection()
-        cursor = conn.cursor()
+        if REFACTORING_ENABLED:
+            try:
+                query = "SELECT id, nome, descricao, ativo FROM projetos WHERE 1=1"
+                params = []
 
-        query = "SELECT id, nome, descricao, ativo FROM projetos WHERE 1=1"
-        params = []
+                if status_filter == "Ativos":
+                    query += " AND ativo = 1"
+                elif status_filter == "Inativos":
+                    query += " AND ativo = 0"
 
-        if status_filter == "Ativos":
-            query += " AND ativo = 1"
-        elif status_filter == "Inativos":
-            query += " AND ativo = 0"
+                if busca:
+                    query += f" AND nome LIKE {SQL_PLACEHOLDER}"
+                    params.append(f"%{busca}%")
 
-        if busca:
-            query += f" AND nome LIKE {SQL_PLACEHOLDER}"
-            params.append(f"%{busca}%")
+                query += " ORDER BY nome"
 
-        query += " ORDER BY nome"
+                projetos = execute_query(query, tuple(params))
+                if not projetos:
+                    projetos = []
+            except Exception as e:
+                log_error("Erro ao buscar projetos", e, {"busca": busca})
+                st.error("❌ Erro ao buscar projetos")
+                return
+        else:
+            # Fallback original
+            conn = get_connection()
+            cursor = conn.cursor()
 
-        cursor.execute(query, params)
-        projetos = cursor.fetchall()
-        conn.close()
+            query = "SELECT id, nome, descricao, ativo FROM projetos WHERE 1=1"
+            params = []
+
+            if status_filter == "Ativos":
+                query += " AND ativo = 1"
+            elif status_filter == "Inativos":
+                query += " AND ativo = 0"
+
+            if busca:
+                query += f" AND nome LIKE {SQL_PLACEHOLDER}"
+                params.append(f"%{busca}%")
+
+            query += " ORDER BY nome"
+
+            cursor.execute(query, params)
+            projetos = cursor.fetchall()
+            conn.close()
 
         # Estatísticas
         col1, col2, col3 = st.columns(3)
@@ -5685,20 +5710,36 @@ def gerenciar_projetos_interface():
 
                         # Botão de salvar
                         if st.button("💾 Salvar", key=f"save_{projeto_id}", use_container_width=True):
-                            conn = get_connection()
-                            cursor = conn.cursor()
+                            if REFACTORING_ENABLED:
+                                try:
+                                    update_query = f"""
+                                        UPDATE projetos 
+                                        SET nome = {SQL_PLACEHOLDER}, descricao = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER}
+                                        WHERE id = {SQL_PLACEHOLDER}
+                                    """
+                                    execute_update(update_query, (novo_nome, nova_descricao, int(novo_status), projeto_id))
+                                    log_security_event("PROJECT_UPDATED", usuario=st.session_state.usuario, context={"project_id": projeto_id})
+                                    st.success("✅ Projeto atualizado!")
+                                    st.rerun()
+                                except Exception as e:
+                                    log_error("Erro ao atualizar projeto", e, {"projeto_id": projeto_id})
+                                    st.error(f"❌ Erro ao atualizar projeto: {e}")
+                            else:
+                                # Fallback original
+                                conn = get_connection()
+                                cursor = conn.cursor()
 
-                            cursor.execute(f"""
-                                UPDATE projetos 
-                                SET nome = {SQL_PLACEHOLDER}, descricao = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER}
-                                WHERE id = {SQL_PLACEHOLDER}
-                            """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
+                                cursor.execute(f"""
+                                    UPDATE projetos 
+                                    SET nome = {SQL_PLACEHOLDER}, descricao = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER}
+                                    WHERE id = {SQL_PLACEHOLDER}
+                                """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
 
-                            conn.commit()
-                            conn.close()
+                                conn.commit()
+                                conn.close()
 
-                            st.success("✅ Projeto atualizado!")
-                            st.rerun()
+                                st.success("✅ Projeto atualizado!")
+                                st.rerun()
 
                         # Botão de excluir
                         if st.button("🗑️ Excluir", key=f"del_{projeto_id}", use_container_width=True):
@@ -5707,16 +5748,29 @@ def gerenciar_projetos_interface():
                         if st.session_state.get(f"confirm_del_proj_{projeto_id}"):
                             st.warning("⚠️ Confirmar?")
                             if st.button("Sim", key=f"yes_{projeto_id}"):
-                                conn = get_connection()
-                                cursor = conn.cursor()
-                                cursor.execute(
-                                    f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}", (projeto_id,))
-                                conn.commit()
-                                conn.close()
+                                if REFACTORING_ENABLED:
+                                    try:
+                                        delete_query = f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}"
+                                        execute_update(delete_query, (projeto_id,))
+                                        log_security_event("PROJECT_DELETED", usuario=st.session_state.usuario, context={"project_id": projeto_id})
+                                        del st.session_state[f"confirm_del_proj_{projeto_id}"]
+                                        st.success("✅ Projeto excluído!")
+                                        st.rerun()
+                                    except Exception as e:
+                                        log_error("Erro ao deletar projeto", e, {"projeto_id": projeto_id})
+                                        st.error(f"❌ Erro ao deletar: {e}")
+                                else:
+                                    # Fallback original
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
+                                    cursor.execute(
+                                        f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}", (projeto_id,))
+                                    conn.commit()
+                                    conn.close()
 
-                                del st.session_state[f"confirm_del_proj_{projeto_id}"]
-                                st.success("✅ Projeto excluído!")
-                                st.rerun()
+                                    del st.session_state[f"confirm_del_proj_{projeto_id}"]
+                                    st.success("✅ Projeto excluído!")
+                                    st.rerun()
         else:
             st.info("📁 Nenhum projeto encontrado")
 
@@ -5737,23 +5791,39 @@ def gerenciar_projetos_interface():
                 if not nome_novo:
                     st.error("❌ O nome do projeto é obrigatório!")
                 else:
-                    try:
-                        conn = get_connection()
-                        cursor = conn.cursor()
+                    if REFACTORING_ENABLED:
+                        try:
+                            insert_query = f"""
+                                INSERT INTO projetos (nome, descricao, ativo)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """
+                            execute_update(insert_query, (nome_novo, descricao_nova, int(ativo_novo)))
+                            log_security_event("PROJECT_CREATED", usuario=st.session_state.usuario, context={"project_name": nome_novo})
+                            st.success(
+                                f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            log_error("Erro ao cadastrar projeto", e, {"project_name": nome_novo})
+                            st.error(f"❌ Erro ao cadastrar projeto: {e}")
+                    else:
+                        # Fallback original
+                        try:
+                            conn = get_connection()
+                            cursor = conn.cursor()
 
-                        cursor.execute(f"""
-                            INSERT INTO projetos (nome, descricao, ativo)
-                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                        """, (nome_novo, descricao_nova, int(ativo_novo)))
+                            cursor.execute(f"""
+                                INSERT INTO projetos (nome, descricao, ativo)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """, (nome_novo, descricao_nova, int(ativo_novo)))
 
-                        conn.commit()
-                        conn.close()
+                            conn.commit()
+                            conn.close()
 
-                        st.success(
-                            f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"❌ Erro ao cadastrar projeto: {e}")
+                            st.success(
+                                f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
+                            st.rerun()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao cadastrar projeto: {e}")
 
 
 def gerenciar_usuarios_interface():
