@@ -21,6 +21,16 @@ from timer_integration_functions import (
     exibir_popup_continuar_hora_extra,
     exibir_notificacoes_hora_extra_pendente,
 )
+
+# Importar novos módulos de refatoração
+try:
+    from connection_manager import execute_query, execute_update, safe_cursor, safe_database_connection
+    from error_handler import log_error, get_logger, log_security_event
+    REFACTORING_ENABLED = True
+except ImportError:
+    REFACTORING_ENABLED = False
+    print("[AVISO] Modulos de refatoracao nao disponíveis. Usando get_connection() tradicional.")
+
 import streamlit as st
 import os
 import hashlib
@@ -432,33 +442,45 @@ def init_systems():
 
 def verificar_login(usuario, senha):
     """Verifica credenciais de login"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
-    senha_hash = hashlib.sha256(senha.encode()).hexdigest()
-    cursor.execute(
-        "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
-    result = cursor.fetchone()
-    conn.close()
-
-    return result
+    if REFACTORING_ENABLED:
+        senha_hash = hashlib.sha256(senha.encode()).hexdigest()
+        result = execute_query(
+            "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s",
+            (usuario, senha_hash),
+            fetch_one=True
+        )
+        if result:
+            log_security_event("LOGIN", usuario=usuario, severity="INFO")
+        return result
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        senha_hash = hashlib.sha256(senha.encode()).hexdigest()
+        cursor.execute(
+            "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
+        result = cursor.fetchone()
+        conn.close()
+        return result
 
 
 def obter_projetos_ativos():
     """Obtém lista de projetos ativos"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
-    projetos = [row[0] for row in cursor.fetchall()]
-    conn.close()
-    return projetos
+    if REFACTORING_ENABLED:
+        results = execute_query(
+            "SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome"
+        )
+        return [row[0] for row in results] if results else []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
+        projetos = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        return projetos
 
 
 def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro=None, hora_registro=None, latitude=None, longitude=None):
     """Registra ponto do usuário com GPS real"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
     # Se não especificada, usar data/hora atual no fuso horário de Brasília
     if data_registro and hora_registro:
         data_obj = datetime.strptime(data_registro, "%Y-%m-%d")
@@ -483,22 +505,34 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
 
     # Usar placeholder correto baseado no tipo de banco
     placeholders = ', '.join([SQL_PLACEHOLDER] * 9)
-    cursor.execute(f'''
-        INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-        VALUES ({placeholders})
-    ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
-
-    conn.commit()
-    conn.close()
-
-    return data_hora_registro
+    
+    if REFACTORING_ENABLED:
+        success = execute_update(
+            f'''
+                INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
+                VALUES ({placeholders})
+            ''',
+            (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
+        )
+        if success:
+            return data_hora_registro
+        else:
+            log_error("Erro ao registrar ponto", context={"usuario": usuario, "tipo": tipo})
+            return None
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(f'''
+            INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
+            VALUES ({placeholders})
+        ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
+        conn.commit()
+        conn.close()
+        return data_hora_registro
 
 
 def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
     """Obtém registros de ponto do usuário"""
-    conn = get_connection()
-    cursor = conn.cursor()
-
     query = f"SELECT * FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER}"
     params = [usuario]
 
@@ -508,22 +542,32 @@ def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
 
     query += " ORDER BY data_hora DESC"
 
-    cursor.execute(query, params)
-    registros = cursor.fetchall()
-    conn.close()
-
-    return registros
+    if REFACTORING_ENABLED:
+        return execute_query(query, tuple(params))
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(query, params)
+        registros = cursor.fetchall()
+        conn.close()
+        return registros
 
 
 def obter_usuarios_para_aprovacao():
     """Obtém lista de usuários que podem aprovar horas extras"""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
-    usuarios = cursor.fetchall()
-    conn.close()
-    return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
+    if REFACTORING_ENABLED:
+        usuarios = execute_query(
+            "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo"
+        )
+        return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios] if usuarios else []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
+        usuarios = cursor.fetchall()
+        conn.close()
+        return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
 
 
 def obter_usuarios_ativos():
