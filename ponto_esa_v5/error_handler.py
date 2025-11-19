@@ -151,27 +151,34 @@ def log_security_event(
     usuario: Optional[str] = None,
     details: Optional[str] = None,
     severity: str = "WARNING",
+    context: Optional[dict] = None,
 ) -> None:
     """
     Loga eventos de segurança para auditoria.
-    
+
     Args:
         event_type: LOGIN, LOGOUT, UNAUTHORIZED_ACCESS, etc.
         usuario: Usuário envolvido
         details: Detalhes do evento
         severity: INFO, WARNING, CRITICAL
-    
+        context: Dicionário com informações adicionais do contexto
+
     Uso:
         log_security_event("UNAUTHORIZED_ACCESS", usuario="joao", details="Tentou acessar dashboard gestor")
+        log_security_event("HOUR_EXTRA_REQUESTED", usuario="joao", context={"he_id": 123, "aprovador": "maria"})
     """
     message = f"[{event_type}]"
-    
+
     if usuario:
         message += f" User: {usuario}"
-    
+
     if details:
         message += f" | {details}"
-    
+
+    if context:
+        context_str = " | ".join([f"{k}: {v}" for k, v in context.items()])
+        message += f" | {context_str}"
+
     if severity == "CRITICAL":
         security_logger.critical(message)
     elif severity == "WARNING":

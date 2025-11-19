@@ -11,7 +11,7 @@ from datetime import datetime, time
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
 if USE_POSTGRESQL:
-    from ponto_esa_v5.database_postgresql import get_connection, SQL_PLACEHOLDER
+    from database_postgresql import get_connection, SQL_PLACEHOLDER
 else:
     from database import get_connection, SQL_PLACEHOLDER
 

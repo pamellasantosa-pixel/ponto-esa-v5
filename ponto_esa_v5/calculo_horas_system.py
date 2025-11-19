@@ -5,12 +5,12 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 
 import sqlite3
 try:
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 except Exception:
     try:
         from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
     except Exception:
-        from ponto_esa_v5.database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 from datetime import datetime, timedelta, date
 import calendar
 
