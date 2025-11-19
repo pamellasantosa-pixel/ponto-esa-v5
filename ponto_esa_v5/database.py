@@ -78,12 +78,12 @@ def get_connection(db_path: str | None = None):
 def adapt_sql_for_postgresql(sql):
     """Adapta queries SQL para PostgreSQL se necessário"""
     if USE_POSTGRESQL:
-        # Substituir AUTOINCREMENT por SERIAL
+        # Adaptar tipos de dados se necessário - FAZER PRIMEIRO as substituições específicas
+        sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+        # Substituir AUTOINCREMENT por SERIAL (para casos que não foram cobertos acima)
         sql = sql.replace('AUTOINCREMENT', 'SERIAL')
         # Substituir CURRENT_TIMESTAMP por NOW()
         sql = sql.replace('CURRENT_TIMESTAMP', 'NOW()')
-        # Adaptar tipos de dados se necessário
-        sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
     return sql
 
 
