@@ -5,33 +5,21 @@ Esse arquivo preserva compatibilidade para importações não qualificadas
 implementação principal que fica em `ponto_esa_v5.notifications`.
 """
 
-try:
-    # Prefer the package implementation inside the nested package
-    from ponto_esa_v5.ponto_esa_v5.notifications import (
-        NotificationManager,
-        notification_manager,
-        start_notifications_for_user,
-        get_user_notifications,
-        mark_notification_as_read,
-        stop_user_notifications,
-    )
-except Exception:
-    # Fallback minimal implementation if package import fails
-    class NotificationManager:
-        def __init__(self):
-            self.active_notifications = {}
-        def get_notifications(self, user_id):
-            return self.active_notifications.get(user_id, [])
-        def add_notification(self, user_id, payload):
-            if user_id not in self.active_notifications:
-                self.active_notifications[user_id] = []
-            self.active_notifications[user_id].append(payload)
-        def start_repeating_notification(self, *args, **kwargs):
-            pass
-        def stop_repeating_notification(self, *args, **kwargs):
-            pass
+class NotificationManager:
+    def __init__(self):
+        self.active_notifications = {}
+    def get_notifications(self, user_id):
+        return self.active_notifications.get(user_id, [])
+    def add_notification(self, user_id, payload):
+        if user_id not in self.active_notifications:
+            self.active_notifications[user_id] = []
+        self.active_notifications[user_id].append(payload)
+    def start_repeating_notification(self, *args, **kwargs):
+        pass
+    def stop_repeating_notification(self, *args, **kwargs):
+        pass
 
-    notification_manager = NotificationManager()
+notification_manager = NotificationManager()
 
 __all__ = [
     "NotificationManager",

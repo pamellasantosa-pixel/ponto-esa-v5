@@ -11,8 +11,7 @@ from calculo_horas_system import CalculoHorasSystem
 from banco_horas_system import BancoHorasSystem, format_saldo_display
 from horas_extras_system import HorasExtrasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
-from ponto_esa_v5.streamlit_utils import safe_download_button
-from ponto_esa_v5.streamlit_utils import safe_download_button
+from streamlit_utils import safe_download_button
 from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
 import streamlit as st
 import os
@@ -42,11 +41,13 @@ if USE_POSTGRESQL:
     from database_postgresql import get_connection, init_db
     # PostgreSQL usa %s como placeholder
     SQL_PLACEHOLDER = '%s'
+    get_db_connection = get_connection
 else:
     import sqlite3
     from database import init_db, get_connection
     # SQLite usa ? como placeholder
     SQL_PLACEHOLDER = '?'
+    get_db_connection = get_connection
 
 # Adicionar ao namespace global para que outros módulos possam acessar
 import sys

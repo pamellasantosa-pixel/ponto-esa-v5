@@ -18,7 +18,7 @@ else:
     from database import get_connection, SQL_PLACEHOLDER
 
 from calculo_horas_system import safe_datetime_parse
-from ponto_esa_v5.streamlit_utils import safe_download_button
+from streamlit_utils import safe_download_button
 
 logger = logging.getLogger(__name__)
 
