@@ -23,7 +23,7 @@ if USE_POSTGRESQL:
     import psycopg2.extras
 
 
-def get_connection():
+def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
         database_url = os.getenv('DATABASE_URL')
@@ -46,8 +46,14 @@ def get_connection():
             print("\n📋 Certifique-se de que a variável de ambiente DATABASE_URL está configurada corretamente no Render.")
             raise
     else:
-        os.makedirs('database', exist_ok=True)
-        return sqlite3.connect('database/ponto_esa.db')
+        # For SQLite, delegate to the primary database module which handles
+        # the ConnectionWrapper and optional db_path.
+        try:
+            from ponto_esa_v5.database import get_connection as sqlite_get_connection
+            return sqlite_get_connection(db_path)
+        except Exception:
+            os.makedirs('database', exist_ok=True)
+            return sqlite3.connect(db_path or 'database/ponto_esa.db')
 
 
 def hash_password(password):

@@ -35,18 +35,18 @@ def test_upload_download():
         print(f"Erro no upload: {upload_result['message']}")
         return
 
-    caminho_arquivo = upload_result.get("path")
-    print(f"Upload concluído. Caminho do arquivo: {caminho_arquivo}")
+    upload_id = upload_result.get("upload_id")
+    print(f"Upload concluído. ID do upload: {upload_id}")
 
-    # Testar download
+    # Testar download usando o ID retornado
     print("Iniciando download...")
-    download_result = upload_system.get_file_content(caminho_arquivo)
+    content, info = upload_system.get_file_content(upload_id)
 
-    if not download_result[0]:  # Verifica o primeiro elemento da tupla (sucesso)
-        print(f"Erro no download: {download_result[1]}")  # Mensagem de erro no segundo elemento
+    if not content:
+        print("Erro no download: conteúdo indefinido")
         return
 
-    conteudo_baixado = download_result[1]  # Conteúdo do arquivo no segundo elemento
+    conteudo_baixado = content
     if conteudo_baixado == conteudo_arquivo:
         print("Download bem-sucedido. O conteúdo do arquivo está correto.")
     else:

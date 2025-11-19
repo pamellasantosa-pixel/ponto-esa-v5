@@ -46,8 +46,9 @@ except ImportError:  # pragma: no cover - fallback para execução direta dos te
     )
     from ponto_esa_v5.ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore
 
-# Definir placeholder correto
+# Definir placeholder correto e garantir que o esquema exista antes dos testes
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+init_db()
 
 def print_section(title, level=1):
     """Imprime seção formatada"""

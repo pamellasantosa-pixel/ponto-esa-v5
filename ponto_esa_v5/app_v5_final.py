@@ -6,11 +6,13 @@ Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
 Deploy: Render.com | Banco: PostgreSQL
 """
 
-from notifications import notification_manager
+from ponto_esa_v5.notifications import notification_manager
 from calculo_horas_system import CalculoHorasSystem
 from banco_horas_system import BancoHorasSystem, format_saldo_display
 from horas_extras_system import HorasExtrasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
+from ponto_esa_v5.streamlit_utils import safe_download_button
+from ponto_esa_v5.streamlit_utils import safe_download_button
 from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
 import streamlit as st
 import os
@@ -1302,48 +1304,8 @@ def tela_funcionario():
     # Exibir hora extra em andamento (se houver)
     exibir_hora_extra_em_andamento()
 
-    # Verificar se está próximo do horário de saída (usa jornada semanal configurada)
-    from jornada_semanal_system import verificar_horario_saida_proximo
-    
-    verificacao_saida = verificar_horario_saida_proximo(
-        st.session_state.usuario, 
-        margem_minutos=5  # Alerta 5 minutos antes do fim da jornada
-    )
-    
-    if verificacao_saida['proximo']:
-        minutos = verificacao_saida['minutos_restantes']
-        
-        # Criar card destacado para hora extra
-        st.markdown(f"""
-        <div style="
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            padding: 20px;
-            border-radius: 10px;
-            margin: 10px 0;
-            color: white;
-            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-        ">
-            <h3 style="margin: 0; color: white;">⏰ Horário de Saída Próximo</h3>
-            <p style="margin: 10px 0; font-size: 16px;">
-                Seu horário de saída é às <strong>{verificacao_saida['horario_saida']}</strong>
-                <br>Faltam aproximadamente <strong>{minutos} minutos</strong>
-            </p>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        col1, col2 = st.columns([1, 1])
-        with col1:
-            if st.button("🕐 Solicitar Hora Extra", type="primary", use_container_width=True, key="btn_solicitar_he"):
-                st.session_state.solicitar_horas_extras = True
-                st.session_state.horario_saida_previsto = verificacao_saida['horario_saida']
-                st.rerun()
-        with col2:
-            st.info(f"💡 Precisa trabalhar além das {verificacao_saida['horario_saida']}? Solicite hora extra agora!")
-    
-    # Se clicou em solicitar hora extra, mostrar formulário de solicitação
-    if st.session_state.get('solicitar_horas_extras'):
-        iniciar_hora_extra_interface()
-        return  # Não exibir resto da interface
+    # ✨ NOVO: Alerta avançado de fim de jornada usando novo sistema
+    exibir_alerta_fim_jornada_avancado()
 
     # Menu lateral
     with st.sidebar:
@@ -1573,17 +1535,94 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.info(
                     f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
 
-                # Verificar se é fim de jornada para notificar horas extras (se disponível)
-                if tipo_registro == "Fim" and horas_extras_system is not None:
+                # ✨ NOVO: Integração com sistema de jornada e hora extra
+                if tipo_registro == "Fim":
                     try:
-                        verificacao = horas_extras_system.verificar_fim_jornada(
-                            st.session_state.usuario)
-                        if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
-                            st.info(f"💡 {verificacao.get('message')}")
-                    except Exception:
-                        # Não bloquear o registro por erro em sistema de horas extras
-                        st.info(
-                            "💡 Não foi possível verificar horas extras no momento.")
+                        from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
+                        
+                        # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
+                        tolerancia_minutos = 5  # padrão
+                        try:
+                            cursor = get_db_connection().cursor()
+                            cursor.execute(
+                                "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+                            )
+                            resultado = cursor.fetchone()
+                            if resultado:
+                                tolerancia_minutos = int(resultado[0])
+                            cursor.close()
+                        except Exception as e:
+                            logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
+                        
+                        # Detectar hora extra COM a tolerância correta
+                        resultado_hora_extra = JornadaSemanalCalculoSystem.detectar_hora_extra_dia(
+                            st.session_state.usuario,
+                            data_registro,
+                            tolerancia_minutos=tolerancia_minutos
+                        )
+                        
+                        if resultado_hora_extra.get('tem_hora_extra', False):
+                            horas_extra = resultado_hora_extra.get('horas_extra', 0)
+                            minutos_extra = resultado_hora_extra.get('minutos_extra', 0)
+                            
+                            # Mostrar resultado
+                            st.success(f"""
+                            ⏱️ **HORA EXTRA DETECTADA!**
+                            
+                            Você trabalhou:
+                            - **{horas_extra:.1f} horas** ({minutos_extra} minutos) de hora extra
+                            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
+                            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
+                            """)
+                            
+                            # Sugerir solicitar aprovação
+                            if st.button("📝 Solicitar Aprovação de Hora Extra"):
+                                # Preparar dados para solicitar
+                                st.session_state.solicitar_hora_extra = True
+                                st.session_state.hora_extra_horas = horas_extra
+                                st.session_state.hora_extra_data = data_registro
+                                st.rerun()
+                        
+                        elif resultado_hora_extra.get('categoria') == 'abaixo_jornada':
+                            minutos_faltando = abs(resultado_hora_extra.get('minutos_extra', 0))
+                            st.warning(f"""
+                            ⏰ **REGISTRO ABAIXO DA JORNADA**
+                            
+                            Você trabalhou {minutos_faltando} minutos a menos que o esperado.
+                            """)
+                        else:
+                            # ✅ Expediente finalizado com sucesso dentro da jornada
+                            st.success(f"""
+                            ✅ **EXPEDIENTE FINALIZADO COM SUCESSO!**
+                            
+                            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
+                            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
+                            - Status: Dentro da jornada (tolerância: {tolerancia_minutos} min)
+                            
+                            Bom descanso! 😊
+                            """)
+                    
+                    except ImportError:
+                        # Se sistema de jornada não estiver disponível, usar método antigo
+                        if horas_extras_system is not None:
+                            try:
+                                verificacao = horas_extras_system.verificar_fim_jornada(
+                                    st.session_state.usuario)
+                                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
+                                    st.info(f"💡 {verificacao.get('message')}")
+                            except Exception:
+                                st.info("💡 Não foi possível verificar horas extras no momento.")
+                    except Exception as e:
+                        logger.error(f"Erro ao detectar hora extra: {e}")
+                        # Fallback para método antigo
+                        if horas_extras_system is not None:
+                            try:
+                                verificacao = horas_extras_system.verificar_fim_jornada(
+                                    st.session_state.usuario)
+                                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
+                                    st.info(f"💡 {verificacao.get('message')}")
+                            except Exception:
+                                st.info("💡 Não foi possível verificar horas extras no momento.")
 
                 st.rerun()
 
@@ -2106,7 +2145,7 @@ def banco_horas_funcionario_interface(banco_horas_system):
                 df_extrato.to_excel(
                     writer, sheet_name='Banco_Horas', index=False)
 
-            st.download_button(
+            safe_download_button(
                 label="💾 Download Excel",
                 data=output.getvalue(),
                 file_name=f"banco_horas_{st.session_state.usuario}_{data_inicio}_{data_fim}.xlsx",
@@ -2921,13 +2960,16 @@ def corrigir_registros_interface():
                                     registro['projeto']) if registro['projeto'] in obter_projetos_ativos() else 0
                             )
 
+                            # Justificativa obrigatória para auditoria da correção
                             justificativa_edicao = st.text_area(
-                                "Justificativa da Correção",
-                                placeholder="Explique o motivo da correção..."
+                                "Justificativa da Edição",
+                                placeholder="Explique por que esta correção é necessária...",
+                                height=120
                             )
 
+                            # Botão de salvar alteração do formulário
                             submitted = st.form_submit_button(
-                                "💾 Salvar Correção")
+                                "💾 Salvar Alterações", use_container_width=True)
 
                             if submitted:
                                 if not justificativa_edicao.strip():
@@ -3094,7 +3136,7 @@ def meus_registros_interface(calculo_horas_system):
             with pd.ExcelWriter(output, engine='openpyxl') as writer:
                 df.to_excel(writer, sheet_name='Registros', index=False)
 
-            st.download_button(
+            safe_download_button(
                 label="💾 Download Excel",
                 data=output.getvalue(),
                 file_name=f"registros_{st.session_state.usuario}_{data_inicio}_{data_fim}.xlsx",
@@ -3169,7 +3211,7 @@ def meus_arquivos_interface(upload_system):
                         content, file_info = upload_system.get_file_content(
                             upload['id'], st.session_state.usuario)
                         if content:
-                            st.download_button(
+                            safe_download_button(
                                 label="💾 Baixar Arquivo",
                                 data=content,
                                 file_name=file_info['nome_original'],
@@ -3335,6 +3377,7 @@ def tela_gestor():
             "📁 Gerenciar Arquivos",
             "🏢 Gerenciar Projetos",
             "👤 Gerenciar Usuários",
+            "📅 Configurar Jornada",
             f"🔧 Corrigir Registros{f' 🔴{correcoes_pendentes}' if correcoes_pendentes > 0 else ''}",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}",
             "⚙️ Sistema"
@@ -3358,6 +3401,8 @@ def tela_gestor():
         aprovar_horas_extras_interface(horas_extras_system)
     elif opcao.startswith("🏦 Banco de Horas Geral"):
         banco_horas_gestor_interface(banco_horas_system)
+    elif opcao.startswith("📅 Configurar Jornada"):
+        configurar_jornada_interface()
     elif opcao.startswith("🔧 Corrigir Registros"):
         aprovar_correcoes_registros_interface()
     elif opcao.startswith("📁 Gerenciar Arquivos"):
@@ -3459,7 +3504,21 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
         st.metric("🏥 Atestados do Mês", atestados_mes)
 
     # Destaque para horários discrepantes
-    st.subheader("⚠️ Alertas de Discrepâncias (>15 min)")
+    st.subheader("⚠️ Alertas de Discrepâncias (>Tolerância configurada)")
+
+    # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
+    limiar_discrepancia = 15  # padrão
+    try:
+        cursor = get_db_connection().cursor()
+        cursor.execute(
+            "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+        )
+        resultado = cursor.fetchone()
+        if resultado:
+            limiar_discrepancia = int(resultado[0])
+        cursor.close()
+    except Exception as e:
+        logger.warning(f"Não foi possível obter tolerância do gestor no dashboard: {e}")
 
     # Buscar registros de hoje com possíveis discrepâncias
     registros_hoje_detalhados = obter_registros_usuario(
@@ -3504,7 +3563,8 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 diff_fim = (datetime.combine(date.today(), fim_previsto) -
                             datetime.combine(date.today(), fim_real)).total_seconds() / 60
 
-                if abs(diff_inicio) > 15 or abs(diff_fim) > 15:
+                # 🔧 CORREÇÃO: Usar tolerância configurada ao invés de 15 min fixo
+                if abs(diff_inicio) > limiar_discrepancia or abs(diff_fim) > limiar_discrepancia:
                     discrepancias.append({
                         "usuario": usuario,
                         "inicio_previsto": jornada_inicio,
@@ -4205,7 +4265,7 @@ def aprovar_atestados_interface(atestado_system):
                                 content, _ = upload_sys.get_file_content(
                                     id_arquivo, usuario)
                                 if content:
-                                    st.download_button(
+                                    safe_download_button(
                                         label="⬇️ Baixar Documento",
                                         data=content,
                                         file_name=nome_arq,
@@ -4524,7 +4584,7 @@ def aprovar_atestados_interface(atestado_system):
 
             # Exportar
             csv = df.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
+            safe_download_button(
                 label="📥 Exportar CSV",
                 data=csv,
                 file_name=f"atestados_{datetime.now().strftime('%Y%m%d')}.csv",
@@ -4650,7 +4710,7 @@ def todos_registros_interface(calculo_horas_system):
                 'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Nome Completo'
             ])
             csv = df_export.to_csv(index=False).encode('utf-8-sig')
-            st.download_button(
+            safe_download_button(
                 label="📥 Exportar CSV",
                 data=csv,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.csv",
@@ -4662,7 +4722,7 @@ def todos_registros_interface(calculo_horas_system):
             buffer = BytesIO()
             df_export.to_excel(buffer, index=False, engine='openpyxl')
             buffer.seek(0)
-            st.download_button(
+            safe_download_button(
                 label="📥 Exportar Excel",
                 data=buffer,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.xlsx",
@@ -4989,7 +5049,7 @@ def gerenciar_arquivos_interface(upload_system):
                     content, _ = upload_system.get_file_content(
                         arquivo_id, usuario)
                     if content:
-                        st.download_button(
+                        safe_download_button(
                             label="⬇️ Baixar",
                             data=content,
                             file_name=nome,
@@ -5804,6 +5864,269 @@ st.markdown("""
     feito por Pâmella SAR
 </div>
 """, unsafe_allow_html=True)
+
+
+def configurar_jornada_interface():
+    """Interface para gestor configurar jornada semanal dos funcionários"""
+    from jornada_semanal_system import obter_jornada_usuario, salvar_jornada_semanal, NOMES_DIAS
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📅 Configurar Jornada Semanal</h3>
+        <p>Configure horários de trabalho variáveis para cada funcionário</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Buscar funcionários ativos
+    conn = get_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT id, usuario, nome_completo
+        FROM usuarios
+        WHERE tipo = 'funcionario' AND ativo = 1
+        ORDER BY nome_completo
+    """)
+    usuarios_result = cursor.fetchall()
+    conn.close()
+    
+    if not usuarios_result:
+        st.warning("❌ Nenhum funcionário ativo encontrado")
+        return
+    
+    # Selectbox para escolher funcionário
+    usuarios_dict = {f"{nome or usuario}" if nome else usuario: (user_id, usuario) 
+                     for user_id, usuario, nome in usuarios_result}
+    usuario_display = st.selectbox("👤 Selecione o funcionário:", list(usuarios_dict.keys()))
+    usuario_id, usuario_username = usuarios_dict[usuario_display]
+    
+    # Obter jornada atual
+    jornada_atual = obter_jornada_usuario(usuario_username)
+    
+    if not jornada_atual:
+        st.error("❌ Não foi possível obter jornada do funcionário")
+        return
+    
+    st.markdown("---")
+    st.markdown("### 📋 Configuração Semanal")
+    
+    # Criar 2 colunas com dias úteis + fim de semana
+    dias_semana_ordem = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
+    
+    # Mostrar tabela com resumo
+    st.markdown("#### 📊 Resumo da Semana")
+    
+    # Preparar dados para exibir
+    resumo_data = []
+    for dia in dias_semana_ordem:
+        dia_config = jornada_atual.get(dia, {})
+        trabalha = "✅ Trabalha" if dia_config.get('trabalha', False) else "❌ Folga"
+        horario = f"{dia_config.get('inicio', '--')} - {dia_config.get('fim', '--')}"
+        intervalo = f"{dia_config.get('intervalo', 60)} min"
+        resumo_data.append({
+            "Dia": NOMES_DIAS.get(dia, dia),
+            "Status": trabalha,
+            "Horário": horario,
+            "Intervalo": intervalo
+        })
+    
+    # Exibir como tabela com expanders para editar cada dia
+    cols = st.columns(7)
+    
+    for idx, dia in enumerate(dias_semana_ordem):
+        with cols[idx]:
+            dia_config = jornada_atual.get(dia, {})
+            trabalha_emoji = "✅" if dia_config.get('trabalha', False) else "❌"
+            horario_texto = f"{dia_config.get('inicio', '08:00')}-{dia_config.get('fim', '17:00')}"
+            
+            # Usar expander para editar
+            with st.expander(f"{trabalha_emoji} {NOMES_DIAS.get(dia, dia).split('-')[0]}\n{horario_texto}"):
+                # Form para editar este dia
+                with st.form(f"form_jornada_{dia}"):
+                    trabalha_novo = st.checkbox(
+                        "Trabalha neste dia",
+                        value=dia_config.get('trabalha', True),
+                        key=f"trabalha_{dia}"
+                    )
+                    
+                    if trabalha_novo:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            hora_inicio_novo = st.time_input(
+                                "Hora Início",
+                                value=datetime.strptime(dia_config.get('inicio', '08:00'), '%H:%M').time(),
+                                key=f"inicio_{dia}"
+                            )
+                        
+                        with col2:
+                            hora_fim_nova = st.time_input(
+                                "Hora Fim",
+                                value=datetime.strptime(dia_config.get('fim', '17:00'), '%H:%M').time(),
+                                key=f"fim_{dia}"
+                            )
+                        
+                        intervalo_novo = st.number_input(
+                            "Intervalo (minutos)",
+                            value=int(dia_config.get('intervalo', 60)),
+                            min_value=0,
+                            max_value=240,
+                            step=15,
+                            key=f"intervalo_{dia}"
+                        )
+                    else:
+                        hora_inicio_novo = None
+                        hora_fim_nova = None
+                        intervalo_novo = 0
+                    
+                    # Botão para salvar este dia
+                    if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", use_container_width=True):
+                        # Atualizar configuração
+                        jornada_atual[dia] = {
+                            'trabalha': trabalha_novo,
+                            'inicio': hora_inicio_novo.strftime('%H:%M') if hora_inicio_novo else '08:00',
+                            'fim': hora_fim_nova.strftime('%H:%M') if hora_fim_nova else '17:00',
+                            'intervalo': int(intervalo_novo)
+                        }
+                        
+                        # Salvar no banco
+                        if salvar_jornada_semanal(usuario_id, jornada_atual):
+                            st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
+                            st.rerun()
+                        else:
+                            st.error(f"❌ Erro ao salvar {NOMES_DIAS.get(dia, dia)}")
+    
+    st.markdown("---")
+    
+    # Opção para copiar padrão
+    st.markdown("#### 🔄 Atalhos")
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        if st.button("📋 Copiar para dias úteis (Seg-Sex)", use_container_width=True):
+            # Copiar config de segunda para ter um padrão
+            padrao = jornada_atual.get('seg', {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60})
+            for dia in ['ter', 'qua', 'qui', 'sex']:
+                jornada_atual[dia] = padrao.copy()
+            
+            if salvar_jornada_semanal(usuario_id, jornada_atual):
+                st.success("✅ Padrão copiado para dias úteis!")
+                st.rerun()
+            else:
+                st.error("❌ Erro ao copiar padrão")
+    
+    with col2:
+        if st.button("🏖️ Desativar fim de semana (Sab-Dom)", use_container_width=True):
+            for dia in ['sab', 'dom']:
+                jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
+            
+            if salvar_jornada_semanal(usuario_id, jornada_atual):
+                st.success("✅ Fim de semana desativado!")
+                st.rerun()
+            else:
+                st.error("❌ Erro ao desativar fim de semana")
+    
+    with col3:
+        if st.button("🔄 Resetar para padrão", use_container_width=True):
+            # Resetar para 08:00-17:00 seg-sex
+            for dia in dias_semana_ordem:
+                if dia in ['seg', 'ter', 'qua', 'qui', 'sex']:
+                    jornada_atual[dia] = {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60}
+                else:
+                    jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
+            
+            if salvar_jornada_semanal(usuario_id, jornada_atual):
+                st.success("✅ Jornada resetada para padrão!")
+                st.rerun()
+            else:
+                st.error("❌ Erro ao resetar jornada")
+    
+    # Mostrar histórico de alterações (futura melhoria)
+    st.markdown("---")
+    st.info("💡 As alterações de jornada são aplicadas imediatamente. Os novos pontos respeitarão estas configurações.")
+
+
+def exibir_alerta_fim_jornada_avancado():
+    """
+    Exibe alerta avançado 5 minutos antes do fim da jornada
+    Integra com novo sistema de cálculo de jornada semanal
+    """
+    try:
+        from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
+        from datetime import date
+        
+        # Usar novo sistema de cálculo
+        verificacao = JornadaSemanalCalculoSystem.obter_tempo_ate_fim_jornada(
+            st.session_state.usuario,
+            date.today(),
+            margem_minutos=5
+        )
+        
+        # Se está dentro da margem de 5 minutos
+        if verificacao['dentro_margem']:
+            minutos_restantes = verificacao['minutos_restantes']
+            horario_fim = verificacao['horario_fim']
+            
+            # Criar card destacado para alerta
+            st.markdown(f"""
+            <div style="
+                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                padding: 20px;
+                border-radius: 10px;
+                margin: 10px 0;
+                color: white;
+                box-shadow: 0 6px 12px rgba(245, 87, 108, 0.4);
+                animation: pulse 1.5s infinite;
+            ">
+                <h3 style="margin: 0; color: white; font-size: 20px;">⏰ FALTA POUCO PARA O FIM DA JORNADA!</h3>
+                <p style="margin: 10px 0; font-size: 16px;">
+                    Seu horário de saída é às <strong>{horario_fim}</strong>
+                    <br>Faltam apenas <strong>{minutos_restantes} minutos</strong>
+                </p>
+            </div>
+            <style>
+                @keyframes pulse {{
+                    0%, 100% {{ box-shadow: 0 6px 12px rgba(245, 87, 108, 0.4); }}
+                    50% {{ box-shadow: 0 8px 20px rgba(245, 87, 108, 0.8); }}
+                }}
+            </style>
+            """, unsafe_allow_html=True)
+            
+            col1, col2 = st.columns([1, 1])
+            with col1:
+                if st.button("✅ Vou Finalizar", use_container_width=True, key="btn_vai_finalizar"):
+                    st.success("Tudo bem! Trabalhe um ótimo dia 🎉")
+            with col2:
+                if st.button("⏱️ Vou Fazer Hora Extra", type="primary", use_container_width=True, key="btn_vai_fazer_he"):
+                    st.session_state.solicitar_horas_extras = True
+                    st.session_state.vai_fazer_hora_extra = True
+                    st.rerun()
+    
+    except ImportError:
+        # Fallback: usar sistema antigo se jornada_semanal_calculo_system não estiver disponível
+        try:
+            from jornada_semanal_system import verificar_horario_saida_proximo
+            verificacao = verificar_horario_saida_proximo(st.session_state.usuario, margem_minutos=5)
+            
+            if verificacao.get('proximo'):
+                minutos = verificacao.get('minutos_restantes')
+                horario = verificacao.get('horario_saida')
+                
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 10px 0;
+                    color: white;
+                ">
+                    <h3 style="margin: 0;">⏰ Horário de Saída Próximo</h3>
+                    <p style="margin: 10px 0;">Faltam <strong>{minutos} minutos</strong> para as {horario}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        except Exception as e:
+            logger.debug(f"Erro ao exibir alerta de fim de jornada: {e}")
+    except Exception as e:
+        logger.debug(f"Erro geral ao exibir alerta: {e}")
 
 
 def buscar_registros_dia(usuario, data):

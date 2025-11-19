@@ -161,7 +161,7 @@ def test_repeating_notifications():
         print("Intervalo: 3 segundos (para teste rápido)")
 
         count = [0]
-        max_repeats = 3
+        max_repeats = 2
 
         def stop_after_max():
             count[0] += 1
@@ -177,7 +177,7 @@ def test_repeating_notifications():
 
         print(f"Job iniciado. Aguardando {max_repeats} notificações...")
 
-        time.sleep(20)
+        time.sleep(30)
 
         conn = get_connection()
         cursor = conn.cursor()

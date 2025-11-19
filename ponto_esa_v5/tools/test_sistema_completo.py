@@ -634,7 +634,7 @@ def test_atestados():
 
 def test_relatorios():
     """TESTE 10: Geração de Relatórios"""
-    print_section("📊 TESTE 10: Geração de Relatórios")
+    print_section("TESTE 10: Geracao de Relatorios")
 
     limpar_dados_teste()
     criar_usuarios_teste()
@@ -688,6 +688,8 @@ def test_relatorios():
         )
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         all_passed = print_result(False, f"Erro na geração de relatórios: {e}")
     
     assert all_passed, "Falha na geração de relatórios"

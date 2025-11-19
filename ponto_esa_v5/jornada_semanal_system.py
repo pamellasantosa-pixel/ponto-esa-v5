@@ -11,34 +11,54 @@ from datetime import datetime, time
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
 if USE_POSTGRESQL:
-    from database_postgresql import get_connection, SQL_PLACEHOLDER
+    from ponto_esa_v5.database_postgresql import get_connection, SQL_PLACEHOLDER
 else:
     from database import get_connection, SQL_PLACEHOLDER
 
 logger = logging.getLogger(__name__)
 
 JORNADA_COLUMNS = [
+    # Segunda-feira
     ("trabalha_seg", "INTEGER DEFAULT 1"),
     ("jornada_seg_inicio", "TIME"),
     ("jornada_seg_fim", "TIME"),
+    ("intervalo_seg", "INTEGER DEFAULT 60"),  # intervalo em minutos
+    
+    # Terça-feira
     ("trabalha_ter", "INTEGER DEFAULT 1"),
     ("jornada_ter_inicio", "TIME"),
     ("jornada_ter_fim", "TIME"),
+    ("intervalo_ter", "INTEGER DEFAULT 60"),
+    
+    # Quarta-feira
     ("trabalha_qua", "INTEGER DEFAULT 1"),
     ("jornada_qua_inicio", "TIME"),
     ("jornada_qua_fim", "TIME"),
+    ("intervalo_qua", "INTEGER DEFAULT 60"),
+    
+    # Quinta-feira
     ("trabalha_qui", "INTEGER DEFAULT 1"),
     ("jornada_qui_inicio", "TIME"),
     ("jornada_qui_fim", "TIME"),
+    ("intervalo_qui", "INTEGER DEFAULT 60"),
+    
+    # Sexta-feira
     ("trabalha_sex", "INTEGER DEFAULT 1"),
     ("jornada_sex_inicio", "TIME"),
     ("jornada_sex_fim", "TIME"),
+    ("intervalo_sex", "INTEGER DEFAULT 60"),
+    
+    # Sábado
     ("trabalha_sab", "INTEGER DEFAULT 0"),
     ("jornada_sab_inicio", "TIME"),
     ("jornada_sab_fim", "TIME"),
+    ("intervalo_sab", "INTEGER DEFAULT 60"),
+    
+    # Domingo
     ("trabalha_dom", "INTEGER DEFAULT 0"),
     ("jornada_dom_inicio", "TIME"),
     ("jornada_dom_fim", "TIME"),
+    ("intervalo_dom", "INTEGER DEFAULT 60"),
 ]
 
 
@@ -101,8 +121,8 @@ def obter_jornada_usuario(usuario):
     Returns:
         dict: Dicionário com configuração de cada dia da semana
         {
-            'seg': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00'},
-            'ter': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00'},
+            'seg': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60},
+            'ter': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60},
             ...
         }
     """
@@ -111,13 +131,13 @@ def obter_jornada_usuario(usuario):
     
     query = f"""
         SELECT 
-            trabalha_seg, jornada_seg_inicio, jornada_seg_fim,
-            trabalha_ter, jornada_ter_inicio, jornada_ter_fim,
-            trabalha_qua, jornada_qua_inicio, jornada_qua_fim,
-            trabalha_qui, jornada_qui_inicio, jornada_qui_fim,
-            trabalha_sex, jornada_sex_inicio, jornada_sex_fim,
-            trabalha_sab, jornada_sab_inicio, jornada_sab_fim,
-            trabalha_dom, jornada_dom_inicio, jornada_dom_fim,
+            trabalha_seg, jornada_seg_inicio, jornada_seg_fim, intervalo_seg,
+            trabalha_ter, jornada_ter_inicio, jornada_ter_fim, intervalo_ter,
+            trabalha_qua, jornada_qua_inicio, jornada_qua_fim, intervalo_qua,
+            trabalha_qui, jornada_qui_inicio, jornada_qui_fim, intervalo_qui,
+            trabalha_sex, jornada_sex_inicio, jornada_sex_fim, intervalo_sex,
+            trabalha_sab, jornada_sab_inicio, jornada_sab_fim, intervalo_sab,
+            trabalha_dom, jornada_dom_inicio, jornada_dom_fim, intervalo_dom,
             jornada_inicio_previsto, jornada_fim_previsto
         FROM usuarios
         WHERE usuario = {SQL_PLACEHOLDER}
@@ -135,15 +155,17 @@ def obter_jornada_usuario(usuario):
     dias_keys = ['seg', 'ter', 'qua', 'qui', 'sex', 'sab', 'dom']
     
     for i, dia in enumerate(dias_keys):
-        idx = i * 3
+        idx = i * 4
         trabalha = bool(resultado[idx]) if resultado[idx] is not None else True
         inicio = resultado[idx + 1] if resultado[idx + 1] else resultado[-2]
         fim = resultado[idx + 2] if resultado[idx + 2] else resultado[-1]
+        intervalo = resultado[idx + 3] if resultado[idx + 3] is not None else 60
         
         jornada[dia] = {
             'trabalha': trabalha,
             'inicio': str(inicio) if inicio else '08:00',
-            'fim': str(fim) if fim else '17:00'
+            'fim': str(fim) if fim else '17:00',
+            'intervalo': int(intervalo) if intervalo else 60  # em minutos
         }
     
     return jornada
@@ -196,7 +218,7 @@ def salvar_jornada_semanal(usuario_id, jornada_config):
         usuario_id: ID do usuário
         jornada_config: dict com configuração de cada dia
         {
-            'seg': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00'},
+            'seg': {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60},
             ...
         }
     
@@ -228,6 +250,11 @@ def salvar_jornada_semanal(usuario_id, jornada_config):
                 if config.get('fim'):
                     updates.append(f"jornada_{dia}_fim = {SQL_PLACEHOLDER}")
                     params.append(config['fim'])
+                
+                # Intervalo (novo)
+                intervalo = int(config.get('intervalo', 60)) if config.get('intervalo') else 60
+                updates.append(f"intervalo_{dia} = {SQL_PLACEHOLDER}")
+                params.append(intervalo)
         
         # Adicionar ID do usuário ao final dos parâmetros
         params.append(usuario_id)

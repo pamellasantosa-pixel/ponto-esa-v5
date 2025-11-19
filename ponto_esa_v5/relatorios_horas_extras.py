@@ -13,11 +13,12 @@ import os
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
 if USE_POSTGRESQL:
-    from database_postgresql import get_connection, SQL_PLACEHOLDER
+    from ponto_esa_v5.database_postgresql import get_connection, SQL_PLACEHOLDER
 else:
     from database import get_connection, SQL_PLACEHOLDER
 
 from calculo_horas_system import safe_datetime_parse
+from ponto_esa_v5.streamlit_utils import safe_download_button
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,7 @@ def relatorios_horas_extras_interface():
     with col1:
         # Exportar para Excel
         excel_data = gerar_excel(df_horas_extras)
-        st.download_button(
+        safe_download_button(
             label="📥 Baixar Excel",
             data=excel_data,
             file_name=f"horas_extras_{data_inicio}_{data_fim}.xlsx",
@@ -131,7 +132,7 @@ def relatorios_horas_extras_interface():
     with col2:
         # Exportar para CSV
         csv_data = df_horas_extras.to_csv(index=False)
-        st.download_button(
+        safe_download_button(
             label="📥 Baixar CSV",
             data=csv_data,
             file_name=f"horas_extras_{data_inicio}_{data_fim}.csv",

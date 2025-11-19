@@ -26,13 +26,53 @@ else:
     import sqlite3
 
 
-def get_connection():
+def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
         return psycopg2.connect(**DB_CONFIG)
     else:
         os.makedirs('database', exist_ok=True)
-        return sqlite3.connect('database/ponto_esa.db')
+        if db_path:
+            conn = sqlite3.connect(db_path)
+        else:
+            conn = sqlite3.connect('database/ponto_esa.db')
+
+        class AdaptCursor:
+            def __init__(self, cursor):
+                self._cursor = cursor
+
+            def execute(self, sql, params=None):
+                if isinstance(sql, str):
+                    sql = sql.replace('%s', SQL_PLACEHOLDER)
+                if params is None:
+                    return self._cursor.execute(sql)
+                return self._cursor.execute(sql, params)
+
+            def executemany(self, sql, seq_of_params):
+                if isinstance(sql, str):
+                    sql = sql.replace('%s', SQL_PLACEHOLDER)
+                return self._cursor.executemany(sql, seq_of_params)
+
+            def __getattr__(self, name):
+                return getattr(self._cursor, name)
+
+        class ConnectionWrapper:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def cursor(self):
+                return AdaptCursor(self._conn.cursor())
+
+            def commit(self):
+                return self._conn.commit()
+
+            def close(self):
+                return self._conn.close()
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        return ConnectionWrapper(conn)
 
 
 def adapt_sql_for_postgresql(sql):
@@ -45,6 +85,13 @@ def adapt_sql_for_postgresql(sql):
         # Adaptar tipos de dados se necessário
         sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
     return sql
+
+
+def q(sql_text: str) -> str:
+    """Return query adapted for the configured SQL placeholder."""
+    if not isinstance(sql_text, str):
+        return sql_text
+    return sql_text.replace('%s', SQL_PLACEHOLDER)
 
 
 def init_db():

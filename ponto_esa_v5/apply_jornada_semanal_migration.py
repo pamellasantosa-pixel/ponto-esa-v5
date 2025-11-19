@@ -24,36 +24,43 @@ def aplicar_migration_jornada_semanal():
         ("jornada_seg_inicio", "TIME"),
         ("jornada_seg_fim", "TIME"),
         ("trabalha_seg", "INTEGER DEFAULT 1"),
+        ("intervalo_seg", "INTEGER DEFAULT 60"),  # intervalo em minutos
         
         # Terça-feira
         ("jornada_ter_inicio", "TIME"),
         ("jornada_ter_fim", "TIME"),
         ("trabalha_ter", "INTEGER DEFAULT 1"),
+        ("intervalo_ter", "INTEGER DEFAULT 60"),
         
         # Quarta-feira
         ("jornada_qua_inicio", "TIME"),
         ("jornada_qua_fim", "TIME"),
         ("trabalha_qua", "INTEGER DEFAULT 1"),
+        ("intervalo_qua", "INTEGER DEFAULT 60"),
         
         # Quinta-feira
         ("jornada_qui_inicio", "TIME"),
         ("jornada_qui_fim", "TIME"),
         ("trabalha_qui", "INTEGER DEFAULT 1"),
+        ("intervalo_qui", "INTEGER DEFAULT 60"),
         
         # Sexta-feira
         ("jornada_sex_inicio", "TIME"),
         ("jornada_sex_fim", "TIME"),
         ("trabalha_sex", "INTEGER DEFAULT 1"),
+        ("intervalo_sex", "INTEGER DEFAULT 60"),
         
         # Sábado
         ("jornada_sab_inicio", "TIME"),
         ("jornada_sab_fim", "TIME"),
         ("trabalha_sab", "INTEGER DEFAULT 0"),
+        ("intervalo_sab", "INTEGER DEFAULT 60"),
         
         # Domingo
         ("jornada_dom_inicio", "TIME"),
         ("jornada_dom_fim", "TIME"),
         ("trabalha_dom", "INTEGER DEFAULT 0"),
+        ("intervalo_dom", "INTEGER DEFAULT 60"),
     ]
     
     for coluna, tipo in colunas_a_adicionar:

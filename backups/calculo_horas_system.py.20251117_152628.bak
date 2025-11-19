@@ -11,45 +11,55 @@ except Exception:
         from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
     except Exception:
         from ponto_esa_v5.database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as time_type
 import calendar
 
+# Definir placeholder correto para queries SQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
-def safe_datetime_parse(value):
-    """Converte value para datetime de forma segura (compatível PostgreSQL/SQLite)"""
-    if value is None:
+
+def safe_time_parse(time_value):
+    """
+    Converte para datetime de forma segura (compatível com PostgreSQL e SQLite).
+    PostgreSQL retorna time objects, SQLite retorna strings.
+    Suporta formatos HH:MM e HH:MM:SS.
+    """
+    if time_value is None:
+        return datetime.strptime("08:00", "%H:%M")
+    if isinstance(time_value, time_type):
+        # PostgreSQL retorna datetime.time - converter para datetime
+        return datetime.combine(date.today(), time_value)
+    if isinstance(time_value, str):
+        # SQLite retorna string - tentar HH:MM:SS primeiro, depois HH:MM
+        try:
+            return datetime.strptime(time_value, "%H:%M:%S")
+        except ValueError:
+            return datetime.strptime(time_value, "%H:%M")
+    return time_value
+
+
+def safe_datetime_parse(dt_value):
+    """Converte valor de data/hora de forma segura (PostgreSQL retorna datetime, SQLite string)."""
+    if dt_value is None:
         return None
-    if isinstance(value, datetime):
-        return value
-    if isinstance(value, str):
-        # Tentar formatos comuns
-        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
-            try:
-                return datetime.strptime(value, fmt)
-            except ValueError:
-                continue
-    return None
+    if isinstance(dt_value, datetime):
+        return dt_value
+    if isinstance(dt_value, str):
+        try:
+            return datetime.fromisoformat(dt_value)
+        except ValueError:
+            return datetime.strptime(dt_value, "%Y-%m-%d %H:%M:%S")
+    return dt_value
 
 
 class CalculoHorasSystem:
-    def __init__(self, db_path: str | None = None):
-        """Inicializa o sistema de cálculo de horas.
-
-        Args:
-            db_path (str|None): Caminho para um banco SQLite local para testes. Se None, usa get_connection().
-        """
-        self._test_db_path = db_path
-
-    def _get_connection(self):
-        """Retorna conexão: usa banco de testes (SQLite) se configurado, senão usa get_connection()."""
-        if self._test_db_path:
-            return sqlite3.connect(self._test_db_path)
-        return get_connection()
+    def __init__(self):
+        pass
 
         
     def calcular_horas_dia(self, usuario, data):
         """Calcula as horas trabalhadas em um dia específico com todas as regras"""
-        conn = self._get_connection()
+        conn = get_connection()
         try:
             cursor = conn.cursor()
 
@@ -88,23 +98,10 @@ class CalculoHorasSystem:
             primeiro = safe_datetime_parse(registros[0][0])
             ultimo = safe_datetime_parse(registros[-1][0])
 
-            if not primeiro or not ultimo:
-                return {
-                    "horas_trabalhadas": 0,
-                    "horas_liquidas": 0,
-                    "horas_finais": 0,
-                    "desconto_almoco": 0,
-                    "desconto_atestados": 0,
-                    "eh_domingo": False,
-                    "eh_feriado": False,
-                    "multiplicador": 1,
-                    "primeiro_registro": "00:00",
-                    "ultimo_registro": "00:00",
-                    "total_registros": len(registros),
-                    "detalhes": "Erro ao processar horários"
-                }
-
-            horas_trabalhadas = (ultimo - primeiro).total_seconds() / 3600
+            if primeiro is None or ultimo is None:
+                horas_trabalhadas = 0
+            else:
+                horas_trabalhadas = (ultimo - primeiro).total_seconds() / 3600
 
             # Aplicar desconto de almoço se > 6 horas
             desconto_almoco = 1 if horas_trabalhadas > 6 else 0
@@ -125,6 +122,9 @@ class CalculoHorasSystem:
 
             horas_finais = max(0, horas_finais - total_atestados)
 
+            primeiro_fmt = primeiro.strftime("%H:%M") if isinstance(primeiro, datetime) else "00:00"
+            ultimo_fmt = ultimo.strftime("%H:%M") if isinstance(ultimo, datetime) else "00:00"
+
             return {
                 "horas_trabalhadas": horas_trabalhadas,
                 "horas_liquidas": horas_liquidas,
@@ -134,8 +134,8 @@ class CalculoHorasSystem:
                 "eh_domingo": eh_domingo,
                 "eh_feriado": eh_feriado,
                 "multiplicador": multiplicador,
-                "primeiro_registro": primeiro.strftime("%H:%M"),
-                "ultimo_registro": ultimo.strftime("%H:%M"),
+                "primeiro_registro": primeiro_fmt,
+                "ultimo_registro": ultimo_fmt,
                 "total_registros": len(registros)
             }
         finally:
@@ -197,14 +197,14 @@ class CalculoHorasSystem:
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         cursor.execute(f"""
-                SELECT tipo, COUNT(*) FROM registros_ponto 
-                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
-                GROUP BY tipo
-            """, (usuario, data))
+            SELECT tipo, COUNT(*) FROM registros_ponto 
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
+            GROUP BY tipo
+        """, (usuario, data))
 
         contadores = dict(cursor.fetchall())
         conn.close()
@@ -243,18 +243,18 @@ class CalculoHorasSystem:
 
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = %s
+                WHERE data = {SQL_PLACEHOLDER}
             """, (data.strftime("%Y-%m-%d"),))
 
             eh_feriado = cursor.fetchone()[0] > 0
             return eh_feriado
-        except Exception:
-            # Se a tabela feriados não existir ou houver erro, considerar não feriado
+        except sqlite3.OperationalError:
+            # Se a tabela feriados não existir em um DB temporário, considerar não feriado
             return False
         finally:
             try:
@@ -264,12 +264,12 @@ class CalculoHorasSystem:
 
     def obter_feriados_periodo(self, data_inicio, data_fim):
         """Obtém lista de feriados em um período"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data, nome, tipo FROM feriados 
-            WHERE data BETWEEN %s AND %s
+            WHERE data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
             ORDER BY data
         """, (data_inicio, data_fim))
 
@@ -280,7 +280,7 @@ class CalculoHorasSystem:
 
     def gerar_relatorio_horas_extras(self, usuario, data_inicio, data_fim):
         """Gera relatório de horas extras não aprovadas"""
-        conn = self._get_connection()
+        conn = get_connection()
         cursor = conn.cursor()
 
         # Buscar jornada prevista
@@ -297,30 +297,9 @@ class CalculoHorasSystem:
         jornada_inicio = jornada[0] or "08:00"
         jornada_fim = jornada[1] or "17:00"
 
-        # Calcular horas previstas por dia - usar função robusta de parse
-        try:
-            if ':' in str(jornada_inicio):
-                parts = str(jornada_inicio).split(':')
-                if len(parts) == 3:
-                    inicio_dt = datetime.strptime(jornada_inicio, "%H:%M:%S")
-                else:
-                    inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
-            else:
-                inicio_dt = datetime.strptime("08:00", "%H:%M")
-        except:
-            inicio_dt = datetime.strptime("08:00", "%H:%M")
-        
-        try:
-            if ':' in str(jornada_fim):
-                parts = str(jornada_fim).split(':')
-                if len(parts) == 3:
-                    fim_dt = datetime.strptime(jornada_fim, "%H:%M:%S")
-                else:
-                    fim_dt = datetime.strptime(jornada_fim, "%H:%M")
-            else:
-                fim_dt = datetime.strptime("17:00", "%H:%M")
-        except:
-            fim_dt = datetime.strptime("17:00", "%H:%M")
+        # Calcular horas previstas por dia
+        inicio_dt = safe_time_parse(jornada_inicio)
+        fim_dt = safe_time_parse(jornada_fim)
         horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas > 6:
             horas_previstas -= 1  # Desconto do almoço
@@ -386,117 +365,3 @@ def format_time_duration(horas):
         m = int((abs(horas) - h) * 60)
         return f"{h}h {m}min" if m > 0 else f"{h}h"
 
-
-def verificar_se_eh_feriado(data):
-    """
-    Verifica se uma data é feriado (função pública para uso em interfaces)
-    
-    Args:
-        data: date, datetime ou string no formato 'YYYY-MM-DD'
-    
-    Returns:
-        dict: {'eh_feriado': bool, 'nome_feriado': str ou None, 'tipo': str ou None}
-    """
-    from datetime import datetime, date
-    
-    # Converter para date se necessário
-    if isinstance(data, str):
-        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
-    elif isinstance(data, datetime):
-        data_obj = data.date()
-    else:
-        data_obj = data
-    
-    conn = get_connection()
-    cursor = conn.cursor()
-    
-    try:
-        cursor.execute("""
-            SELECT nome, tipo FROM feriados 
-            WHERE data = %s
-        """, (data_obj.strftime("%Y-%m-%d"),))
-        
-        resultado = cursor.fetchone()
-        
-        if resultado:
-            return {
-                'eh_feriado': True,
-                'nome_feriado': resultado[0],
-                'tipo': resultado[1]
-            }
-        else:
-            return {
-                'eh_feriado': False,
-                'nome_feriado': None,
-                'tipo': None
-            }
-    except Exception as e:
-        print(f"Erro ao verificar feriado: {e}")
-        return {
-            'eh_feriado': False,
-            'nome_feriado': None,
-            'tipo': None
-        }
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
-
-
-def eh_dia_com_multiplicador(data):
-    """
-    Verifica se uma data tem multiplicador de horas (domingo ou feriado)
-    
-    Args:
-        data: date, datetime ou string no formato 'YYYY-MM-DD'
-    
-    Returns:
-        dict: {
-            'tem_multiplicador': bool,
-            'multiplicador': int (1 ou 2),
-            'motivo': str,
-            'eh_domingo': bool,
-            'eh_feriado': bool,
-            'nome_feriado': str ou None
-        }
-    """
-    from datetime import datetime, date
-    
-    # Converter para date se necessário
-    if isinstance(data, str):
-        data_obj = datetime.strptime(data, "%Y-%m-%d").date()
-    elif isinstance(data, datetime):
-        data_obj = data.date()
-    else:
-        data_obj = data
-    
-    # Verificar se é domingo
-    eh_domingo = data_obj.weekday() == 6
-    
-    # Verificar se é feriado
-    info_feriado = verificar_se_eh_feriado(data_obj)
-    eh_feriado = info_feriado['eh_feriado']
-    
-    # Determinar multiplicador e motivo
-    if eh_domingo and eh_feriado:
-        motivo = f"Domingo E Feriado ({info_feriado['nome_feriado']})"
-        tem_multiplicador = True
-    elif eh_domingo:
-        motivo = "Domingo"
-        tem_multiplicador = True
-    elif eh_feriado:
-        motivo = f"Feriado: {info_feriado['nome_feriado']}"
-        tem_multiplicador = True
-    else:
-        motivo = "Dia normal"
-        tem_multiplicador = False
-    
-    return {
-        'tem_multiplicador': tem_multiplicador,
-        'multiplicador': 2 if tem_multiplicador else 1,
-        'motivo': motivo,
-        'eh_domingo': eh_domingo,
-        'eh_feriado': eh_feriado,
-        'nome_feriado': info_feriado.get('nome_feriado')
-    }
