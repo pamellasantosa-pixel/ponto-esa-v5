@@ -2671,27 +2671,62 @@ def notificacoes_interface(horas_extras_system):
     </div>
     """, unsafe_allow_html=True)
 
-    conn = get_connection()
-    cursor = conn.cursor()
-    
     # Contar notificações
-    cursor.execute("""
-        SELECT COUNT(*) FROM solicitacoes_horas_extras 
-        WHERE aprovador_solicitado = %s AND status = 'pendente'
-    """, (st.session_state.usuario,))
-    he_aprovar = cursor.fetchone()[0]
+    he_aprovar = 0
+    correcoes_pendentes = 0
+    atestados_pendentes = 0
     
-    cursor.execute("""
-        SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-        WHERE usuario = %s AND status = 'pendente'
-    """, (st.session_state.usuario,))
-    correcoes_pendentes = cursor.fetchone()[0]
-    
-    cursor.execute("""
-        SELECT COUNT(*) FROM atestado_horas 
-        WHERE usuario = %s AND status = 'pendente'
-    """, (st.session_state.usuario,))
-    atestados_pendentes = cursor.fetchone()[0]
+    if REFACTORING_ENABLED:
+        try:
+            # Horas extras para aprovar
+            result = execute_query(
+                "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                (st.session_state.usuario,),
+                fetch_one=True
+            )
+            he_aprovar = result[0] if result else 0
+            
+            # Correções de registro pendentes
+            result = execute_query(
+                "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                (st.session_state.usuario,),
+                fetch_one=True
+            )
+            correcoes_pendentes = result[0] if result else 0
+            
+            # Atestados pendentes
+            result = execute_query(
+                "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                (st.session_state.usuario,),
+                fetch_one=True
+            )
+            atestados_pendentes = result[0] if result else 0
+        except Exception as e:
+            log_error("Erro ao contar notificações", e, {"usuario": st.session_state.usuario})
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Contar notificações
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_horas_extras 
+            WHERE aprovador_solicitado = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        he_aprovar = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        correcoes_pendentes = cursor.fetchone()[0]
+        
+        cursor.execute("""
+            SELECT COUNT(*) FROM atestado_horas 
+            WHERE usuario = %s AND status = 'pendente'
+        """, (st.session_state.usuario,))
+        atestados_pendentes = cursor.fetchone()[0]
+        
+        conn.close()
     
     total = he_aprovar + correcoes_pendentes + atestados_pendentes
     
@@ -2931,25 +2966,44 @@ def registrar_ausencia_interface(upload_system):
                     return
 
             # Registrar ausência no banco
-            conn = get_connection()
-            cursor = conn.cursor()
-
             try:
-                cursor.execute("""
-                    INSERT INTO ausencias 
-                    (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (
-                    st.session_state.usuario,
-                    data_inicio.strftime("%Y-%m-%d"),
-                    data_fim.strftime("%Y-%m-%d"),
-                    tipo_ausencia,
-                    motivo,
-                    arquivo_comprovante,
-                    1 if nao_possui_comprovante else 0
-                ))
+                if REFACTORING_ENABLED:
+                    query = """
+                        INSERT INTO ausencias 
+                        (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """
+                    execute_update(query, (
+                        st.session_state.usuario,
+                        data_inicio.strftime("%Y-%m-%d"),
+                        data_fim.strftime("%Y-%m-%d"),
+                        tipo_ausencia,
+                        motivo,
+                        arquivo_comprovante,
+                        1 if nao_possui_comprovante else 0
+                    ))
+                    log_security_event("AUSENCIA_REGISTERED", usuario=st.session_state.usuario, context={"tipo": tipo_ausencia, "data_inicio": data_inicio.strftime("%Y-%m-%d")})
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
 
-                conn.commit()
+                    cursor.execute("""
+                        INSERT INTO ausencias 
+                        (usuario, data_inicio, data_fim, tipo, motivo, arquivo_comprovante, nao_possui_comprovante)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    """, (
+                        st.session_state.usuario,
+                        data_inicio.strftime("%Y-%m-%d"),
+                        data_fim.strftime("%Y-%m-%d"),
+                        tipo_ausencia,
+                        motivo,
+                        arquivo_comprovante,
+                        1 if nao_possui_comprovante else 0
+                    ))
+
+                    conn.commit()
+                    conn.close()
+
                 st.success("✅ Ausência registrada com sucesso!")
 
                 if nao_possui_comprovante:
@@ -2959,9 +3013,8 @@ def registrar_ausencia_interface(upload_system):
                 st.rerun()
 
             except Exception as e:
+                log_error("Erro ao registrar ausência", str(e), {"usuario": st.session_state.usuario})
                 st.error(f"❌ Erro ao registrar ausência: {str(e)}")
-            finally:
-                conn.close()
 
 
 def atestado_horas_interface(atestado_system, upload_system):
@@ -3302,31 +3355,54 @@ def solicitar_correcao_registro_interface():
                             nova_data_hora = f"{nova_data.strftime('%Y-%m-%d')} {nova_hora_input}:00"
                             
                             # Salvar solicitação no banco
-                            conn = get_connection()
-                            cursor = conn.cursor()
-                            
-                            cursor.execute("""
-                                INSERT INTO solicitacoes_correcao_registro
-                                (usuario, registro_id, data_hora_original, data_hora_nova, 
-                                 tipo_original, tipo_novo, modalidade_original, modalidade_nova,
-                                 projeto_original, projeto_novo, justificativa, status)
-                                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
-                            """, (
-                                st.session_state.usuario,
-                                registro['id'],
-                                registro['data_hora'],
-                                nova_data_hora,
-                                registro['tipo'],
-                                novo_tipo,
-                                registro['modalidade'],
-                                nova_modalidade if nova_modalidade else None,
-                                registro['projeto'],
-                                novo_projeto if novo_projeto else None,
-                                justificativa
-                            ))
-                            
-                            conn.commit()
-                            conn.close()
+                            if REFACTORING_ENABLED:
+                                query = """
+                                    INSERT INTO solicitacoes_correcao_registro
+                                    (usuario, registro_id, data_hora_original, data_hora_nova, 
+                                     tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                     projeto_original, projeto_novo, justificativa, status)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
+                                """
+                                execute_update(query, (
+                                    st.session_state.usuario,
+                                    registro['id'],
+                                    registro['data_hora'],
+                                    nova_data_hora,
+                                    registro['tipo'],
+                                    novo_tipo,
+                                    registro['modalidade'],
+                                    nova_modalidade if nova_modalidade else None,
+                                    registro['projeto'],
+                                    novo_projeto if novo_projeto else None,
+                                    justificativa
+                                ))
+                                log_security_event("CORRECAO_REGISTRO_REQUESTED", usuario=st.session_state.usuario, context={"registro_id": registro['id'], "data_solicacao": nova_data_hora})
+                            else:
+                                conn = get_connection()
+                                cursor = conn.cursor()
+                                
+                                cursor.execute("""
+                                    INSERT INTO solicitacoes_correcao_registro
+                                    (usuario, registro_id, data_hora_original, data_hora_nova, 
+                                     tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                     projeto_original, projeto_novo, justificativa, status)
+                                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
+                                """, (
+                                    st.session_state.usuario,
+                                    registro['id'],
+                                    registro['data_hora'],
+                                    nova_data_hora,
+                                    registro['tipo'],
+                                    novo_tipo,
+                                    registro['modalidade'],
+                                    nova_modalidade if nova_modalidade else None,
+                                    registro['projeto'],
+                                    novo_projeto if novo_projeto else None,
+                                    justificativa
+                                ))
+                                
+                                conn.commit()
+                                conn.close()
                             
                             st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
                             st.rerun()
@@ -3340,21 +3416,39 @@ def solicitar_correcao_registro_interface():
         st.subheader("📋 Minhas Solicitações de Correção")
         
         # Buscar solicitações do usuário
-        conn = get_connection()
-        cursor = conn.cursor()
+        solicitacoes = None
         
-        cursor.execute("""
-            SELECT id, registro_id, data_hora_original, data_hora_nova,
-                   tipo_original, tipo_novo, justificativa, status,
-                   data_solicitacao, aprovado_por, data_aprovacao, observacoes
-            FROM solicitacoes_correcao_registro
-            WHERE usuario = %s
-            ORDER BY data_solicitacao DESC
-            LIMIT 50
-        """, (st.session_state.usuario,))
-        
-        solicitacoes = cursor.fetchall()
-        conn.close()
+        if REFACTORING_ENABLED:
+            try:
+                query = """
+                    SELECT id, registro_id, data_hora_original, data_hora_nova,
+                           tipo_original, tipo_novo, justificativa, status,
+                           data_solicitacao, aprovado_por, data_aprovacao, observacoes
+                    FROM solicitacoes_correcao_registro
+                    WHERE usuario = %s
+                    ORDER BY data_solicitacao DESC
+                    LIMIT 50
+                """
+                solicitacoes = execute_query(query, (st.session_state.usuario,))
+            except Exception as e:
+                log_error("Erro ao buscar solicitações de correção", e, {"usuario": st.session_state.usuario})
+                solicitacoes = []
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("""
+                SELECT id, registro_id, data_hora_original, data_hora_nova,
+                       tipo_original, tipo_novo, justificativa, status,
+                       data_solicitacao, aprovado_por, data_aprovacao, observacoes
+                FROM solicitacoes_correcao_registro
+                WHERE usuario = %s
+                ORDER BY data_solicitacao DESC
+                LIMIT 50
+            """, (st.session_state.usuario,))
+            
+            solicitacoes = cursor.fetchall()
+            conn.close()
         
         if solicitacoes:
             for sol in solicitacoes:
