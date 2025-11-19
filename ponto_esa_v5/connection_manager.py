@@ -9,8 +9,15 @@ import logging
 from contextlib import contextmanager
 from typing import Any, Generator, Optional
 import time
+import os
 
-from database_postgresql import get_connection, USE_POSTGRESQL
+# Importar de database.py que detecta automaticamente se é PostgreSQL ou SQLite
+# e adapta os placeholders SQL conforme necessário
+if os.getenv('USE_POSTGRESQL', 'false').lower() == 'true':
+    from database_postgresql import get_connection, USE_POSTGRESQL
+else:
+    from database import get_connection
+    USE_POSTGRESQL = False
 
 try:
     from error_handler import (
@@ -34,17 +41,25 @@ class DatabaseConnectionPool:
     def __new__(cls):
         if cls._instance is None:
             cls._instance = super().__new__(cls)
+            cls._instance._active_connections = 0
+            cls._instance._max_connections = 20
         return cls._instance
     
     @classmethod
     def get_active_count(cls) -> int:
         """Retorna número de conexões ativas."""
-        return cls._instance._active_connections
+        pool = cls()
+        return pool._active_connections
     
     @classmethod
     def set_max_connections(cls, max_conn: int) -> None:
         """Define limite máximo de conexões."""
-        cls._instance._max_connections = max_conn
+        pool = cls()
+        pool._max_connections = max_conn
+
+
+# Inicializar o pool uma vez
+_pool = DatabaseConnectionPool()
 
 
 @contextmanager
@@ -67,12 +82,12 @@ def safe_database_connection(
     conn = None
     try:
         conn = get_connection(db_path)
-        DatabaseConnectionPool._instance._active_connections += 1
+        _pool._active_connections += 1
         
-        if DatabaseConnectionPool._instance._active_connections > DatabaseConnectionPool._instance._max_connections:
+        if _pool._active_connections > _pool._max_connections:
             logger.warning(
-                f"⚠️ Conexões ativas: {DatabaseConnectionPool._instance._active_connections}/"
-                f"{DatabaseConnectionPool._instance._max_connections}"
+                f"⚠️ Conexões ativas: {_pool._active_connections}/"
+                f"{_pool._max_connections}"
             )
         
         yield conn
@@ -97,7 +112,7 @@ def safe_database_connection(
             except Exception as close_err:
                 logger.error(f"❌ Erro ao fechar conexão: {close_err}")
             finally:
-                DatabaseConnectionPool._instance._active_connections -= 1
+                _pool._active_connections -= 1
 
 
 @contextmanager
