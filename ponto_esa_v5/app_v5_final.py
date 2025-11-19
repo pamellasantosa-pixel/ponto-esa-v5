@@ -665,63 +665,121 @@ def validar_limites_horas_extras(usuario):
     """
     from datetime import datetime, timedelta
     
-    conn = None
     try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
         agora = get_datetime_br()
         hoje = agora.date()
         
         # Início da semana (segunda-feira)
         inicio_semana = hoje - timedelta(days=hoje.weekday())
         
-        # Horas extras hoje
-        cursor.execute(f"""
-            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
-            FROM horas_extras_ativas
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND DATE(data_inicio) = {SQL_PLACEHOLDER}
-            AND status IN ('encerrada', 'em_execucao')
-        """, (usuario, hoje))
+        horas_hoje_ativas = 0
+        horas_hoje_historico = 0
+        horas_semana_ativas = 0
+        horas_semana_historico = 0
         
-        horas_hoje_ativas = cursor.fetchone()[0] or 0
+        if REFACTORING_ENABLED:
+            try:
+                # Horas extras hoje (ativas)
+                query_hoje_ativas = f"""
+                    SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+                    FROM horas_extras_ativas
+                    WHERE usuario = %s
+                    AND DATE(data_inicio) = %s
+                    AND status IN ('encerrada', 'em_execucao')
+                """
+                result = execute_query(query_hoje_ativas, (usuario, hoje), fetch_one=True)
+                horas_hoje_ativas = result[0] or 0 if result else 0
+                
+                # Horas extras hoje (histórico)
+                query_hoje_hist = f"""
+                    SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                        CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+                    )) / 3600), 0)
+                    FROM solicitacoes_horas_extras
+                    WHERE usuario = %s
+                    AND data = %s
+                    AND status = 'aprovado'
+                """
+                result = execute_query(query_hoje_hist, (usuario, hoje), fetch_one=True)
+                horas_hoje_historico = result[0] or 0 if result else 0
+                
+                # Horas extras esta semana (ativas)
+                query_semana_ativas = f"""
+                    SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+                    FROM horas_extras_ativas
+                    WHERE usuario = %s
+                    AND DATE(data_inicio) >= %s
+                    AND status IN ('encerrada', 'em_execucao')
+                """
+                result = execute_query(query_semana_ativas, (usuario, inicio_semana), fetch_one=True)
+                horas_semana_ativas = result[0] or 0 if result else 0
+                
+                # Horas extras esta semana (histórico)
+                query_semana_hist = f"""
+                    SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                        CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+                    )) / 3600), 0)
+                    FROM solicitacoes_horas_extras
+                    WHERE usuario = %s
+                    AND data >= %s
+                    AND status = 'aprovado'
+                """
+                result = execute_query(query_semana_hist, (usuario, inicio_semana), fetch_one=True)
+                horas_semana_historico = result[0] or 0 if result else 0
+            except Exception as e:
+                log_error("Erro ao buscar limites de horas extras", e, {"usuario": usuario})
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Horas extras hoje (ativas)
+            cursor.execute(f"""
+                SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+                FROM horas_extras_ativas
+                WHERE usuario = %s
+                AND DATE(data_inicio) = %s
+                AND status IN ('encerrada', 'em_execucao')
+            """, (usuario, hoje))
+            
+            horas_hoje_ativas = cursor.fetchone()[0] or 0
+            
+            cursor.execute(f"""
+                SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                    CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+                )) / 3600), 0)
+                FROM solicitacoes_horas_extras
+                WHERE usuario = %s
+                AND data = %s
+                AND status = 'aprovado'
+            """, (usuario, hoje))
+            
+            horas_hoje_historico = cursor.fetchone()[0] or 0
+            
+            # Horas extras esta semana
+            cursor.execute(f"""
+                SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
+                FROM horas_extras_ativas
+                WHERE usuario = %s
+                AND DATE(data_inicio) >= %s
+                AND status IN ('encerrada', 'em_execucao')
+            """, (usuario, inicio_semana))
+            
+            horas_semana_ativas = cursor.fetchone()[0] or 0
+            
+            cursor.execute(f"""
+                SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
+                    CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
+                )) / 3600), 0)
+                FROM solicitacoes_horas_extras
+                WHERE usuario = %s
+                AND data >= %s
+                AND status = 'aprovado'
+            """, (usuario, inicio_semana))
+            
+            horas_semana_historico = cursor.fetchone()[0] or 0
+            conn.close()
         
-        cursor.execute(f"""
-            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
-                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
-            )) / 3600), 0)
-            FROM solicitacoes_horas_extras
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND data = {SQL_PLACEHOLDER}
-            AND status = 'aprovado'
-        """, (usuario, hoje))
-        
-        horas_hoje_historico = cursor.fetchone()[0] or 0
         horas_hoje_total = horas_hoje_ativas + horas_hoje_historico
-        
-        # Horas extras esta semana
-        cursor.execute(f"""
-            SELECT COALESCE(SUM(tempo_decorrido_minutos), 0) / 60.0
-            FROM horas_extras_ativas
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND DATE(data_inicio) >= {SQL_PLACEHOLDER}
-            AND status IN ('encerrada', 'em_execucao')
-        """, (usuario, inicio_semana))
-        
-        horas_semana_ativas = cursor.fetchone()[0] or 0
-        
-        cursor.execute(f"""
-            SELECT COALESCE(SUM(EXTRACT(EPOCH FROM (
-                CAST(hora_fim AS TIME) - CAST(hora_inicio AS TIME)
-            )) / 3600), 0)
-            FROM solicitacoes_horas_extras
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND data >= {SQL_PLACEHOLDER}
-            AND status = 'aprovado'
-        """, (usuario, inicio_semana))
-        
-        horas_semana_historico = cursor.fetchone()[0] or 0
         horas_semana_total = horas_semana_ativas + horas_semana_historico
         
         # Verificar limites CLT
@@ -758,9 +816,6 @@ def validar_limites_horas_extras(usuario):
             'limite_dia': 2.0,
             'limite_semana': 10.0
         }
-    finally:
-        if conn:
-            conn.close()
 
 
 def iniciar_hora_extra_interface():
