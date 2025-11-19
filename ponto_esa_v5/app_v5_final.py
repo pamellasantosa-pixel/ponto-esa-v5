@@ -572,13 +572,19 @@ def obter_usuarios_para_aprovacao():
 
 def obter_usuarios_ativos():
     """Obtém lista de usuários ativos (retorna dicionários com 'usuario' e 'nome_completo')."""
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute(
-        "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
-    rows = cursor.fetchall()
-    conn.close()
-    return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows]
+    if REFACTORING_ENABLED:
+        rows = execute_query(
+            "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo"
+        )
+        return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows] if rows else []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
+        rows = cursor.fetchall()
+        conn.close()
+        return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows]
 
 # Interface de login
 
@@ -846,60 +852,109 @@ def iniciar_hora_extra_interface():
                         st.warning(f"⚠️ Você já fez {validacao['horas_semana']:.1f}h extras esta semana. Limite: 10h")
                     
                     # Registrar hora extra ativa
-                    conn = get_connection()
-                    cursor = conn.cursor()
-                    
-                    try:
-                        agora = get_datetime_br()
-                        agora_sem_tz = agora.replace(tzinfo=None)
-                        
-                        cursor.execute(f"""
-                            INSERT INTO horas_extras_ativas
-                            (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
-                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
-                        """, (
-                            st.session_state.usuario,
-                            aprovador,
-                            justificativa,
-                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
-                            agora_sem_tz.strftime('%H:%M')
-                        ))
-                        
-                        # Obter ID da hora extra criada
-                        cursor.execute("SELECT last_insert_rowid()")
-                        hora_extra_id = cursor.fetchone()[0]
-                        
-                        conn.commit()
-                        
-                        # Criar notificação para o gestor
+                    if REFACTORING_ENABLED:
                         try:
-                            from notifications import NotificationManager
-                            notif_manager = NotificationManager()
-                            notif_manager.criar_notificacao(
-                                usuario_destino=aprovador,
-                                tipo='aprovacao_hora_extra',
-                                titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
-                                mensagem=f"Justificativa: {justificativa}",
-                                dados_extras={'hora_extra_id': hora_extra_id}
-                            )
+                            agora = get_datetime_br()
+                            agora_sem_tz = agora.replace(tzinfo=None)
+                            
+                            insert_query = f"""
+                                INSERT INTO horas_extras_ativas
+                                (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                            """
+                            hora_extra_id = execute_update(insert_query, (
+                                st.session_state.usuario,
+                                aprovador,
+                                justificativa,
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                                agora_sem_tz.strftime('%H:%M')
+                            ), return_id=True)
+                            
+                            # Criar notificação para o gestor
+                            try:
+                                from notifications import NotificationManager
+                                notif_manager = NotificationManager()
+                                notif_manager.criar_notificacao(
+                                    usuario_destino=aprovador,
+                                    tipo='aprovacao_hora_extra',
+                                    titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
+                                    mensagem=f"Justificativa: {justificativa}",
+                                    dados_extras={'hora_extra_id': hora_extra_id}
+                                )
+                            except Exception as e:
+                                # Não bloquear se notificação falhar
+                                print(f"Erro ao criar notificação: {e}")
+                            
+                            log_security_event("HOUR_EXTRA_REQUESTED", usuario=st.session_state.usuario, context={"he_id": hora_extra_id, "aprovador": aprovador})
+                            st.session_state.hora_extra_ativa_id = hora_extra_id
+                            st.session_state.solicitar_horas_extras = False
+                            
+                            st.success("✅ Solicitação de hora extra enviada com sucesso!")
+                            st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
+                            st.balloons()
+                            
+                            if st.button("🔙 Voltar para o Menu Principal"):
+                                st.rerun()
+                        
                         except Exception as e:
-                            # Não bloquear se notificação falhar
-                            print(f"Erro ao criar notificação: {e}")
+                            log_error("Erro ao registrar hora extra", e, {"usuario": st.session_state.usuario, "aprovador": aprovador})
+                            st.error(f"❌ Erro ao registrar hora extra: {e}")
+                    else:
+                        # Fallback original
+                        conn = get_connection()
+                        cursor = conn.cursor()
                         
-                        st.session_state.hora_extra_ativa_id = hora_extra_id
-                        st.session_state.solicitar_horas_extras = False
+                        try:
+                            agora = get_datetime_br()
+                            agora_sem_tz = agora.replace(tzinfo=None)
+                            
+                            cursor.execute(f"""
+                                INSERT INTO horas_extras_ativas
+                                (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                            """, (
+                                st.session_state.usuario,
+                                aprovador,
+                                justificativa,
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                                agora_sem_tz.strftime('%H:%M')
+                            ))
+                            
+                            # Obter ID da hora extra criada
+                            cursor.execute("SELECT last_insert_rowid()")
+                            hora_extra_id = cursor.fetchone()[0]
+                            
+                            conn.commit()
+                            
+                            # Criar notificação para o gestor
+                            try:
+                                from notifications import NotificationManager
+                                notif_manager = NotificationManager()
+                                notif_manager.criar_notificacao(
+                                    usuario_destino=aprovador,
+                                    tipo='aprovacao_hora_extra',
+                                    titulo=f"🕐 Solicitação de Hora Extra - {st.session_state.nome_completo}",
+                                    mensagem=f"Justificativa: {justificativa}",
+                                    dados_extras={'hora_extra_id': hora_extra_id}
+                                )
+                            except Exception as e:
+                                # Não bloquear se notificação falhar
+                                print(f"Erro ao criar notificação: {e}")
+                            
+                            st.session_state.hora_extra_ativa_id = hora_extra_id
+                            st.session_state.solicitar_horas_extras = False
+                            
+                            st.success("✅ Solicitação de hora extra enviada com sucesso!")
+                            st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
+                            st.balloons()
+                            
+                            if st.button("🔙 Voltar para o Menu Principal"):
+                                st.rerun()
                         
-                        st.success("✅ Solicitação de hora extra enviada com sucesso!")
-                        st.info(f"⏳ Aguardando aprovação do gestor **{next(g['nome_completo'] for g in gestores if g['usuario'] == aprovador)}**")
-                        st.balloons()
-                        
-                        if st.button("🔙 Voltar para o Menu Principal"):
-                            st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Erro ao registrar hora extra: {e}")
-                    finally:
-                        conn.close()
+                        except Exception as e:
+                            st.error(f"❌ Erro ao registrar hora extra: {e}")
+                        finally:
+                            conn.close()
 
 
 def exibir_hora_extra_em_andamento():
@@ -907,154 +962,294 @@ def exibir_hora_extra_em_andamento():
     from datetime import datetime
     
     # Verificar se tem hora extra ativa
-    conn = None
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Verificar se tabela existe (compatibilidade com bancos antigos)
+    if REFACTORING_ENABLED:
         try:
-            cursor.execute(f"""
+            # Verificar se tabela existe (compatibilidade com bancos antigos)
+            check_query = f"""
                 SELECT id, aprovador, justificativa, data_inicio, status
                 FROM horas_extras_ativas
                 WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
                 ORDER BY data_inicio DESC
                 LIMIT 1
-            """, (st.session_state.usuario,))
+            """
+            try:
+                hora_extra = execute_query(check_query, (st.session_state.usuario,), fetch_one=True)
+            except Exception as e:
+                # Tabela não existe ou erro de acesso - retornar silenciosamente
+                if 'does not exist' in str(e) or 'no such table' in str(e):
+                    return
+                raise e
             
-            hora_extra = cursor.fetchone()
-        except Exception as e:
-            # Tabela não existe ou erro de acesso - retornar silenciosamente
-            if 'does not exist' in str(e) or 'no such table' in str(e):
+            if not hora_extra:
                 return
-            raise e
+            
+            # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=30000, key="hora_extra_counter")
+            except ImportError:
+                # Biblioteca não instalada - continuar sem auto-refresh
+                pass
+            
+            he_id, aprovador, justificativa, data_inicio, status = hora_extra
+            
+            # Calcular tempo decorrido
+            from calculo_horas_system import safe_datetime_parse
+            inicio = safe_datetime_parse(data_inicio)
+            agora = datetime.now()
+            tempo_decorrido = agora - inicio
+            
+            horas = int(tempo_decorrido.total_seconds() // 3600)
+            minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+            
+            if status == 'aguardando_aprovacao':
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 10px 0;
+                    color: white;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                ">
+                    <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
+                    <p style="margin: 10px 0; font-size: 16px;">
+                        <strong>Gestor:</strong> {aprovador}<br>
+                        <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                        <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
+                        <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif status == 'em_execucao':
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 10px 0;
+                    color: white;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                ">
+                    <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
+                    <p style="margin: 10px 0; font-size: 16px;">
+                        <strong>Aprovada por:</strong> {aprovador}<br>
+                        <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                        <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                        # Encerrar hora extra
+                        try:
+                            agora = get_datetime_br()
+                            agora_sem_tz = agora.replace(tzinfo=None)
+                            tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
+                            
+                            update_query = f"""
+                                UPDATE horas_extras_ativas
+                                SET status = 'encerrada',
+                                    data_fim = {SQL_PLACEHOLDER},
+                                    hora_fim = {SQL_PLACEHOLDER},
+                                    tempo_decorrido_minutos = {SQL_PLACEHOLDER}
+                                WHERE id = {SQL_PLACEHOLDER}
+                            """
+                            execute_update(update_query, (
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                                agora_sem_tz.strftime('%H:%M'),
+                                tempo_total_minutos,
+                                he_id
+                            ))
+                            
+                            # Registrar na tabela de solicitações de horas extras
+                            insert_query = f"""
+                                INSERT INTO solicitacoes_horas_extras
+                                (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """
+                            execute_update(insert_query, (
+                                st.session_state.usuario,
+                                inicio.strftime('%Y-%m-%d'),
+                                inicio.strftime('%H:%M'),
+                                agora_sem_tz.strftime('%H:%M'),
+                                justificativa,
+                                aprovador,
+                                aprovador,
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
+                            ))
+                            
+                            log_security_event("HOUR_EXTRA_ENDED", usuario=st.session_state.usuario, context={"he_id": he_id, "tempo_minutos": tempo_total_minutos})
+                            st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
+                            st.balloons()
+                            
+                            # Aguardar um pouco para mostrar a mensagem
+                            import time
+                            time.sleep(2)
+                            st.rerun()
+                            
+                        except Exception as e:
+                            log_error("Erro ao encerrar hora extra", e, {"he_id": he_id, "usuario": st.session_state.usuario})
+                            st.error(f"❌ Erro ao encerrar hora extra: {e}")
+                
+                with col2:
+                    st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
         
-        if not hora_extra:
-            return
-        
-        # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+        except Exception as e:
+            logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
+    else:
+        # Fallback original
+        conn = None
         try:
-            from streamlit_autorefresh import st_autorefresh
-            st_autorefresh(interval=30000, key="hora_extra_counter")
-        except ImportError:
-            # Biblioteca não instalada - continuar sem auto-refresh
-            pass
-        
-        he_id, aprovador, justificativa, data_inicio, status = hora_extra
-        
-        # Calcular tempo decorrido
-        from calculo_horas_system import safe_datetime_parse
-        inicio = safe_datetime_parse(data_inicio)
-        agora = datetime.now()
-        tempo_decorrido = agora - inicio
-        
-        horas = int(tempo_decorrido.total_seconds() // 3600)
-        minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
-        
-        if status == 'aguardando_aprovacao':
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-                padding: 20px;
-                border-radius: 10px;
-                margin: 10px 0;
-                color: white;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            ">
-                <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
-                <p style="margin: 10px 0; font-size: 16px;">
-                    <strong>Gestor:</strong> {aprovador}<br>
-                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
-                    <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
-                    <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-        
-        elif status == 'em_execucao':
-            st.markdown(f"""
-            <div style="
-                background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
-                padding: 20px;
-                border-radius: 10px;
-                margin: 10px 0;
-                color: white;
-                box-shadow: 0 4px 6px rgba(0,0,0,0.1);
-            ">
-                <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
-                <p style="margin: 10px 0; font-size: 16px;">
-                    <strong>Aprovada por:</strong> {aprovador}<br>
-                    <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
-                    <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
+            conn = get_connection()
+            cursor = conn.cursor()
             
-            col1, col2 = st.columns([1, 3])
-            with col1:
-                if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
-                    # Encerrar hora extra
-                    conn_encerrar = get_connection()
-                    cursor_encerrar = conn_encerrar.cursor()
-                    
-                    try:
-                        agora = get_datetime_br()
-                        agora_sem_tz = agora.replace(tzinfo=None)
-                        tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
-                        
-                        cursor_encerrar.execute(f"""
-                            UPDATE horas_extras_ativas
-                            SET status = 'encerrada',
-                                data_fim = {SQL_PLACEHOLDER},
-                                hora_fim = {SQL_PLACEHOLDER},
-                                tempo_decorrido_minutos = {SQL_PLACEHOLDER}
-                            WHERE id = {SQL_PLACEHOLDER}
-                        """, (
-                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
-                            agora_sem_tz.strftime('%H:%M'),
-                            tempo_total_minutos,
-                            he_id
-                        ))
-                        
-                        # Registrar na tabela de solicitações de horas extras
-                        cursor_encerrar.execute(f"""
-                            INSERT INTO solicitacoes_horas_extras
-                            (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
-                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                        """, (
-                            st.session_state.usuario,
-                            inicio.strftime('%Y-%m-%d'),
-                            inicio.strftime('%H:%M'),
-                            agora_sem_tz.strftime('%H:%M'),
-                            justificativa,
-                            aprovador,
-                            aprovador,
-                            agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
-                        ))
-                        
-                        conn_encerrar.commit()
-                        
-                        st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
-                        st.balloons()
-                        
-                        # Aguardar um pouco para mostrar a mensagem
-                        import time
-                        time.sleep(2)
-                        st.rerun()
-                        
-                    except Exception as e:
-                        st.error(f"❌ Erro ao encerrar hora extra: {e}")
-                    finally:
-                        conn_encerrar.close()
+            # Verificar se tabela existe (compatibilidade com bancos antigos)
+            try:
+                cursor.execute(f"""
+                    SELECT id, aprovador, justificativa, data_inicio, status
+                    FROM horas_extras_ativas
+                    WHERE usuario = {SQL_PLACEHOLDER} AND status IN ('aguardando_aprovacao', 'em_execucao')
+                    ORDER BY data_inicio DESC
+                    LIMIT 1
+                """, (st.session_state.usuario,))
+                
+                hora_extra = cursor.fetchone()
+            except Exception as e:
+                # Tabela não existe ou erro de acesso - retornar silenciosamente
+                if 'does not exist' in str(e) or 'no such table' in str(e):
+                    return
+                raise e
             
-            with col2:
-                st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
-    
-    except Exception as e:
-        logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
+            if not hora_extra:
+                return
+            
+            # Se há hora extra ativa, ativar auto-refresh de 30 segundos
+            try:
+                from streamlit_autorefresh import st_autorefresh
+                st_autorefresh(interval=30000, key="hora_extra_counter")
+            except ImportError:
+                # Biblioteca não instalada - continuar sem auto-refresh
+                pass
+            
+            he_id, aprovador, justificativa, data_inicio, status = hora_extra
+            
+            # Calcular tempo decorrido
+            from calculo_horas_system import safe_datetime_parse
+            inicio = safe_datetime_parse(data_inicio)
+            agora = datetime.now()
+            tempo_decorrido = agora - inicio
+            
+            horas = int(tempo_decorrido.total_seconds() // 3600)
+            minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+            
+            if status == 'aguardando_aprovacao':
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 10px 0;
+                    color: white;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                ">
+                    <h3 style="margin: 0; color: white;">⏳ AGUARDANDO APROVAÇÃO DE HORA EXTRA</h3>
+                    <p style="margin: 10px 0; font-size: 16px;">
+                        <strong>Gestor:</strong> {aprovador}<br>
+                        <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                        <strong>Tempo decorrido:</strong> {horas}h {minutos}min<br>
+                        <strong>Justificativa:</strong> {justificativa[:100]}{'...' if len(justificativa) > 100 else ''}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+            
+            elif status == 'em_execucao':
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 10px 0;
+                    color: white;
+                    box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+                ">
+                    <h3 style="margin: 0; color: white;">⏱️ HORA EXTRA EM ANDAMENTO</h3>
+                    <p style="margin: 10px 0; font-size: 16px;">
+                        <strong>Aprovada por:</strong> {aprovador}<br>
+                        <strong>Iniciado em:</strong> {inicio.strftime('%H:%M')}<br>
+                        <strong>⏱️ Tempo decorrido:</strong> <span style="font-size: 24px; font-weight: bold;">{horas}h {minutos}min</span>
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col1, col2 = st.columns([1, 3])
+                with col1:
+                    if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                        # Encerrar hora extra
+                        conn_encerrar = get_connection()
+                        cursor_encerrar = conn_encerrar.cursor()
+                        
+                        try:
+                            agora = get_datetime_br()
+                            agora_sem_tz = agora.replace(tzinfo=None)
+                            tempo_total_minutos = int(tempo_decorrido.total_seconds() / 60)
+                            
+                            cursor_encerrar.execute(f"""
+                                UPDATE horas_extras_ativas
+                                SET status = 'encerrada',
+                                    data_fim = {SQL_PLACEHOLDER},
+                                    hora_fim = {SQL_PLACEHOLDER},
+                                    tempo_decorrido_minutos = {SQL_PLACEHOLDER}
+                                WHERE id = {SQL_PLACEHOLDER}
+                            """, (
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S'),
+                                agora_sem_tz.strftime('%H:%M'),
+                                tempo_total_minutos,
+                                he_id
+                            ))
+                            
+                            # Registrar na tabela de solicitações de horas extras
+                            cursor_encerrar.execute(f"""
+                                INSERT INTO solicitacoes_horas_extras
+                                (usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado, status, aprovado_por, data_aprovacao)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aprovada', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            """, (
+                                st.session_state.usuario,
+                                inicio.strftime('%Y-%m-%d'),
+                                inicio.strftime('%H:%M'),
+                                agora_sem_tz.strftime('%H:%M'),
+                                justificativa,
+                                aprovador,
+                                aprovador,
+                                agora_sem_tz.strftime('%Y-%m-%d %H:%M:%S')
+                            ))
+                            
+                            conn_encerrar.commit()
+                            
+                            st.success(f"✅ Hora extra encerrada! Total trabalhado: **{horas}h {minutos}min**")
+                            st.balloons()
+                            
+                            # Aguardar um pouco para mostrar a mensagem
+                            import time
+                            time.sleep(2)
+                            st.rerun()
+                            
+                        except Exception as e:
+                            st.error(f"❌ Erro ao encerrar hora extra: {e}")
+                        finally:
+                            conn_encerrar.close()
+                
+                with col2:
+                    st.info("💡 Clique em 'Encerrar' quando finalizar o trabalho para registrar o total de horas extras")
+        
+        except Exception as e:
+            logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
 
 def aprovar_hora_extra_rapida_interface():
@@ -1072,88 +1267,77 @@ def aprovar_hora_extra_rapida_interface():
     </div>
     """, unsafe_allow_html=True)
     
-    conn = None
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Buscar solicitações pendentes para este gestor
-        cursor.execute(f"""
-            SELECT 
-                he.id,
-                u.nome_completo,
-                he.justificativa,
-                he.data_inicio,
-                he.hora_inicio
-            FROM horas_extras_ativas he
-            JOIN usuarios u ON u.usuario = he.usuario
-            WHERE he.aprovador = {SQL_PLACEHOLDER}
-            AND he.status = 'aguardando_aprovacao'
-            ORDER BY he.data_criacao DESC
-        """, (st.session_state.usuario,))
-        
-        solicitacoes = cursor.fetchall()
-        
-        if not solicitacoes:
-            st.info("✅ Nenhuma solicitação pendente no momento")
+    if REFACTORING_ENABLED:
+        try:
+            # Buscar solicitações pendentes para este gestor
+            query = f"""
+                SELECT 
+                    he.id,
+                    u.nome_completo,
+                    he.justificativa,
+                    he.data_inicio,
+                    he.hora_inicio,
+                    he.usuario
+                FROM horas_extras_ativas he
+                JOIN usuarios u ON u.usuario = he.usuario
+                WHERE he.aprovador = {SQL_PLACEHOLDER}
+                AND he.status = 'aguardando_aprovacao'
+                ORDER BY he.data_criacao DESC
+            """
+            solicitacoes = execute_query(query, (st.session_state.usuario,))
             
-            if st.button("↩️ Voltar ao Menu", use_container_width=True):
-                if 'aprovar_hora_extra' in st.session_state:
-                    del st.session_state.aprovar_hora_extra
-                st.rerun()
-            return
-        
-        # Exibir cada solicitação
-        for idx, sol in enumerate(solicitacoes):
-            he_id, nome_funcionario, justificativa, data_inicio, hora_inicio = sol
+            if not solicitacoes:
+                st.info("✅ Nenhuma solicitação pendente no momento")
+                
+                if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                    if 'aprovar_hora_extra' in st.session_state:
+                        del st.session_state.aprovar_hora_extra
+                    st.rerun()
+                return
             
-            # Converter data/hora
-            data_inicio_obj = safe_datetime_parse(data_inicio) if isinstance(data_inicio, str) else data_inicio
-            hora_inicio_obj = safe_datetime_parse(hora_inicio) if isinstance(hora_inicio, str) else hora_inicio
-            
-            data_formatada = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else 'N/A'
-            hora_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
-            
-            st.markdown(f"""
-            <div style="
-                background: white;
-                padding: 20px;
-                border-radius: 10px;
-                margin: 15px 0;
-                border-left: 5px solid #f5576c;
-                box-shadow: 0 2px 4px rgba(0,0,0,0.1);
-            ">
-                <h4 style="margin: 0 0 10px 0; color: #333;">👤 {nome_funcionario}</h4>
-                <p style="margin: 5px 0; color: #666;">
-                    <strong>📅 Data:</strong> {data_formatada} às {hora_formatada}<br>
-                    <strong>💬 Justificativa:</strong> {justificativa if justificativa else 'Não informada'}
-                </p>
-            </div>
-            """, unsafe_allow_html=True)
-            
-            col1, col2 = st.columns(2)
-            
-            with col1:
-                if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
-                    # Atualizar status para em_execucao
-                    cursor.execute(f"""
-                        UPDATE horas_extras_ativas
-                        SET status = 'em_execucao'
-                        WHERE id = {SQL_PLACEHOLDER}
-                    """, (he_id,))
-                    conn.commit()
-                    
-                    # Criar notificação para o funcionário
-                    from notifications import NotificationManager
-                    notification_manager = NotificationManager()
-                    
-                    funcionario = None
-                    cursor.execute(f"""
-                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
-                    """, (he_id,))
-                    result = cursor.fetchone()
-                    if result:
-                        funcionario = result[0]
+            # Exibir cada solicitação
+            for idx, sol in enumerate(solicitacoes):
+                he_id, nome_funcionario, justificativa, data_inicio, hora_inicio, funcionario = sol
+                
+                # Converter data/hora
+                data_inicio_obj = safe_datetime_parse(data_inicio) if isinstance(data_inicio, str) else data_inicio
+                hora_inicio_obj = safe_datetime_parse(hora_inicio) if isinstance(hora_inicio, str) else hora_inicio
+                
+                data_formatada = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else 'N/A'
+                hora_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+                
+                st.markdown(f"""
+                <div style="
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                    border-left: 5px solid #f5576c;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                ">
+                    <h4 style="margin: 0 0 10px 0; color: #333;">👤 {nome_funcionario}</h4>
+                    <p style="margin: 5px 0; color: #666;">
+                        <strong>📅 Data:</strong> {data_formatada} às {hora_formatada}<br>
+                        <strong>💬 Justificativa:</strong> {justificativa if justificativa else 'Não informada'}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                        # Atualizar status para em_execucao
+                        update_query = f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'em_execucao'
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """
+                        execute_update(update_query, (he_id,))
+                        
+                        # Criar notificação para o funcionário
+                        from notifications import NotificationManager
+                        notification_manager = NotificationManager()
                         
                         notification_manager.criar_notificacao(
                             usuario=funcionario,
@@ -1162,33 +1346,26 @@ def aprovar_hora_extra_rapida_interface():
                             mensagem=f'Sua solicitação de hora extra foi aprovada por {st.session_state.nome_completo}. O contador está rodando!',
                             dados_extra={'hora_extra_id': he_id}
                         )
-                    
-                    st.success(f"✅ Hora extra de {nome_funcionario} aprovada com sucesso!")
-                    st.balloons()
-                    time.sleep(1.5)
-                    st.rerun()
-            
-            with col2:
-                if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
-                    # Atualizar status para rejeitada
-                    cursor.execute(f"""
-                        UPDATE horas_extras_ativas
-                        SET status = 'rejeitada'
-                        WHERE id = {SQL_PLACEHOLDER}
-                    """, (he_id,))
-                    conn.commit()
-                    
-                    # Criar notificação para o funcionário
-                    from notifications import NotificationManager
-                    notification_manager = NotificationManager()
-                    
-                    funcionario = None
-                    cursor.execute(f"""
-                        SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
-                    """, (he_id,))
-                    result = cursor.fetchone()
-                    if result:
-                        funcionario = result[0]
+                        
+                        log_security_event("HOUR_EXTRA_APPROVED", usuario=st.session_state.usuario, context={"he_id": he_id, "funcionario": funcionario})
+                        st.success(f"✅ Hora extra de {nome_funcionario} aprovada com sucesso!")
+                        st.balloons()
+                        time.sleep(1.5)
+                        st.rerun()
+                
+                with col2:
+                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                        # Atualizar status para rejeitada
+                        update_query = f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'rejeitada'
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """
+                        execute_update(update_query, (he_id,))
+                        
+                        # Criar notificação para o funcionário
+                        from notifications import NotificationManager
+                        notification_manager = NotificationManager()
                         
                         notification_manager.criar_notificacao(
                             usuario=funcionario,
@@ -1197,25 +1374,168 @@ def aprovar_hora_extra_rapida_interface():
                             mensagem=f'Sua solicitação de hora extra foi rejeitada por {st.session_state.nome_completo}.',
                             dados_extra={'hora_extra_id': he_id}
                         )
-                    
-                    st.warning(f"❌ Hora extra de {nome_funcionario} rejeitada")
-                    time.sleep(1.5)
-                    st.rerun()
+                        
+                        log_security_event("HOUR_EXTRA_REJECTED", usuario=st.session_state.usuario, context={"he_id": he_id, "funcionario": funcionario})
+                        st.warning(f"❌ Hora extra de {nome_funcionario} rejeitada")
+                        time.sleep(1.5)
+                        st.rerun()
+                
+                st.markdown("---")
             
-            st.markdown("---")
+            # Botão para voltar
+            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if 'aprovar_hora_extra' in st.session_state:
+                    del st.session_state.aprovar_hora_extra
+                st.rerun()
         
-        # Botão para voltar
-        if st.button("↩️ Voltar ao Menu", use_container_width=True):
-            if 'aprovar_hora_extra' in st.session_state:
-                del st.session_state.aprovar_hora_extra
-            st.rerun()
-    
-    except Exception as e:
-        st.error(f"❌ Erro ao buscar solicitações: {str(e)}")
-        logger.error(f"Erro em aprovar_hora_extra_rapida_interface: {str(e)}")
-    finally:
-        if conn:
-            conn.close()
+        except Exception as e:
+            log_error("Erro ao buscar solicitações de hora extra", e, {"gestor": st.session_state.usuario})
+            st.error(f"❌ Erro ao buscar solicitações: {str(e)}")
+    else:
+        # Fallback original
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Buscar solicitações pendentes para este gestor
+            cursor.execute(f"""
+                SELECT 
+                    he.id,
+                    u.nome_completo,
+                    he.justificativa,
+                    he.data_inicio,
+                    he.hora_inicio,
+                    he.usuario
+                FROM horas_extras_ativas he
+                JOIN usuarios u ON u.usuario = he.usuario
+                WHERE he.aprovador = {SQL_PLACEHOLDER}
+                AND he.status = 'aguardando_aprovacao'
+                ORDER BY he.data_criacao DESC
+            """, (st.session_state.usuario,))
+            
+            solicitacoes = cursor.fetchall()
+            
+            if not solicitacoes:
+                st.info("✅ Nenhuma solicitação pendente no momento")
+                
+                if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                    if 'aprovar_hora_extra' in st.session_state:
+                        del st.session_state.aprovar_hora_extra
+                    st.rerun()
+                return
+            
+            # Exibir cada solicitação
+            for idx, sol in enumerate(solicitacoes):
+                he_id, nome_funcionario, justificativa, data_inicio, hora_inicio, funcionario = sol
+                
+                # Converter data/hora
+                data_inicio_obj = safe_datetime_parse(data_inicio) if isinstance(data_inicio, str) else data_inicio
+                hora_inicio_obj = safe_datetime_parse(hora_inicio) if isinstance(hora_inicio, str) else hora_inicio
+                
+                data_formatada = data_inicio_obj.strftime('%d/%m/%Y') if data_inicio_obj else 'N/A'
+                hora_formatada = hora_inicio_obj.strftime('%H:%M') if hora_inicio_obj else 'N/A'
+                
+                st.markdown(f"""
+                <div style="
+                    background: white;
+                    padding: 20px;
+                    border-radius: 10px;
+                    margin: 15px 0;
+                    border-left: 5px solid #f5576c;
+                    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+                ">
+                    <h4 style="margin: 0 0 10px 0; color: #333;">👤 {nome_funcionario}</h4>
+                    <p style="margin: 5px 0; color: #666;">
+                        <strong>📅 Data:</strong> {data_formatada} às {hora_formatada}<br>
+                        <strong>💬 Justificativa:</strong> {justificativa if justificativa else 'Não informada'}
+                    </p>
+                </div>
+                """, unsafe_allow_html=True)
+                
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                        # Atualizar status para em_execucao
+                        cursor.execute(f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'em_execucao'
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """, (he_id,))
+                        conn.commit()
+                        
+                        # Criar notificação para o funcionário
+                        from notifications import NotificationManager
+                        notification_manager = NotificationManager()
+                        
+                        cursor.execute(f"""
+                            SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                        """, (he_id,))
+                        result = cursor.fetchone()
+                        if result:
+                            funcionario = result[0]
+                            
+                            notification_manager.criar_notificacao(
+                                usuario=funcionario,
+                                tipo='hora_extra_aprovada',
+                                titulo='✅ Hora Extra Aprovada',
+                                mensagem=f'Sua solicitação de hora extra foi aprovada por {st.session_state.nome_completo}. O contador está rodando!',
+                                dados_extra={'hora_extra_id': he_id}
+                            )
+                        
+                        st.success(f"✅ Hora extra de {nome_funcionario} aprovada com sucesso!")
+                        st.balloons()
+                        time.sleep(1.5)
+                        st.rerun()
+                
+                with col2:
+                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                        # Atualizar status para rejeitada
+                        cursor.execute(f"""
+                            UPDATE horas_extras_ativas
+                            SET status = 'rejeitada'
+                            WHERE id = {SQL_PLACEHOLDER}
+                        """, (he_id,))
+                        conn.commit()
+                        
+                        # Criar notificação para o funcionário
+                        from notifications import NotificationManager
+                        notification_manager = NotificationManager()
+                        
+                        cursor.execute(f"""
+                            SELECT usuario FROM horas_extras_ativas WHERE id = {SQL_PLACEHOLDER}
+                        """, (he_id,))
+                        result = cursor.fetchone()
+                        if result:
+                            funcionario = result[0]
+                            
+                            notification_manager.criar_notificacao(
+                                usuario=funcionario,
+                                tipo='hora_extra_rejeitada',
+                                titulo='❌ Hora Extra Rejeitada',
+                                mensagem=f'Sua solicitação de hora extra foi rejeitada por {st.session_state.nome_completo}.',
+                                dados_extra={'hora_extra_id': he_id}
+                            )
+                        
+                        st.warning(f"❌ Hora extra de {nome_funcionario} rejeitada")
+                        time.sleep(1.5)
+                        st.rerun()
+                
+                st.markdown("---")
+            
+            # Botão para voltar
+            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if 'aprovar_hora_extra' in st.session_state:
+                    del st.session_state.aprovar_hora_extra
+                st.rerun()
+        
+        except Exception as e:
+            st.error(f"❌ Erro ao buscar solicitações: {str(e)}")
+            logger.error(f"Erro em aprovar_hora_extra_rapida_interface: {str(e)}")
+        finally:
+            if conn:
+                conn.close()
 
 
 def exibir_widget_notificacoes(horas_extras_system):
@@ -1768,84 +2088,154 @@ def historico_horas_extras_interface():
         )
     
     # Buscar dados de ambas as tabelas
-    conn = None
     horas_extras_completo = []
     
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        
-        # Buscar de horas_extras_ativas
-        cursor.execute(f"""
-            SELECT 
-                'ativa' as origem,
-                id,
-                aprovador,
-                justificativa,
-                data_inicio,
-                hora_inicio,
-                status,
-                data_fim,
-                hora_fim,
-                tempo_decorrido_minutos,
-                data_criacao
-            FROM horas_extras_ativas
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND data_inicio BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
-        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
-        
-        ativas = cursor.fetchall()
-        
-        # Buscar de solicitacoes_horas_extras
-        cursor.execute(f"""
-            SELECT 
-                'historico' as origem,
-                id,
-                aprovador_solicitado,
-                justificativa,
-                data,
-                hora_inicio,
-                status,
-                NULL as data_fim,
-                hora_fim,
-                NULL as tempo_decorrido,
-                data_solicitacao
-            FROM solicitacoes_horas_extras
-            WHERE usuario = {SQL_PLACEHOLDER}
-            AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
-        """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
-        
-        historico = cursor.fetchall()
-        
-        # Combinar e filtrar por status
-        for registro in ativas + historico:
-            origem, id_reg, aprovador, justificativa, data_reg, hora_inicio, status, data_fim, hora_fim, tempo_min, data_criacao = registro
+    if REFACTORING_ENABLED:
+        try:
+            # Buscar de horas_extras_ativas
+            query_ativas = f"""
+                SELECT 
+                    'ativa' as origem,
+                    id,
+                    aprovador,
+                    justificativa,
+                    data_inicio,
+                    hora_inicio,
+                    status,
+                    data_fim,
+                    hora_fim,
+                    tempo_decorrido_minutos,
+                    data_criacao
+                FROM horas_extras_ativas
+                WHERE usuario = {SQL_PLACEHOLDER}
+                AND data_inicio BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            """
+            ativas = execute_query(query_ativas, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
             
-            if status in status_filtro:
-                horas_extras_completo.append({
-                    'origem': origem,
-                    'id': id_reg,
-                    'aprovador': aprovador,
-                    'justificativa': justificativa,
-                    'data': data_reg,
-                    'hora_inicio': hora_inicio,
-                    'status': status,
-                    'data_fim': data_fim,
-                    'hora_fim': hora_fim,
-                    'tempo_minutos': tempo_min,
-                    'data_criacao': data_criacao
-                })
-        
-        # Ordenar por data decrescente
-        horas_extras_completo.sort(key=lambda x: x['data'], reverse=True)
-        
-    except Exception as e:
-        st.error(f"❌ Erro ao buscar histórico: {str(e)}")
-        logger.error(f"Erro em historico_horas_extras_interface: {str(e)}")
-        return
-    finally:
-        if conn:
-            conn.close()
+            # Buscar de solicitacoes_horas_extras
+            query_historico = f"""
+                SELECT 
+                    'historico' as origem,
+                    id,
+                    aprovador_solicitado,
+                    justificativa,
+                    data,
+                    hora_inicio,
+                    status,
+                    NULL as data_fim,
+                    hora_fim,
+                    NULL as tempo_decorrido,
+                    data_solicitacao
+                FROM solicitacoes_horas_extras
+                WHERE usuario = {SQL_PLACEHOLDER}
+                AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            """
+            historico = execute_query(query_historico, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+            
+            # Combinar e filtrar por status
+            for registro in (ativas or []) + (historico or []):
+                origem, id_reg, aprovador, justificativa, data_reg, hora_inicio, status, data_fim, hora_fim, tempo_min, data_criacao = registro
+                
+                if status in status_filtro:
+                    horas_extras_completo.append({
+                        'origem': origem,
+                        'id': id_reg,
+                        'aprovador': aprovador,
+                        'justificativa': justificativa,
+                        'data': data_reg,
+                        'hora_inicio': hora_inicio,
+                        'status': status,
+                        'data_fim': data_fim,
+                        'hora_fim': hora_fim,
+                        'tempo_minutos': tempo_min,
+                        'data_criacao': data_criacao
+                    })
+            
+            # Ordenar por data decrescente
+            horas_extras_completo.sort(key=lambda x: x['data'], reverse=True)
+            
+        except Exception as e:
+            log_error("Erro ao buscar histórico de horas extras", e, {"usuario": st.session_state.usuario})
+            st.error(f"❌ Erro ao buscar histórico: {str(e)}")
+            return
+    else:
+        # Fallback original
+        conn = None
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            # Buscar de horas_extras_ativas
+            cursor.execute(f"""
+                SELECT 
+                    'ativa' as origem,
+                    id,
+                    aprovador,
+                    justificativa,
+                    data_inicio,
+                    hora_inicio,
+                    status,
+                    data_fim,
+                    hora_fim,
+                    tempo_decorrido_minutos,
+                    data_criacao
+                FROM horas_extras_ativas
+                WHERE usuario = {SQL_PLACEHOLDER}
+                AND data_inicio BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+            
+            ativas = cursor.fetchall()
+            
+            # Buscar de solicitacoes_horas_extras
+            cursor.execute(f"""
+                SELECT 
+                    'historico' as origem,
+                    id,
+                    aprovador_solicitado,
+                    justificativa,
+                    data,
+                    hora_inicio,
+                    status,
+                    NULL as data_fim,
+                    hora_fim,
+                    NULL as tempo_decorrido,
+                    data_solicitacao
+                FROM solicitacoes_horas_extras
+                WHERE usuario = {SQL_PLACEHOLDER}
+                AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+            """, (st.session_state.usuario, data_inicio_filtro, data_fim_filtro))
+            
+            historico = cursor.fetchall()
+            
+            # Combinar e filtrar por status
+            for registro in ativas + historico:
+                origem, id_reg, aprovador, justificativa, data_reg, hora_inicio, status, data_fim, hora_fim, tempo_min, data_criacao = registro
+                
+                if status in status_filtro:
+                    horas_extras_completo.append({
+                        'origem': origem,
+                        'id': id_reg,
+                        'aprovador': aprovador,
+                        'justificativa': justificativa,
+                        'data': data_reg,
+                        'hora_inicio': hora_inicio,
+                        'status': status,
+                        'data_fim': data_fim,
+                        'hora_fim': hora_fim,
+                        'tempo_minutos': tempo_min,
+                        'data_criacao': data_criacao
+                    })
+            
+            # Ordenar por data decrescente
+            horas_extras_completo.sort(key=lambda x: x['data'], reverse=True)
+            
+        except Exception as e:
+            st.error(f"❌ Erro ao buscar histórico: {str(e)}")
+            logger.error(f"Erro em historico_horas_extras_interface: {str(e)}")
+            return
+        finally:
+            if conn:
+                conn.close()
     
     # Exibir resumo
     if horas_extras_completo:
@@ -6184,67 +6574,125 @@ def exibir_alerta_fim_jornada_avancado():
 
 def buscar_registros_dia(usuario, data):
     """Busca todos os registros de ponto de um usuário em uma data específica"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    if REFACTORING_ENABLED:
+        try:
+            with safe_cursor() as cursor:
+                cursor.execute(f"""
+                    SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
+                    FROM registros_ponto 
+                    WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                    ORDER BY data_hora
+                """, (usuario, data))
 
-    try:
-        cursor.execute(f"""
-            SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
-            FROM registros_ponto 
-            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
-            ORDER BY data_hora
-        """, (usuario, data))
+                registros = []
+                for row in cursor.fetchall():
+                    registros.append({
+                        'id': row[0],
+                        'usuario': row[1],
+                        'data_hora': row[2],
+                        'tipo': row[3],
+                        'modalidade': row[4],
+                        'projeto': row[5],
+                        'atividade': row[6]
+                    })
 
-        registros = []
-        for row in cursor.fetchall():
-            registros.append({
-                'id': row[0],
-                'usuario': row[1],
-                'data_hora': row[2],
-                'tipo': row[3],
-                'modalidade': row[4],
-                'projeto': row[5],
-                'atividade': row[6]
-            })
+                return registros
+        except Exception as e:
+            log_error("Erro ao buscar registros do dia", e, {"usuario": usuario, "data": data})
+            return []
+    else:
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        return registros
-    finally:
-        conn.close()
+        try:
+            cursor.execute(f"""
+                SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
+                FROM registros_ponto 
+                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                ORDER BY data_hora
+            """, (usuario, data))
+
+            registros = []
+            for row in cursor.fetchall():
+                registros.append({
+                    'id': row[0],
+                    'usuario': row[1],
+                    'data_hora': row[2],
+                    'tipo': row[3],
+                    'modalidade': row[4],
+                    'projeto': row[5],
+                    'atividade': row[6]
+                })
+
+            return registros
+        finally:
+            conn.close()
 
 
 def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor):
     """Corrige um registro de ponto existente"""
-    conn = get_connection()
-    cursor = conn.cursor()
+    if REFACTORING_ENABLED:
+        try:
+            # Verificar se o registro existe
+            check_query = f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}"
+            result = execute_query(check_query, (registro_id,), fetch_one=True)
+            if not result:
+                return {"success": False, "message": "Registro não encontrado"}
 
-    try:
-        # Verificar se o registro existe
-        cursor.execute(
-            f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
-        if not cursor.fetchone():
-            return {"success": False, "message": "Registro não encontrado"}
+            # Atualizar registro
+            update_query = f"""
+                UPDATE registros_ponto 
+                SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
+            """
+            execute_update(update_query, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
 
-        # Atualizar registro
-        cursor.execute(f"""
-            UPDATE registros_ponto 
-            SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
-            WHERE id = {SQL_PLACEHOLDER}
-        """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
+            # Registrar auditoria da correção
+            audit_query = f"""
+                INSERT INTO auditoria_correcoes 
+                (registro_id, gestor, justificativa, data_correcao)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+            """
+            execute_update(audit_query, (registro_id, gestor, justificativa))
 
-        # Registrar auditoria da correção
-        cursor.execute(f"""
-            INSERT INTO auditoria_correcoes 
-            (registro_id, gestor, justificativa, data_correcao)
-            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
-        """, (registro_id, gestor, justificativa))
+            log_security_event("RECORD_CORRECTION", usuario=gestor, context={"registro_id": registro_id, "tipo": novo_tipo})
+            return {"success": True, "message": "Registro corrigido com sucesso"}
+        except Exception as e:
+            log_error("Erro ao corrigir registro", e, {"registro_id": registro_id, "gestor": gestor})
+            return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
+    else:
+        # Fallback original
+        conn = get_connection()
+        cursor = conn.cursor()
 
-        conn.commit()
-        return {"success": True, "message": "Registro corrigido com sucesso"}
-    except Exception as e:
-        conn.rollback()
-        return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
-    finally:
-        conn.close()
+        try:
+            # Verificar se o registro existe
+            cursor.execute(
+                f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
+            if not cursor.fetchone():
+                return {"success": False, "message": "Registro não encontrado"}
+
+            # Atualizar registro
+            cursor.execute(f"""
+                UPDATE registros_ponto 
+                SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
+            """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
+
+            # Registrar auditoria da correção
+            cursor.execute(f"""
+                INSERT INTO auditoria_correcoes 
+                (registro_id, gestor, justificativa, data_correcao)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+            """, (registro_id, gestor, justificativa))
+
+            conn.commit()
+            return {"success": True, "message": "Registro corrigido com sucesso"}
+        except Exception as e:
+            conn.rollback()
+            return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
+        finally:
+            conn.close()
 
 
 # Função principal
