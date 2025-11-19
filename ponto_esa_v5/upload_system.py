@@ -13,6 +13,8 @@ except Exception:
         from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
     except Exception:
         from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+
+from database import adapt_sql_for_postgresql
 from datetime import datetime
 import mimetypes
 import hashlib
@@ -76,7 +78,7 @@ class UploadSystem:
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute('''
+        sql = '''
             CREATE TABLE IF NOT EXISTS uploads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 usuario TEXT NOT NULL,
@@ -91,7 +93,10 @@ class UploadSystem:
                 data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 status TEXT DEFAULT 'ativo'
             )
-        ''')
+        '''
+        # Adaptar SQL para PostgreSQL se necessário
+        sql = adapt_sql_for_postgresql(sql)
+        cursor.execute(sql)
         conn.commit()
         conn.close()
 
