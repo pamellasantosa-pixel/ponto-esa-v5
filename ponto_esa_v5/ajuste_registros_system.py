@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from notifications import notification_manager
-from database_postgresql import get_connection, USE_POSTGRESQL
+from ponto_esa_v5.notifications import notification_manager
+from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
 
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+
+# Configurar logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class AjusteRegistrosSystem:
@@ -17,6 +22,13 @@ class AjusteRegistrosSystem:
 
     def __init__(self, connection_factory: Optional[Callable[[], Any]] = None) -> None:
         self._get_connection = connection_factory or get_connection
+
+        # Verificar dependências críticas
+        logger.debug("Verificando dependências críticas...")
+        if not self._check_database_connection():
+            logger.critical("Erro crítico: Banco de dados não está acessível.")
+            raise RuntimeError("Banco de dados não está acessível. Verifique a configuração.")
+        logger.debug("Todas as dependências críticas estão disponíveis.")
 
     # ===== Métodos auxiliares internos =====
     def _dump_json(self, payload: Dict[str, Any]) -> str:
@@ -44,11 +56,13 @@ class AjusteRegistrosSystem:
     # Adicionar verificação de conexão ao banco de dados
     def _check_database_connection(self) -> bool:
         try:
+            logger.debug("Verificando conexão com o banco de dados...")
             conn = self._get_connection()
             conn.close()
+            logger.debug("Conexão com o banco de dados bem-sucedida.")
             return True
         except Exception as exc:
-            print(f"Erro ao conectar ao banco de dados: {exc}")
+            logger.error(f"Erro ao conectar ao banco de dados: {exc}")
             return False
 
     # ===== Consultas =====
