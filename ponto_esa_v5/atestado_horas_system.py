@@ -4,6 +4,11 @@ import sys
 import os
 from datetime import datetime
 
+try:
+    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
+except Exception:
+    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
+
 # Placeholder implementations
 class AtestadoHorasSystem:
     """Sistema de gerenciamento de atestados de horas"""
@@ -21,6 +26,38 @@ class AtestadoHorasSystem:
     def aprovar_atestado(self, atestado_id):
         """Aprova um atestado"""
         pass
+    
+    def rejeitar_atestado(self, atestado_id, gestor, motivo):
+        """Rejeita um atestado: marca como 'rejeitado' e registra observações.
+
+        Retorna dicionário com chave `success` e opcional `message`.
+        """
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            # Atualizar status para 'rejeitado' e registrar quem rejeitou
+            cursor.execute(
+                """
+                UPDATE atestado_horas
+                SET status = %s, aprovado_por = %s, data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                WHERE id = %s
+                """ if USE_POSTGRESQL else """
+                UPDATE atestado_horas
+                SET status = ?, aprovado_por = ?, data_aprovacao = CURRENT_TIMESTAMP, observacoes = ?
+                WHERE id = ?
+                """,
+                ("rejeitado", gestor, motivo, atestado_id) if USE_POSTGRESQL else ("rejeitado", gestor, motivo, atestado_id)
+            )
+            conn.commit()
+            conn.close()
+            return {"success": True, "message": "Atestado rejeitado"}
+        except Exception as e:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+            return {"success": False, "message": str(e)}
 
 def format_time_duration(minutos):
     """Formata duração de tempo em horas e minutos"""
