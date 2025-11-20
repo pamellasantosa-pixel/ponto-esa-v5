@@ -7633,4 +7633,5 @@ def main():
 
 
 # Executar aplicação
-main()
+if __name__ == "__main__":
+    main()

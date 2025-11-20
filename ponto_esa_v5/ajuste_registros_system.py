@@ -41,6 +41,16 @@ class AjusteRegistrosSystem:
             f"ajuste_registro_{solicitacao_id}"
         )
 
+    # Adicionar verificação de conexão ao banco de dados
+    def _check_database_connection(self) -> bool:
+        try:
+            conn = self._get_connection()
+            conn.close()
+            return True
+        except Exception as exc:
+            print(f"Erro ao conectar ao banco de dados: {exc}")
+            return False
+
     # ===== Consultas =====
     def is_solicitacao_resolvida(self, solicitacao_id: int) -> bool:
         conn = self._get_connection()
@@ -156,6 +166,9 @@ class AjusteRegistrosSystem:
         dados_solicitados: Dict[str, Any],
         justificativa: str,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -229,6 +242,9 @@ class AjusteRegistrosSystem:
         dados_confirmados: Dict[str, Any],
         observacoes: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -425,6 +441,9 @@ class AjusteRegistrosSystem:
         gestor: str,
         observacoes: str,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         if not observacoes.strip():
             return {"success": False, "message": "Observações são obrigatórias para rejeição."}
 
