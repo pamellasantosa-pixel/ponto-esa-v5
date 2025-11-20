@@ -4,7 +4,13 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 """
 
 import sqlite3
-from database_postgresql import get_connection
+try:
+    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+except Exception:
+    try:
+        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    except Exception:
+        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 from datetime import datetime, timedelta, date
 import calendar
 
@@ -26,20 +32,31 @@ def safe_datetime_parse(value):
 
 
 class CalculoHorasSystem:
-    def __init__(self):
-        pass
+    def __init__(self, db_path: str | None = None):
+        """Inicializa o sistema de cálculo de horas.
+
+        Args:
+            db_path (str|None): Caminho para um banco SQLite local para testes. Se None, usa get_connection().
+        """
+        self._test_db_path = db_path
+
+    def _get_connection(self):
+        """Retorna conexão: usa banco de testes (SQLite) se configurado, senão usa get_connection()."""
+        if self._test_db_path:
+            return sqlite3.connect(self._test_db_path)
+        return get_connection()
 
         
     def calcular_horas_dia(self, usuario, data):
         """Calcula as horas trabalhadas em um dia específico com todas as regras"""
-        conn = get_connection()
+        conn = self._get_connection()
         try:
             cursor = conn.cursor()
 
             # Buscar registros do dia
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT data_hora, tipo FROM registros_ponto 
-                WHERE usuario = %s AND DATE(data_hora) = %s 
+                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
                 ORDER BY data_hora ASC
             """, (usuario, data))
 
@@ -98,9 +115,9 @@ class CalculoHorasSystem:
             horas_finais = horas_liquidas * multiplicador
 
             # Buscar atestados de horas aprovados para desconto
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT total_horas FROM atestado_horas 
-                WHERE usuario = %s AND data = %s AND status = 'aprovado'
+                WHERE usuario = {SQL_PLACEHOLDER} AND data = {SQL_PLACEHOLDER} AND status = 'aprovado'
             """, (usuario, data))
 
             atestados = cursor.fetchall()
@@ -180,14 +197,14 @@ class CalculoHorasSystem:
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
-            SELECT tipo, COUNT(*) FROM registros_ponto 
-            WHERE usuario = %s AND DATE(data_hora) = %s 
-            GROUP BY tipo
-        """, (usuario, data))
+        cursor.execute(f"""
+                SELECT tipo, COUNT(*) FROM registros_ponto 
+                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
+                GROUP BY tipo
+            """, (usuario, data))
 
         contadores = dict(cursor.fetchall())
         conn.close()
@@ -226,7 +243,7 @@ class CalculoHorasSystem:
 
     def _eh_feriado(self, data):
         """Verifica se uma data é feriado"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
         try:
             cursor.execute("""
@@ -247,7 +264,7 @@ class CalculoHorasSystem:
 
     def obter_feriados_periodo(self, data_inicio, data_fim):
         """Obtém lista de feriados em um período"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         cursor.execute("""
@@ -263,13 +280,13 @@ class CalculoHorasSystem:
 
     def gerar_relatorio_horas_extras(self, usuario, data_inicio, data_fim):
         """Gera relatório de horas extras não aprovadas"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         # Buscar jornada prevista
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT jornada_inicio_previsto, jornada_fim_previsto 
-            FROM usuarios WHERE usuario = %s
+            FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}
         """, (usuario,))
 
         jornada = cursor.fetchone()
@@ -280,9 +297,30 @@ class CalculoHorasSystem:
         jornada_inicio = jornada[0] or "08:00"
         jornada_fim = jornada[1] or "17:00"
 
-        # Calcular horas previstas por dia
-        inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
-        fim_dt = datetime.strptime(jornada_fim, "%H:%M")
+        # Calcular horas previstas por dia - usar função robusta de parse
+        try:
+            if ':' in str(jornada_inicio):
+                parts = str(jornada_inicio).split(':')
+                if len(parts) == 3:
+                    inicio_dt = datetime.strptime(jornada_inicio, "%H:%M:%S")
+                else:
+                    inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
+            else:
+                inicio_dt = datetime.strptime("08:00", "%H:%M")
+        except:
+            inicio_dt = datetime.strptime("08:00", "%H:%M")
+        
+        try:
+            if ':' in str(jornada_fim):
+                parts = str(jornada_fim).split(':')
+                if len(parts) == 3:
+                    fim_dt = datetime.strptime(jornada_fim, "%H:%M:%S")
+                else:
+                    fim_dt = datetime.strptime(jornada_fim, "%H:%M")
+            else:
+                fim_dt = datetime.strptime("17:00", "%H:%M")
+        except:
+            fim_dt = datetime.strptime("17:00", "%H:%M")
         horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas > 6:
             horas_previstas -= 1  # Desconto do almoço
@@ -304,9 +342,9 @@ class CalculoHorasSystem:
 
             if calculo["horas_liquidas"] > horas_previstas:
                 # Verificar se já foi aprovada formalmente
-                cursor.execute("""
+                cursor.execute(f"""
                     SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                    WHERE usuario = %s AND data = %s AND status = 'aprovado'
+                    WHERE usuario = {SQL_PLACEHOLDER} AND data = {SQL_PLACEHOLDER} AND status = 'aprovado'
                 """, (usuario, data_atual.strftime("%Y-%m-%d")))
 
                 ja_aprovada = cursor.fetchone()[0] > 0

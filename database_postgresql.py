@@ -23,7 +23,7 @@ if USE_POSTGRESQL:
     import psycopg2.extras
 
 
-def get_connection():
+def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
         database_url = os.getenv('DATABASE_URL')
@@ -46,8 +46,14 @@ def get_connection():
             print("\n📋 Certifique-se de que a variável de ambiente DATABASE_URL está configurada corretamente no Render.")
             raise
     else:
-        os.makedirs('database', exist_ok=True)
-        return sqlite3.connect('database/ponto_esa.db')
+        # For SQLite, delegate to the primary database module which handles
+        # the ConnectionWrapper and optional db_path.
+        try:
+            from ponto_esa_v5.database import get_connection as sqlite_get_connection
+            return sqlite_get_connection(db_path)
+        except Exception:
+            os.makedirs('database', exist_ok=True)
+            return sqlite3.connect(db_path or 'database/ponto_esa.db')
 
 
 def hash_password(password):
@@ -245,6 +251,44 @@ def init_db_postgresql():
             data_correcao TIMESTAMP DEFAULT NOW(),
             FOREIGN KEY (registro_id) REFERENCES registros_ponto (id)
         )
+    ''')
+
+    # Tabela solicitacoes_correcao_registro
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_correcao_registro (
+            id SERIAL PRIMARY KEY,
+            usuario VARCHAR(255) NOT NULL,
+            registro_id INTEGER NOT NULL,
+            data_hora_original TIMESTAMP NOT NULL,
+            data_hora_nova TIMESTAMP NOT NULL,
+            tipo_original VARCHAR(50),
+            tipo_novo VARCHAR(50),
+            modalidade_original VARCHAR(50),
+            modalidade_nova VARCHAR(50),
+            projeto_original VARCHAR(255),
+            projeto_novo VARCHAR(255),
+            justificativa TEXT NOT NULL,
+            status VARCHAR(50) DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            aprovado_por VARCHAR(255),
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT,
+            FOREIGN KEY (usuario) REFERENCES usuarios(usuario),
+            FOREIGN KEY (registro_id) REFERENCES registros_ponto(id)
+        )
+    ''')
+
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_solicitacoes_correcao_usuario 
+        ON solicitacoes_correcao_registro(usuario)
+    ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_solicitacoes_correcao_status 
+        ON solicitacoes_correcao_registro(status)
+    ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_solicitacoes_correcao_registro 
+        ON solicitacoes_correcao_registro(registro_id)
     ''')
 
     # Inserir usuários padrão se não existirem

@@ -26,25 +26,77 @@ else:
     import sqlite3
 
 
-def get_connection():
+def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
         return psycopg2.connect(**DB_CONFIG)
     else:
         os.makedirs('database', exist_ok=True)
-        return sqlite3.connect('database/ponto_esa.db')
+        if db_path:
+            conn = sqlite3.connect(db_path)
+        else:
+            conn = sqlite3.connect('database/ponto_esa.db')
+
+        class AdaptCursor:
+            def __init__(self, cursor):
+                self._cursor = cursor
+
+            def execute(self, sql, params=None):
+                if isinstance(sql, str):
+                    sql = sql.replace('%s', SQL_PLACEHOLDER)
+                if params is None:
+                    return self._cursor.execute(sql)
+                return self._cursor.execute(sql, params)
+
+            def executemany(self, sql, seq_of_params):
+                if isinstance(sql, str):
+                    sql = sql.replace('%s', SQL_PLACEHOLDER)
+                return self._cursor.executemany(sql, seq_of_params)
+
+            def __getattr__(self, name):
+                return getattr(self._cursor, name)
+
+        class ConnectionWrapper:
+            def __init__(self, conn):
+                self._conn = conn
+
+            def cursor(self):
+                return AdaptCursor(self._conn.cursor())
+
+            def commit(self):
+                return self._conn.commit()
+
+            def close(self):
+                return self._conn.close()
+
+            def __getattr__(self, name):
+                return getattr(self._conn, name)
+
+        return ConnectionWrapper(conn)
 
 
 def adapt_sql_for_postgresql(sql):
     """Adapta queries SQL para PostgreSQL se necessário"""
     if USE_POSTGRESQL:
-        # Substituir AUTOINCREMENT por SERIAL
+        # Adaptar tipos de dados se necessário - FAZER PRIMEIRO as substituições específicas
+        sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
+        # Substituir AUTOINCREMENT por SERIAL (para casos que não foram cobertos acima)
         sql = sql.replace('AUTOINCREMENT', 'SERIAL')
         # Substituir CURRENT_TIMESTAMP por NOW()
         sql = sql.replace('CURRENT_TIMESTAMP', 'NOW()')
-        # Adaptar tipos de dados se necessário
-        sql = sql.replace('INTEGER PRIMARY KEY AUTOINCREMENT', 'SERIAL PRIMARY KEY')
     return sql
+
+
+def q(sql_text: str) -> str:
+    """Return query adapted for the configured SQL placeholder."""
+    if not isinstance(sql_text, str):
+        return sql_text
+    return sql_text.replace('%s', SQL_PLACEHOLDER)
+
+
+def hash_password(password: str) -> str:
+    """Hash a password using SHA256."""
+    return hashlib.sha256(password.encode()).hexdigest()
 
 
 def init_db():
@@ -215,9 +267,6 @@ def init_db():
     ''')
 
     # Inserir usuários padrão se não existirem
-    def hash_password(password):
-        return hashlib.sha256(password.encode()).hexdigest()
-
     c.execute("SELECT COUNT(*) FROM usuarios")
     if c.fetchone()[0] == 0:
         usuarios_padrao = [

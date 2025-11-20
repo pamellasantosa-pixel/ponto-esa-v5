@@ -6,16 +6,29 @@ Permite upload seguro de documentos e comprovantes
 import os
 import uuid
 import sqlite3
-from database_postgresql import get_connection
+try:
+    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+except Exception:
+    try:
+        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    except Exception:
+        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+
+from database import adapt_sql_for_postgresql
 from datetime import datetime
 import mimetypes
 import hashlib
+
 from pathlib import Path
+
+# SQL Placeholder para compatibilidade SQLite/PostgreSQL
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
 
 class UploadSystem:
-    def __init__(self, upload_dir="uploads"):
+    def __init__(self, upload_dir="uploads", db_path: str | None = None):
         self.upload_dir = upload_dir
+        self._test_db_path = db_path
         self.max_file_size = 10 * 1024 * 1024  # 10MB
         self.allowed_extensions = {
             'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'gif', 'txt', 'rtf'
@@ -32,6 +45,12 @@ class UploadSystem:
         }
         self.init_directories()
         self.init_database()
+
+    def _get_connection(self):
+        """Retorna conexão ao banco, usando db_path de teste se configurado."""
+        if getattr(self, '_test_db_path', None):
+            return get_connection(self._test_db_path)
+        return get_connection()
 
     def init_directories(self):
         """Cria estrutura de diretórios para uploads"""
@@ -56,77 +75,30 @@ class UploadSystem:
 
     def init_database(self):
         """Inicializa tabela de uploads"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
-        # Verificar se a tabela existe e tem a estrutura correta
-        cursor.execute("""
-            SELECT column_name 
-            FROM information_schema.columns 
-            WHERE table_name = 'uploads'
-        """)
-        
-        existing_columns = [row[0] for row in cursor.fetchall()]
-        
-        # Se a tabela não existe ou não tem a coluna 'caminho', recriar
-        if not existing_columns or 'caminho' not in existing_columns:
-            print("⚠️ Tabela uploads com estrutura incorreta. Recriando...")
-            
-            # Fazer backup de dados se existirem
-            if existing_columns:
-                cursor.execute("SELECT * FROM uploads")
-                backup_data = cursor.fetchall()
-                
-                # Drop da tabela antiga
-                cursor.execute("DROP TABLE IF EXISTS uploads CASCADE")
-                print("  🗑️ Tabela antiga removida")
-            else:
-                backup_data = []
-            
-            # Criar tabela com estrutura correta
-            cursor.execute('''
-                CREATE TABLE uploads (
-                    id SERIAL PRIMARY KEY,
-                    usuario TEXT NOT NULL,
-                    nome_original TEXT NOT NULL,
-                    nome_arquivo TEXT NOT NULL,
-                    tipo_arquivo TEXT NOT NULL,
-                    tamanho INTEGER NOT NULL,
-                    caminho TEXT NOT NULL,
-                    hash_arquivo TEXT,
-                    relacionado_a TEXT,
-                    relacionado_id INTEGER,
-                    data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    status TEXT DEFAULT 'ativo'
-                )
-            ''')
-            print("  ✅ Tabela uploads criada com estrutura correta")
-            
-            # Criar índices
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_usuario ON uploads(usuario)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_hash ON uploads(hash_arquivo)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_status ON uploads(status)")
-            cursor.execute("CREATE INDEX IF NOT EXISTS idx_uploads_relacionado ON uploads(relacionado_a, relacionado_id)")
-            print("  📊 Índices criados")
-            
-            # Restaurar dados se houver
-            if backup_data:
-                print(f"  🔄 Restaurando {len(backup_data)} registros...")
-                # Nota: pode ser necessário ajustar dependendo da estrutura antiga
-        else:
-            # Verificar e adicionar colunas faltantes
-            if 'hash_arquivo' not in existing_columns:
-                cursor.execute("ALTER TABLE uploads ADD COLUMN hash_arquivo TEXT")
-                print("  ➕ Coluna 'hash_arquivo' adicionada")
-            
-            if 'status' not in existing_columns:
-                cursor.execute("ALTER TABLE uploads ADD COLUMN status TEXT DEFAULT 'ativo'")
-                cursor.execute("UPDATE uploads SET status = 'ativo' WHERE status IS NULL")
-                print("  ➕ Coluna 'status' adicionada")
-
+        sql = '''
+            CREATE TABLE IF NOT EXISTS uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT NOT NULL,
+                nome_original TEXT NOT NULL,
+                nome_arquivo TEXT NOT NULL,
+                tipo_arquivo TEXT NOT NULL,
+                tamanho INTEGER NOT NULL,
+                caminho TEXT NOT NULL,
+                hash_arquivo TEXT NOT NULL,
+                relacionado_a TEXT,
+                relacionado_id INTEGER,
+                data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                status TEXT DEFAULT 'ativo'
+            )
+        '''
+        # Adaptar SQL para PostgreSQL se necessário
+        sql = adapt_sql_for_postgresql(sql)
+        cursor.execute(sql)
         conn.commit()
         conn.close()
-        print("✅ Tabela uploads inicializada com sucesso")
 
     def validate_file(self, file_content, filename, file_size):
         """Valida arquivo antes do upload"""
@@ -153,7 +125,7 @@ class UploadSystem:
             errors.append("Nome do arquivo inválido")
 
         # Verificar caracteres perigosos
-        dangerous_chars = ['<', '>', ':', '"', '|', '%s', '*', '\\', '/']
+        dangerous_chars = ['<', '>', ':', '"', '|', f'{SQL_PLACEHOLDER}', '*', '\\', '/']
         if any(char in filename for char in dangerous_chars):
             errors.append("Nome do arquivo contém caracteres não permitidos")
 
@@ -190,9 +162,6 @@ class UploadSystem:
     def save_file(self, file_content, usuario, original_filename, categoria='documento', relacionado_a=None, relacionado_id=None):
         """Salva arquivo no sistema"""
         try:
-            # Garantir que a tabela existe e tem estrutura correta
-            self.init_database()
-            
             file_size = len(file_content)
 
             # Validar arquivo
@@ -259,19 +228,29 @@ class UploadSystem:
 
     def register_upload(self, usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a=None, relacionado_id=None):
         """Registra upload no banco de dados"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         try:
-            cursor.execute('''
-                INSERT INTO uploads 
-                (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ''', (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id))
+            params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
 
-            upload_id = cursor.lastrowid
-            conn.commit()
-            return upload_id
+            # Construir query com o placeholder correto
+            query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
+
+            if USE_POSTGRESQL:
+                # Em PostgreSQL, usar RETURNING id para obter o id inserido
+                query = query + " RETURNING id"
+                cursor.execute(query, params)
+                result = cursor.fetchone()
+                upload_id = result[0] if result else None
+                conn.commit()
+                return upload_id
+            else:
+                # SQLite: executar e usar lastrowid
+                cursor.execute(query, params)
+                upload_id = cursor.lastrowid
+                conn.commit()
+                return upload_id
 
         except Exception as e:
             raise e
@@ -280,66 +259,47 @@ class UploadSystem:
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
+        conn = self._get_connection()
+        cursor = conn.cursor()
 
-            # Verificar se a coluna caminho existe
-            cursor.execute("""
-                SELECT column_name 
-                FROM information_schema.columns 
-                WHERE table_name = 'uploads' AND column_name = 'caminho'
-            """)
-            
-            if not cursor.fetchone():
-                # Coluna não existe, não fazer verificação de duplicata
-                conn.close()
-                return None
+        cursor.execute(f'''
+            SELECT id, nome_original, caminho FROM uploads 
+            WHERE hash_arquivo = {SQL_PLACEHOLDER} AND usuario = {SQL_PLACEHOLDER} AND status = 'ativo'
+        ''', (file_hash, usuario))
 
-            cursor.execute('''
-                SELECT id, nome_original, caminho FROM uploads 
-                WHERE hash_arquivo = %s AND usuario = %s AND status = 'ativo'
-            ''', (file_hash, usuario))
+        result = cursor.fetchone()
+        conn.close()
 
-            result = cursor.fetchone()
-            conn.close()
-
-            if result:
-                return {
-                    "id": result[0],
-                    "nome_original": result[1],
-                    "caminho": result[2]
-                }
-            return None
-        except Exception as e:
-            # Em caso de erro, apenas retornar None e permitir upload
-            print(f"Aviso ao verificar duplicata: {e}")
-            return None
+        if result:
+            return {
+                "id": result[0],
+                "nome_original": result[1],
+                "caminho": result[2]
+            }
+        return None
 
     def get_user_uploads(self, usuario, categoria=None, relacionado_a=None, relacionado_id=None):
         """Lista uploads de um usuário"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
-        query = "SELECT * FROM uploads WHERE usuario = %s AND status = 'ativo'"
+        query = f"SELECT * FROM uploads WHERE usuario = {SQL_PLACEHOLDER} AND status = 'ativo'"
         params = [usuario]
-
         if categoria:
             # Mapear categoria para relacionado_a
             if categoria in ['ausencia', 'atestado_horas', 'documento']:
-                query += " AND relacionado_a = %s"
+                query += f" AND relacionado_a = {SQL_PLACEHOLDER}"
                 params.append(categoria)
 
         if relacionado_a:
-            query += " AND relacionado_a = %s"
+            query += f" AND relacionado_a = {SQL_PLACEHOLDER}"
             params.append(relacionado_a)
 
         if relacionado_id:
-            query += " AND relacionado_id = %s"
+            query += f" AND relacionado_id = {SQL_PLACEHOLDER}"
             params.append(relacionado_id)
 
         query += " ORDER BY data_upload DESC"
-
         cursor.execute(query, params)
         uploads = cursor.fetchall()
         conn.close()
@@ -353,15 +313,32 @@ class UploadSystem:
 
     def get_file_info(self, upload_id, usuario=None):
         """Obtém informações de um arquivo específico"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
+        # upload_id pode ser um inteiro (id) ou uma string (caminho)
+        params = []
 
-        query = "SELECT * FROM uploads WHERE id = %s"
-        params = [upload_id]
+        # Detectar se foi passado o caminho do arquivo em vez do id
+        use_caminho = False
+        try:
+            # Se for convertível para int, tratar como id
+            int(upload_id)
+        except Exception:
+            # Não é inteiro: provavelmente é um caminho
+            use_caminho = True
 
-        if usuario:
-            query += " AND usuario = %s"
-            params.append(usuario)
+        if use_caminho:
+            query = f"SELECT * FROM uploads WHERE caminho = {SQL_PLACEHOLDER}"
+            params = [upload_id]
+            if usuario:
+                query += f" AND usuario = {SQL_PLACEHOLDER}"
+                params.append(usuario)
+        else:
+            query = f"SELECT * FROM uploads WHERE id = {SQL_PLACEHOLDER}"
+            params = [int(upload_id)]
+            if usuario:
+                query += f" AND usuario = {SQL_PLACEHOLDER}"
+                params.append(usuario)
 
         cursor.execute(query, params)
         upload = cursor.fetchone()
@@ -377,13 +354,18 @@ class UploadSystem:
 
     def delete_file(self, upload_id, usuario):
         """Remove arquivo (marca como inativo)"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         try:
             # Verificar se arquivo pertence ao usuário
-            cursor.execute(
-                "SELECT caminho FROM uploads WHERE id = %s AND usuario = %s", (upload_id, usuario))
+            # Suporta upload_id como id ou caminho
+            try:
+                cursor.execute(
+                    f"SELECT caminho FROM uploads WHERE id = {SQL_PLACEHOLDER} AND usuario = {SQL_PLACEHOLDER}", (int(upload_id), usuario))
+            except Exception:
+                cursor.execute(
+                    f"SELECT caminho FROM uploads WHERE caminho = {SQL_PLACEHOLDER} AND usuario = {SQL_PLACEHOLDER}", (upload_id, usuario))
             result = cursor.fetchone()
 
             if not result:
@@ -393,7 +375,7 @@ class UploadSystem:
 
             # Marcar como inativo no banco
             cursor.execute(
-                "UPDATE uploads SET status = 'removido' WHERE id = %s", (upload_id,))
+                f"UPDATE uploads SET status = 'removido' WHERE id = {SQL_PLACEHOLDER}", (upload_id,))
 
             # Remover arquivo físico
             try:
@@ -412,6 +394,7 @@ class UploadSystem:
 
     def get_file_content(self, upload_id, usuario=None):
         """Obtém conteúdo de um arquivo para download"""
+        # Suporta upload_id como id (int) ou caminho (str)
         file_info = self.get_file_info(upload_id, usuario)
 
         if not file_info:
@@ -421,7 +404,7 @@ class UploadSystem:
             with open(file_info['caminho'], 'rb') as f:
                 content = f.read()
             return content, file_info
-        except:
+        except Exception:
             return None, None
 
     def cleanup_temp_files(self, max_age_hours=24):
@@ -443,7 +426,7 @@ class UploadSystem:
 
     def get_storage_stats(self):
         """Obtém estatísticas de armazenamento"""
-        conn = get_connection()
+        conn = self._get_connection()
         cursor = conn.cursor()
 
         cursor.execute('''
@@ -522,3 +505,16 @@ def get_category_name(categoria):
         'documento': 'Documentos'
     }
     return names.get(categoria, 'Outros')
+
+try:
+    from notifications import NotificationManager
+except ImportError:
+    from notifications import NotificationManager
+
+__all__ = [
+    "UploadSystem",
+    "format_file_size",
+    "get_file_icon",
+    "is_image_file",
+    "get_category_name",
+]

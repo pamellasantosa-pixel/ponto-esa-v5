@@ -10,8 +10,8 @@ import hashlib
 
 import pytest
 
-# Adicionar path do módulo
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ponto_esa_v5', 'ponto_esa_v5'))
+# Adicionar path do módulo (apontar para diretório que contém o pacote ponto_esa_v5)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'ponto_esa_v5'))
 
 from ajuste_registros_system import AjusteRegistrosSystem  # type: ignore[import-not-found]
 from database_postgresql import get_connection, init_db, USE_POSTGRESQL  # type: ignore[import-not-found]

@@ -33,18 +33,18 @@ try:
     )
     from ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore[import]
 except ImportError:  # pragma: no cover - fallback para execução direta dos testes
-    from ponto_esa_v5.ponto_esa_v5.banco_horas_system import BancoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.calculo_horas_system import CalculoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.atestado_horas_system import AtestadoHorasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.ajuste_registros_system import AjusteRegistrosSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.horas_extras_system import HorasExtrasSystem  # type: ignore
-    from ponto_esa_v5.ponto_esa_v5.database_postgresql import (  # type: ignore
+    from ponto_esa_v5.banco_horas_system import BancoHorasSystem  # type: ignore
+    from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem  # type: ignore
+    from ponto_esa_v5.atestado_horas_system import AtestadoHorasSystem  # type: ignore
+    from ponto_esa_v5.ajuste_registros_system import AjusteRegistrosSystem  # type: ignore
+    from ponto_esa_v5.horas_extras_system import HorasExtrasSystem  # type: ignore
+    from ponto_esa_v5.database_postgresql import (  # type: ignore
         get_connection,
         init_db,
         USE_POSTGRESQL,
         hash_password,
     )
-    from ponto_esa_v5.ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore
+    from ponto_esa_v5.database import SQL_PLACEHOLDER  # type: ignore
 
 # Definir placeholder correto
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
@@ -634,7 +634,7 @@ def test_atestados():
 
 def test_relatorios():
     """TESTE 10: Geração de Relatórios"""
-    print_section("📊 TESTE 10: Geração de Relatórios")
+    print_section("TESTE 10: Geracao de Relatorios")
 
     limpar_dados_teste()
     criar_usuarios_teste()
@@ -688,6 +688,8 @@ def test_relatorios():
         )
         
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         all_passed = print_result(False, f"Erro na geração de relatórios: {e}")
     
     assert all_passed, "Falha na geração de relatórios"
