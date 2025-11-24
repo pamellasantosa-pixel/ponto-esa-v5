@@ -2,6 +2,9 @@
 requires = ["setuptools", "wheel"]
 build-backend = "setuptools.build_meta"
 
+[tool.setuptools]
+packages = ["ponto_esa_v5"]
+
 [project]
 name = "ponto-esa-v5"
 version = "5.0.0"

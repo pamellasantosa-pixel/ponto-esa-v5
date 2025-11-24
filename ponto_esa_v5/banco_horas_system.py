@@ -6,11 +6,21 @@ from datetime import datetime, timedelta, date
 
 try:
     from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except Exception:
-    # fallback for direct test execution
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+except ImportError:
+    # fallback for direct test execution or when package is not resolvable
+    try:
+        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    except ImportError:
+        # try relative import as last resort
+        from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 
-from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem, format_time_duration
+try:
+    from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem, format_time_duration
+except ImportError:
+    try:
+        from calculo_horas_system import CalculoHorasSystem, format_time_duration
+    except ImportError:
+        from .calculo_horas_system import CalculoHorasSystem, format_time_duration
 
 
 class BancoHorasSystem:
@@ -20,8 +30,9 @@ class BancoHorasSystem:
     e da aplicação, delegando cálculos ao `CalculoHorasSystem` quando aplicável.
     """
 
-    def __init__(self, connection_manager=None):
+    def __init__(self, connection_manager=None, db_path: str | None = None, **kwargs):
         self.connection_manager = connection_manager
+        self.db_path = db_path
 
     def obter_saldo_atual(self, usuario):
         return self.obter_saldo(usuario)
@@ -91,6 +102,7 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         try:
+            query = f"SELECT usuario, nome_completo FROM usuarios WHERE tipo = {SQL_PLACEHOLDER} AND ativo = 1 ORDER BY nome_completo"
             cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE tipo = %s AND ativo = 1 ORDER BY nome_completo" if USE_POSTGRESQL else "SELECT usuario, nome_completo FROM usuarios WHERE tipo = ? AND ativo = 1 ORDER BY nome_completo", ("funcionario",) if USE_POSTGRESQL else ("funcionario",))
             rows = cursor.fetchall()
             resultado = []

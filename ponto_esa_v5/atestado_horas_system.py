@@ -6,8 +6,13 @@ from datetime import datetime
 
 try:
     from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
-except Exception:
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
+except ImportError:
+    try:
+        from database_postgresql import get_connection, USE_POSTGRESQL
+    except ImportError:
+        # Fallback to local database module if postgresql one fails
+        from database import get_connection
+        USE_POSTGRESQL = False
 
 # Placeholder implementations
 class AtestadoHorasSystem:
@@ -15,13 +20,85 @@ class AtestadoHorasSystem:
     def __init__(self, connection_manager=None):
         self.connection_manager = connection_manager
     
-    def registrar_atestado(self, usuario, data_inicio, data_fim, tipo, arquivo=None):
-        """Registra um novo atestado"""
-        pass
+    def registrar_atestado_horas(
+        self,
+        usuario: str,
+        data: str,
+        hora_inicio: str,
+        hora_fim: str,
+        motivo: str | None = None,
+        arquivo_comprovante: str | None = None,
+        nao_possui_comprovante: int = 0,
+    ):
+        """Registra um atestado de horas simples, compatível com os testes.
+
+        Retorna dict com `success` e `message`.
+        """
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO atestado_horas (
+                    usuario, data, hora_inicio, hora_fim, total_horas,
+                    motivo, arquivo_comprovante, nao_possui_comprovante,
+                    status
+                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
+                """
+                if USE_POSTGRESQL
+                else """
+                INSERT INTO atestado_horas (
+                    usuario, data, hora_inicio, hora_fim, total_horas,
+                    motivo, arquivo_comprovante, nao_possui_comprovante,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendente')
+                """,
+                (
+                    usuario,
+                    data,
+                    hora_inicio,
+                    hora_fim,
+                    0.0,
+                    motivo,
+                    arquivo_comprovante,
+                    nao_possui_comprovante,
+                ),
+            )
+            conn.commit()
+            atestado_id = cursor.lastrowid if hasattr(cursor, "lastrowid") else None
+            conn.close()
+            return {"success": True, "message": "Atestado registrado", "id": atestado_id}
+        except Exception as e:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+            return {"success": False, "message": str(e)}
     
-    def obter_atestados(self, usuario):
-        """Obtém atestados do usuário"""
-        return []
+    def listar_atestados_usuario(self, usuario: str):
+        """Lista atestados de horas para um usuário (visão simples)."""
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = %s"
+            if USE_POSTGRESQL
+            else "SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = ?",
+            (usuario,),
+        )
+        rows = cursor.fetchall()
+        conn.close()
+        colunas = [
+            "id",
+            "usuario",
+            "data",
+            "hora_inicio",
+            "hora_fim",
+            "total_horas",
+            "motivo",
+            "status",
+        ]
+        return [dict(zip(colunas, r)) for r in rows]
     
     def aprovar_atestado(self, atestado_id):
         """Aprova um atestado"""
