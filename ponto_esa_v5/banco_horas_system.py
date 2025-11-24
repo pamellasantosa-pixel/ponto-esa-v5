@@ -5,20 +5,21 @@ import os
 from datetime import datetime, timedelta, date
 
 try:
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    # Tentar import direto primeiro (caso esteja rodando no diretório do pacote)
+    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 except ImportError:
-    # fallback for direct test execution or when package is not resolvable
     try:
-        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+        # Tentar import absoluto com pacote
+        from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
     except ImportError:
-        # try relative import as last resort
+        # Tentar import relativo
         from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 
 try:
-    from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem, format_time_duration
+    from calculo_horas_system import CalculoHorasSystem, format_time_duration
 except ImportError:
     try:
-        from calculo_horas_system import CalculoHorasSystem, format_time_duration
+        from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem, format_time_duration
     except ImportError:
         from .calculo_horas_system import CalculoHorasSystem, format_time_duration
 

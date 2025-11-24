@@ -6,6 +6,19 @@ Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
 Deploy: Render.com | Banco: PostgreSQL
 """
 
+import sys
+import os
+
+# Configuração de PATH deve vir antes de imports locais que podem depender de pacotes
+# Adicionar o diretório atual ao path
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Adicionar o diretório pai ao path para permitir importação do pacote ponto_esa_v5
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from notifications import notification_manager
 from calculo_horas_system import CalculoHorasSystem
 from banco_horas_system import BancoHorasSystem, format_saldo_display
@@ -199,10 +212,6 @@ else:
 import sys
 current_module = sys.modules[__name__]
 current_module.SQL_PLACEHOLDER = SQL_PLACEHOLDER
-
-# Adicionar o diretório atual ao path para permitir importações
-if os.path.dirname(__file__) not in sys.path:
-    sys.path.insert(0, os.path.dirname(__file__))
 
 # Configurar timezone do Brasil (Brasília)
 TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
