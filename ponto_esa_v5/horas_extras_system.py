@@ -5,12 +5,15 @@ Gerencia solicitações e aprovações de horas extras
 
 import sqlite3
 try:
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 except ImportError:
     try:
-        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+        from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
     except ImportError:
-        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+        try:
+            from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+        except ImportError:
+            from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
 
 from datetime import datetime, timedelta, time
 import json
@@ -85,9 +88,12 @@ class HorasExtrasSystem:
     def solicitar_horas_extras(self, usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado):
         """Registra uma nova solicitação de horas extras"""
         try:
-            from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
-        except Exception:
             from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError:
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError:
+                from .db_utils import database_transaction, create_error_response, create_success_response
         
         try:
             # Validações básicas
@@ -223,9 +229,12 @@ class HorasExtrasSystem:
     def aprovar_solicitacao(self, solicitacao_id, aprovador, observacoes=None):
         """Aprova uma solicitação de horas extras"""
         try:
-            from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
-        except Exception:
             from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError:
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError:
+                from .db_utils import database_transaction, create_error_response, create_success_response
         
         try:
             with database_transaction(self.db_path) as cursor:
@@ -273,9 +282,12 @@ class HorasExtrasSystem:
     def rejeitar_solicitacao(self, solicitacao_id, aprovador, observacoes):
         """Rejeita uma solicitação de horas extras"""
         try:
-            from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
-        except Exception:
             from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError:
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError:
+                from .db_utils import database_transaction, create_error_response, create_success_response
         
         try:
             with database_transaction(self.db_path) as cursor:
