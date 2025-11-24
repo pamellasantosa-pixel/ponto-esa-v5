@@ -6,10 +6,12 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 import sqlite3
 try:
     from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: Import direto falhou em calculo_horas_system: {e}")
     try:
         from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except ImportError:
+    except ImportError as e2:
+        print(f"DEBUG: Import absoluto falhou em calculo_horas_system: {e2}")
         try:
             from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
         except ImportError:

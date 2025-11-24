@@ -6,10 +6,12 @@ Gerencia solicitações e aprovações de horas extras
 import sqlite3
 try:
     from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except ImportError:
+except ImportError as e:
+    print(f"DEBUG: Import direto falhou em horas_extras_system: {e}")
     try:
         from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except ImportError:
+    except ImportError as e2:
+        print(f"DEBUG: Import absoluto falhou em horas_extras_system: {e2}")
         try:
             from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
         except ImportError:
