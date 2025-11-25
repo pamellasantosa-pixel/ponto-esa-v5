@@ -7366,8 +7366,8 @@ def configurar_jornada_interface():
         <style>
         /* Aumenta espaço disponível para o seletor de horário */
         [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
-            min-width: 220px;
-            max-width: 320px;
+            min-width: 320px;
+            max-width: 420px;
             width: 100%;
         }
         /* Força o input a ocupar largura do contêiner interno */
@@ -7472,8 +7472,10 @@ def configurar_jornada_interface():
                     intervalo_novo = 0
 
                     if trabalha_novo:
-                        # dar mais espaço horizontal aos campos de horário
-                        col1, col2 = st.columns([2, 3])
+                        # Ajustar proporção: aumentar Hora Início para igual ao tamanho
+                        # anterior do Hora Fim e dobrar o tamanho atual do Hora Fim
+                        # (ex: antes era [2,3] -> agora [3,6])
+                        col1, col2 = st.columns([3, 6])
                         with col1:
                             # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
                             try:
@@ -7523,7 +7525,7 @@ def configurar_jornada_interface():
                             key=f"intervalo_{dia}"
                         )
                     # (se não trabalha_novo, as variáveis já estão inicializadas acima)
-                    
+
                     # Botão para salvar este dia
                     if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", use_container_width=True):
                         # Atualizar configuração
