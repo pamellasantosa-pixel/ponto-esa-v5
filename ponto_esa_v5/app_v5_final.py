@@ -7364,8 +7364,16 @@ def configurar_jornada_interface():
     st.markdown(
         """
         <style>
+        /* Aumenta espaço disponível para o seletor de horário */
         [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
-            min-width: 160px;
+            min-width: 220px;
+            max-width: 320px;
+            width: 100%;
+        }
+        /* Força o input a ocupar largura do contêiner interno */
+        [data-testid="stTimeInput"] .stTimeInput input {
+            width: 100%;
+            box-sizing: border-box;
         }
         </style>
         """,
@@ -7463,8 +7471,9 @@ def configurar_jornada_interface():
                     hora_fim_nova = None
                     intervalo_novo = 0
                     
-                    if trabalha_novo:
-                        col1, col2 = st.columns(2)
+                        if trabalha_novo:
+                        # dar mais espaço horizontal aos campos de horário
+                        col1, col2 = st.columns([2, 3])
                         with col1:
                             # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
                             try:
