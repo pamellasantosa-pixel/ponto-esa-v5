@@ -7335,6 +7335,17 @@ def configurar_jornada_interface():
         <p>Configure horários de trabalho variáveis para cada funcionário</p>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <style>
+        [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
+            min-width: 160px;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
     
     # Buscar funcionários ativos
     if REFACTORING_ENABLED:
@@ -7440,11 +7451,12 @@ def configurar_jornada_interface():
                             if inicio_key not in st.session_state:
                                 st.session_state[inicio_key] = hora_inicio_val
 
-                            hora_inicio_novo = st.time_input(
-                                "Hora Início",
-                                value=st.session_state[inicio_key],
-                                key=inicio_key
-                            )
+                                hora_inicio_novo = st.time_input(
+                                    "Hora Início",
+                                    value=st.session_state[inicio_key],
+                                    key=inicio_key
+                                )
+                                st.session_state[inicio_key] = hora_inicio_novo
                         
                         with col2:
                             # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
@@ -7461,11 +7473,12 @@ def configurar_jornada_interface():
                             if fim_key not in st.session_state:
                                 st.session_state[fim_key] = hora_fim_val
 
-                            hora_fim_nova = st.time_input(
-                                "Hora Fim",
-                                value=st.session_state[fim_key],
-                                key=fim_key
-                            )
+                                hora_fim_nova = st.time_input(
+                                    "Hora Fim",
+                                    value=st.session_state[fim_key],
+                                    key=fim_key
+                                )
+                                st.session_state[fim_key] = hora_fim_nova
                         
                         intervalo_novo = st.number_input(
                             "Intervalo (minutos)",
