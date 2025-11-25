@@ -5098,8 +5098,8 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
         if REFACTORING_ENABLED:
             try:
                 query_he = """
-                    SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
-                           h.data_solicitacao, u.nome_completo
+                      SELECT h.id, h.usuario, h.data, h.hora_inicio, h.hora_fim, h.justificativa,
+                          h.data_solicitacao, u.nome_completo
                     FROM solicitacoes_horas_extras h
                     LEFT JOIN usuarios u ON h.usuario = u.usuario
                     WHERE h.status = 'pendente'
@@ -5114,7 +5114,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
+                SELECT h.id, h.usuario, h.data, h.hora_inicio, h.hora_fim, h.justificativa,
                        h.data_solicitacao, u.nome_completo
                 FROM solicitacoes_horas_extras h
                 LEFT JOIN usuarios u ON h.usuario = u.usuario
@@ -5128,8 +5128,34 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             st.info(f"📋 {len(he_pendentes)} solicitação(ões) de horas extras")
             
             for he in he_pendentes:
-                he_id, usuario, data, horas, justificativa, data_solicitacao, nome_completo = he
-                
+                # he: id, usuario, data, hora_inicio, hora_fim, justificativa, data_solicitacao, nome_completo
+                he_id, usuario, data, hora_inicio, hora_fim, justificativa, data_solicitacao, nome_completo = he
+
+                # Calcular duração em horas a partir de hora_inicio/hora_fim
+                horas = 0
+                try:
+                    if isinstance(hora_inicio, str):
+                        fmt = '%H:%M:%S' if hora_inicio.count(':') == 2 else '%H:%M'
+                        hi = datetime.strptime(hora_inicio, fmt).time()
+                    else:
+                        hi = hora_inicio
+
+                    if isinstance(hora_fim, str):
+                        fmt = '%H:%M:%S' if hora_fim.count(':') == 2 else '%H:%M'
+                        hf = datetime.strptime(hora_fim, fmt).time()
+                    else:
+                        hf = hora_fim
+
+                    if hi and hf:
+                        dt_hi = datetime.combine(date.today(), hi)
+                        dt_hf = datetime.combine(date.today(), hf)
+                        delta = (dt_hf - dt_hi).total_seconds()
+                        if delta < 0:
+                            delta += 24 * 3600
+                        horas = delta / 3600
+                except Exception:
+                    horas = 0
+
                 with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(f"**Data:** {data}")
@@ -7065,7 +7091,6 @@ def sistema_interface():
             )
         """)
         conn.commit()
-        conn.close()
 
     # Configurações padrão
     configs_padrao = [
