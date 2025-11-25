@@ -7456,7 +7456,6 @@ def configurar_jornada_interface():
                                     value=st.session_state[inicio_key],
                                     key=inicio_key
                                 )
-                                st.session_state[inicio_key] = hora_inicio_novo
                         
                         with col2:
                             # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
@@ -7478,7 +7477,6 @@ def configurar_jornada_interface():
                                     value=st.session_state[fim_key],
                                     key=fim_key
                                 )
-                                st.session_state[fim_key] = hora_fim_nova
                         
                         intervalo_novo = st.number_input(
                             "Intervalo (minutos)",
