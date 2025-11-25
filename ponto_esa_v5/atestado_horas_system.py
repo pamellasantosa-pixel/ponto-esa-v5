@@ -100,9 +100,33 @@ class AtestadoHorasSystem:
         ]
         return [dict(zip(colunas, r)) for r in rows]
     
-    def aprovar_atestado(self, atestado_id):
-        """Aprova um atestado"""
-        pass
+    def aprovar_atestado(self, atestado_id, gestor, observacoes=None):
+        """Aprova um atestado de horas"""
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE atestado_horas
+                SET status = %s, aprovado_por = %s, data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                WHERE id = %s
+                """ if USE_POSTGRESQL else """
+                UPDATE atestado_horas
+                SET status = ?, aprovado_por = ?, data_aprovacao = CURRENT_TIMESTAMP, observacoes = ?
+                WHERE id = ?
+                """,
+                ("aprovado", gestor, observacoes, atestado_id) if USE_POSTGRESQL else ("aprovado", gestor, observacoes, atestado_id),
+            )
+            conn.commit()
+            conn.close()
+            return {"success": True, "message": "Atestado aprovado"}
+        except Exception as e:
+            try:
+                conn.rollback()
+                conn.close()
+            except Exception:
+                pass
+            return {"success": False, "message": str(e)}
     
     def rejeitar_atestado(self, atestado_id, gestor, motivo):
         """Rejeita um atestado: marca como 'rejeitado' e registra observações.
