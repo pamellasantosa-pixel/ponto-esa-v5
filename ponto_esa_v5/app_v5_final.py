@@ -7436,10 +7436,14 @@ def configurar_jornada_interface():
                             except Exception:
                                 hora_inicio_val = datetime.strptime('08:00', '%H:%M').time()
 
+                            inicio_key = f"inicio_{dia}"
+                            if inicio_key not in st.session_state:
+                                st.session_state[inicio_key] = hora_inicio_val
+
                             hora_inicio_novo = st.time_input(
                                 "Hora Início",
-                                value=hora_inicio_val,
-                                key=f"inicio_{dia}"
+                                value=st.session_state[inicio_key],
+                                key=inicio_key
                             )
                         
                         with col2:
@@ -7453,10 +7457,14 @@ def configurar_jornada_interface():
                             except Exception:
                                 hora_fim_val = datetime.strptime('17:00', '%H:%M').time()
 
+                            fim_key = f"fim_{dia}"
+                            if fim_key not in st.session_state:
+                                st.session_state[fim_key] = hora_fim_val
+
                             hora_fim_nova = st.time_input(
                                 "Hora Fim",
-                                value=hora_fim_val,
-                                key=f"fim_{dia}"
+                                value=st.session_state[fim_key],
+                                key=fim_key
                             )
                         
                         intervalo_novo = st.number_input(
