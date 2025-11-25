@@ -91,11 +91,13 @@ class HorasExtrasSystem:
         """Registra uma nova solicitação de horas extras"""
         try:
             from db_utils import database_transaction, create_error_response, create_success_response
-        except ImportError:
+        except ImportError as err_direct:
+            print(f"DEBUG: Import direto db_utils falhou em horas_extras_system.aprovar_solicitacao: {err_direct}")
             try:
                 from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
-            except ImportError:
-                from .db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError as err_pkg:
+                print(f"DEBUG: Import ponto_esa_v5.db_utils falhou: {err_pkg}")
+                raise
         
         try:
             # Validações básicas
@@ -232,11 +234,13 @@ class HorasExtrasSystem:
         """Aprova uma solicitação de horas extras"""
         try:
             from db_utils import database_transaction, create_error_response, create_success_response
-        except ImportError:
+        except ImportError as err_direct:
+            print(f"DEBUG: Import direto db_utils falhou em horas_extras_system.rejeitar_solicitacao: {err_direct}")
             try:
                 from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
-            except ImportError:
-                from .db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError as err_pkg:
+                print(f"DEBUG: Import ponto_esa_v5.db_utils falhou: {err_pkg}")
+                raise
         
         try:
             with database_transaction(self.db_path) as cursor:
