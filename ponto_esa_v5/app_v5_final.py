@@ -7470,8 +7470,8 @@ def configurar_jornada_interface():
                     hora_inicio_novo = None
                     hora_fim_nova = None
                     intervalo_novo = 0
-                    
-                        if trabalha_novo:
+
+                    if trabalha_novo:
                         # dar mais espaço horizontal aos campos de horário
                         col1, col2 = st.columns([2, 3])
                         with col1:
