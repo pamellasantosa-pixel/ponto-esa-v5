@@ -7482,7 +7482,6 @@ def configurar_jornada_interface():
 
                             hora_inicio_novo = st.time_input(
                                 "Hora Início",
-                                value=st.session_state[inicio_key],
                                 key=inicio_key
                             )
                         
@@ -7503,7 +7502,6 @@ def configurar_jornada_interface():
 
                             hora_fim_nova = st.time_input(
                                 "Hora Fim",
-                                value=st.session_state[fim_key],
                                 key=fim_key
                             )
                         
