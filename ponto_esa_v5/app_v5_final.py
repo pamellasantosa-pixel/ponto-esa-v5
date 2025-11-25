@@ -7433,6 +7433,10 @@ def configurar_jornada_interface():
                         value=dia_config.get('trabalha', True),
                         key=f"trabalha_{dia}"
                     )
+                    # Garantir variáveis definidas em todos os fluxos (evita UnboundLocalError)
+                    hora_inicio_novo = None
+                    hora_fim_nova = None
+                    intervalo_novo = 0
                     
                     if trabalha_novo:
                         col1, col2 = st.columns(2)
@@ -7486,10 +7490,7 @@ def configurar_jornada_interface():
                             step=15,
                             key=f"intervalo_{dia}"
                         )
-                    else:
-                        hora_inicio_novo = None
-                        hora_fim_nova = None
-                        intervalo_novo = 0
+                    # (se não trabalha_novo, as variáveis já estão inicializadas acima)
                     
                     # Botão para salvar este dia
                     if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", use_container_width=True):
