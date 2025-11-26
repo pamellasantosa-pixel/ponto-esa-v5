@@ -7259,59 +7259,21 @@ def configurar_jornada_interface():
     st.markdown(
         """
         <style>
-        /* Aumenta largura e tamanho do campo de hora - MÚLTIPLOS SELETORES */
-        input[type=time],
-        [data-testid="stTimeInput"] input,
-        [data-baseweb="input"] input,
-        .stTimeInput input {
-            width: 130px !important;
-            min-width: 130px !important;
-            height: 45px !important;
-            font-size: 18px !important;
-            padding: 8px !important;
+        /* Estilo para campos de hora no formulário de jornada */
+        .stTimeInput > div > div > input {
+            width: 80px !important;
+            height: 38px !important;
+            font-size: 14px !important;
         }
-        /* Container do time input */
-        [data-testid="stTimeInput"],
-        .stTimeInput {
-            min-width: 150px !important;
-        }
-        /* Aumenta espaço disponível para o seletor de horário (maior) */
-        [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
-            min-width: 280px;
-            max-width: 520px;
-            width: 100%;
-        }
-        /* Força o input a ocupar largura do contêiner interno */
-        [data-testid="stTimeInput"] .stTimeInput input {
-            width: 100%;
-            box-sizing: border-box;
-        }
-        /* Aumenta altura do dropdown de horário - MUITO MAIOR */
+        /* Aumenta altura do dropdown de horário */
         [data-baseweb="popover"] [data-baseweb="menu"],
         [data-baseweb="popover"] ul,
         [data-baseweb="popover"] [role="listbox"] {
-            max-height: 500px !important;
-            min-height: 400px !important;
+            max-height: 400px !important;
             overflow-y: auto !important;
         }
-        [data-baseweb="select"] [data-baseweb="menu"] {
-            max-height: 500px !important;
-            min-height: 400px !important;
-        }
-        /* Estilo para lista de horários mais visível */
-        ul[role="listbox"] {
-            max-height: 500px !important;
-            min-height: 400px !important;
-            overflow-y: auto !important;
-        }
-        /* Dropdown do time picker especificamente */
-        [data-baseweb="popover"] > div {
-            max-height: 500px !important;
-        }
-        /* Lista de opções do time picker */
         [data-baseweb="menu"] {
-            max-height: 500px !important;
-            min-height: 400px !important;
+            max-height: 400px !important;
         }
         </style>
         """,
@@ -7508,48 +7470,41 @@ def configurar_jornada_interface():
                     intervalo_novo = 0
 
                     if trabalha_novo:
-                        # Ajustar proporção: aumentar Hora Início para igual ao tamanho
-                        # anterior do Hora Fim e dobrar o tamanho atual do Hora Fim
-                        # (ex: antes era [2,3] -> agora [3,6])
-                        col1, col2 = st.columns([1, 1])
-                        with col1:
-                            # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
-                            try:
-                                inicio_val = dia_config.get('inicio', '08:00')
-                                if isinstance(inicio_val, str) and inicio_val.count(":") == 2:
-                                    hora_inicio_val = datetime.strptime(inicio_val, '%H:%M:%S').time()
-                                else:
-                                    hora_inicio_val = datetime.strptime(str(inicio_val), '%H:%M').time()
-                            except Exception:
-                                hora_inicio_val = datetime.strptime('08:00', '%H:%M').time()
+                        # Campos de hora em layout vertical (um embaixo do outro)
+                        # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
+                        try:
+                            inicio_val = dia_config.get('inicio', '08:00')
+                            if isinstance(inicio_val, str) and inicio_val.count(":") == 2:
+                                hora_inicio_val = datetime.strptime(inicio_val, '%H:%M:%S').time()
+                            else:
+                                hora_inicio_val = datetime.strptime(str(inicio_val), '%H:%M').time()
+                        except Exception:
+                            hora_inicio_val = datetime.strptime('08:00', '%H:%M').time()
 
-                            # Usar valor do banco diretamente, não session_state
-                            hora_inicio_novo = st.time_input(
-                                "Hora Início",
-                                value=hora_inicio_val,
-                                key=f"inicio_{dia}_{usuario_username}"
-                            )
+                        hora_inicio_novo = st.time_input(
+                            "Início",
+                            value=hora_inicio_val,
+                            key=f"inicio_{dia}_{usuario_username}"
+                        )
                         
-                        with col2:
-                            # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
-                            try:
-                                fim_val = dia_config.get('fim', '17:00')
-                                if isinstance(fim_val, str) and fim_val.count(":") == 2:
-                                    hora_fim_val = datetime.strptime(fim_val, '%H:%M:%S').time()
-                                else:
-                                    hora_fim_val = datetime.strptime(str(fim_val), '%H:%M').time()
-                            except Exception:
-                                hora_fim_val = datetime.strptime('17:00', '%H:%M').time()
+                        # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
+                        try:
+                            fim_val = dia_config.get('fim', '17:00')
+                            if isinstance(fim_val, str) and fim_val.count(":") == 2:
+                                hora_fim_val = datetime.strptime(fim_val, '%H:%M:%S').time()
+                            else:
+                                hora_fim_val = datetime.strptime(str(fim_val), '%H:%M').time()
+                        except Exception:
+                            hora_fim_val = datetime.strptime('17:00', '%H:%M').time()
 
-                            # Usar valor do banco diretamente, não session_state
-                            hora_fim_nova = st.time_input(
-                                "Hora Fim",
-                                value=hora_fim_val,
-                                key=f"fim_{dia}_{usuario_username}"
-                            )
+                        hora_fim_nova = st.time_input(
+                            "Fim",
+                            value=hora_fim_val,
+                            key=f"fim_{dia}_{usuario_username}"
+                        )
                         
                         intervalo_novo = st.number_input(
-                            "Intervalo (minutos)",
+                            "Intervalo (min)",
                             value=int(dia_config.get('intervalo', 60)),
                             min_value=0,
                             max_value=240,
