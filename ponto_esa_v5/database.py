@@ -472,6 +472,15 @@ def init_db():
         )
     ''')
 
+    # Tabela configuracoes para armazenar parâmetros globais
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS configuracoes (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL,
+            data_atualizacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Inserir usuários padrão se não existirem
     c.execute("SELECT COUNT(*) FROM usuarios")
     if c.fetchone()[0] == 0:
