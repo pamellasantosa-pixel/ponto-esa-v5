@@ -7342,6 +7342,9 @@ def configurar_jornada_interface():
             )
 
         if st.form_submit_button("💾 Salvar jornada padrão", use_container_width=True):
+            # Atualizar jornada após salvar
+            jornada_atual = obter_jornada_usuario(usuario_username)
+            st.experimental_rerun()
             novos_valores = [
                 ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
                 ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
