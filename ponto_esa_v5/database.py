@@ -13,23 +13,53 @@ USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
 if USE_POSTGRESQL:
-    import psycopg2
-    import psycopg2.extras
+    # Tenta usar psycopg (v3) primeiro; se indisponível, cai para psycopg2
+    _PG_DRIVER = None
+    try:
+        import psycopg as _psycopg
+        _PG_DRIVER = 'psycopg'
+    except Exception:
+        try:
+            import psycopg2 as _psycopg2
+            import psycopg2.extras  # noqa: F401
+            _PG_DRIVER = 'psycopg2'
+        except Exception as _e:
+            raise RuntimeError("Nenhum driver PostgreSQL disponível (psycopg ou psycopg2)") from _e
+
     DB_CONFIG = {
         'host': os.getenv('DB_HOST', 'localhost'),
         'database': os.getenv('DB_NAME', 'ponto_esa'),
         'user': os.getenv('DB_USER', 'postgres'),
         'password': os.getenv('DB_PASSWORD', 'postgres'),
-        'port': os.getenv('DB_PORT', '5432')
+        'port': os.getenv('DB_PORT', '5432'),
+        'sslmode': os.getenv('DB_SSLMODE', 'require')
     }
 else:
     import sqlite3
+    from datetime import date, datetime
+
+    # Registrar adaptadores explícitos para evitar DeprecationWarning no Python 3.12+
+    # Armazena date/datetime como texto ISO8601 (compatível com consultas por data)
+    def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
+        return d.isoformat()
+
+    def _adapt_datetime_iso(dt: datetime) -> str:  # type: ignore[override]
+        return dt.isoformat(sep=" ")
+
+    sqlite3.register_adapter(date, _adapt_date_iso)
+    sqlite3.register_adapter(datetime, _adapt_datetime_iso)
 
 
 def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
-        return psycopg2.connect(**DB_CONFIG)
+        if _PG_DRIVER == 'psycopg':
+            cfg = dict(DB_CONFIG)
+            # psycopg3 aceita 'dbname' e também 'database', mas normalizar evita inconsistências
+            cfg['dbname'] = cfg.pop('database', cfg.get('database'))
+            return _psycopg.connect(**cfg)
+        else:
+            return _psycopg2.connect(**DB_CONFIG)
     else:
         os.makedirs('database', exist_ok=True)
         if db_path:
@@ -266,6 +296,60 @@ def init_db():
         )
     ''')
 
+    # Tabela que armazena jornadas semanais personalizadas por usuário
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS jornada_semanal (
+            usuario TEXT NOT NULL,
+            dia TEXT NOT NULL,
+            trabalha INTEGER DEFAULT 1,
+            inicio TIME DEFAULT '08:00',
+            fim TIME DEFAULT '17:00',
+            intervalo INTEGER DEFAULT 60,
+            PRIMARY KEY (usuario, dia)
+        )
+    ''')
+
+    # Tabela de Notificacoes (SQLite)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS Notificacoes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            message TEXT,
+            type TEXT,
+            read INTEGER DEFAULT 0,
+            extra_data TEXT,
+            timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
+    # Tabela de Solicitações de Ajuste de Ponto (inclui campos usados pelos testes)
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_ajuste_ponto (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            aprovador_solicitado TEXT,
+            registro_id INTEGER,
+            data_hora_original TIMESTAMP,
+            data_hora_nova TIMESTAMP,
+            tipo_original TEXT,
+            tipo_novo TEXT,
+            modalidade_original TEXT,
+            modalidade_nova TEXT,
+            projeto_original TEXT,
+            projeto_novo TEXT,
+            justificativa TEXT,
+            dados_solicitados TEXT,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_resposta TIMESTAMP,
+            aprovado_por TEXT,
+            respondido_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    ''')
+
     # Inserir usuários padrão se não existirem
     c.execute("SELECT COUNT(*) FROM usuarios")
     if c.fetchone()[0] == 0:
@@ -356,6 +440,22 @@ def init_db():
     try:
         c.execute("ALTER TABLE uploads ADD COLUMN status TEXT DEFAULT 'ativo'")
     except sqlite3.OperationalError:
+        pass
+
+    # Compatibilidade: adicionar coluna nao_possui_comprovante em atestado_horas se ausente
+    try:
+        c.execute("ALTER TABLE atestado_horas ADD COLUMN nao_possui_comprovante INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    # Compatibilidade: adicionar colunas ausentes em solicitacoes_ajuste_ponto
+    try:
+        c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN aprovador_solicitado TEXT")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN data_resposta TIMESTAMP")
+    except Exception:
         pass
 
     # Tabela para auditoria de correções de registros
