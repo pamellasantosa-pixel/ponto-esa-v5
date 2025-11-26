@@ -16,39 +16,38 @@ REQUIRED_TABLES = [
     'auditoria_correcoes'
 ]
 
-# Remover lógica de fallback para SQLite
-USE_POSTGRESQL = True
-SQL_PLACEHOLDER = "%s"
+# Configuração do banco de dados - usar PostgreSQL
+USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'true').lower() == 'true'
+SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
-# Garantir que todas as tabelas sejam criadas no PostgreSQL
+# Importar psycopg2 se necessário
 if USE_POSTGRESQL:
-    conn = get_connection()
-    cursor = conn.cursor()
+    import psycopg2
+    import psycopg2.extras
 
-    # Criar tabelas obrigatórias
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS horas_extras_ativas (
-            id SERIAL PRIMARY KEY,
-            usuario TEXT NOT NULL,
-            data DATE NOT NULL,
-            hora_inicio TIME NOT NULL,
-            hora_fim TIME NOT NULL,
-            justificativa TEXT NOT NULL,
-            status TEXT DEFAULT 'pendente',
-            data_solicitacao TIMESTAMP DEFAULT NOW(),
-            aprovado_por TEXT,
-            data_aprovacao TIMESTAMP,
-            observacoes TEXT
-        )
-    ''')
 
-    cursor.execute('''
-        ALTER TABLE solicitacoes_correcao_registro
-        ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP
-    ''')
-
-    conn.commit()
-    conn.close()
+def get_connection(db_path: str | None = None):
+    """Retorna uma conexão com o banco de dados configurado"""
+    if USE_POSTGRESQL:
+        database_url = os.getenv('DATABASE_URL')
+        try:
+            if database_url:
+                return psycopg2.connect(database_url)
+            else:
+                db_config_local = {
+                    'host': os.getenv('DB_HOST', 'localhost'),
+                    'database': os.getenv('DB_NAME', 'ponto_esa'),
+                    'user': os.getenv('DB_USER', 'postgres'),
+                    'password': os.getenv('DB_PASSWORD', 'postgres'),
+                    'port': os.getenv('DB_PORT', '5432')
+                }
+                return psycopg2.connect(**db_config_local)
+        except psycopg2.OperationalError as e:
+            print(f"❌ Erro ao conectar no PostgreSQL: {e}")
+            raise
+    else:
+        os.makedirs('database', exist_ok=True)
+        return sqlite3.connect(db_path or 'database/ponto_esa.db')
 
 
 def adapt_sql_for_postgresql(sql):
