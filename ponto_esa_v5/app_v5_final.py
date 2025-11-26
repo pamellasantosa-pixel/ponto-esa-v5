@@ -7270,18 +7270,32 @@ def configurar_jornada_interface():
             width: 100%;
             box-sizing: border-box;
         }
-        /* Aumenta altura do dropdown de horário */
-        [data-baseweb="popover"] [data-baseweb="menu"] {
-            max-height: 350px !important;
+        /* Aumenta altura do dropdown de horário - MUITO MAIOR */
+        [data-baseweb="popover"] [data-baseweb="menu"],
+        [data-baseweb="popover"] ul,
+        [data-baseweb="popover"] [role="listbox"] {
+            max-height: 500px !important;
+            min-height: 400px !important;
             overflow-y: auto !important;
         }
         [data-baseweb="select"] [data-baseweb="menu"] {
-            max-height: 350px !important;
+            max-height: 500px !important;
+            min-height: 400px !important;
         }
         /* Estilo para lista de horários mais visível */
         ul[role="listbox"] {
-            max-height: 350px !important;
+            max-height: 500px !important;
+            min-height: 400px !important;
             overflow-y: auto !important;
+        }
+        /* Dropdown do time picker especificamente */
+        [data-baseweb="popover"] > div {
+            max-height: 500px !important;
+        }
+        /* Lista de opções do time picker */
+        [data-baseweb="menu"] {
+            max-height: 500px !important;
+            min-height: 400px !important;
         }
         </style>
         """,
@@ -7538,8 +7552,8 @@ def configurar_jornada_interface():
                             'intervalo': int(intervalo_novo)
                         }
                         
-                        # Salvar no banco
-                        if salvar_jornada_semanal(usuario_id, jornada_atual):
+                        # Salvar no banco - usar usuario_username (texto) em vez de usuario_id (número)
+                        if salvar_jornada_semanal(usuario_username, jornada_atual):
                             log_security_event("SCHEDULE_UPDATED", usuario=st.session_state.usuario, context={"target_user": usuario_username, "dia": dia})
                             st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
                             st.rerun()
@@ -7559,7 +7573,7 @@ def configurar_jornada_interface():
             for dia in ['ter', 'qua', 'qui', 'sex']:
                 jornada_atual[dia] = padrao.copy()
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Padrão copiado para dias úteis!")
                 st.rerun()
             else:
@@ -7570,7 +7584,7 @@ def configurar_jornada_interface():
             for dia in ['sab', 'dom']:
                 jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Fim de semana desativado!")
                 st.rerun()
             else:
@@ -7585,7 +7599,7 @@ def configurar_jornada_interface():
                 else:
                     jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Jornada resetada para padrão!")
                 st.rerun()
             else:
