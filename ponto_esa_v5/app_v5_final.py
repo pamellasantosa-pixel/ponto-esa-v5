@@ -7259,6 +7259,12 @@ def configurar_jornada_interface():
     st.markdown(
         """
         <style>
+        /* Aumenta largura e tamanho do campo de hora */
+        input[type=time] {
+            width: 130px !important;
+            height: 45px !important;
+            font-size: 20px !important;
+        }
         /* Aumenta espaço disponível para o seletor de horário (maior) */
         [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
             min-width: 280px;
