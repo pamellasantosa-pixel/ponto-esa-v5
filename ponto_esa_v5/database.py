@@ -7,6 +7,16 @@ import sqlite3
 # Carregar variáveis de ambiente
 load_dotenv()
 
+# Verificar se deve resetar o banco SQLite (usar RESET_SQLITE_DB=true no Render uma vez)
+RESET_SQLITE_DB = os.getenv('RESET_SQLITE_DB', 'false').lower() == 'true'
+if RESET_SQLITE_DB:
+    db_file = 'database/ponto_esa.db'
+    if os.path.exists(db_file):
+        os.remove(db_file)
+        logging.info(f"Banco SQLite '{db_file}' removido para recriação.")
+    # Desativar flag após execução (evita loop)
+    os.environ['RESET_SQLITE_DB'] = 'false'
+
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
 
