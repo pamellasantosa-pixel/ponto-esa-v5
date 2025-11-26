@@ -3,6 +3,7 @@ import os
 import hashlib
 import logging
 from dotenv import load_dotenv
+import sqlite3
 
 # Carregar variáveis de ambiente
 load_dotenv()
