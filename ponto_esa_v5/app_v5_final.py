@@ -7270,6 +7270,19 @@ def configurar_jornada_interface():
             width: 100%;
             box-sizing: border-box;
         }
+        /* Aumenta altura do dropdown de horário */
+        [data-baseweb="popover"] [data-baseweb="menu"] {
+            max-height: 350px !important;
+            overflow-y: auto !important;
+        }
+        [data-baseweb="select"] [data-baseweb="menu"] {
+            max-height: 350px !important;
+        }
+        /* Estilo para lista de horários mais visível */
+        ul[role="listbox"] {
+            max-height: 350px !important;
+            overflow-y: auto !important;
+        }
         </style>
         """,
         unsafe_allow_html=True
@@ -7453,11 +7466,11 @@ def configurar_jornada_interface():
             # Usar expander para editar
             with st.expander(f"{trabalha_emoji} {NOMES_DIAS.get(dia, dia).split('-')[0]}\n{horario_texto}"):
                 # Form para editar este dia
-                with st.form(f"form_jornada_{dia}"):
+                with st.form(f"form_jornada_{dia}_{usuario_username}"):
                     trabalha_novo = st.checkbox(
                         "Trabalha neste dia",
                         value=dia_config.get('trabalha', True),
-                        key=f"trabalha_{dia}"
+                        key=f"trabalha_{dia}_{usuario_username}"
                     )
                     # Garantir variáveis definidas em todos os fluxos (evita UnboundLocalError)
                     hora_inicio_novo = None
@@ -7468,7 +7481,7 @@ def configurar_jornada_interface():
                         # Ajustar proporção: aumentar Hora Início para igual ao tamanho
                         # anterior do Hora Fim e dobrar o tamanho atual do Hora Fim
                         # (ex: antes era [2,3] -> agora [3,6])
-                        col1, col2 = st.columns([3, 6])
+                        col1, col2 = st.columns([1, 1])
                         with col1:
                             # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
                             try:
@@ -7480,13 +7493,11 @@ def configurar_jornada_interface():
                             except Exception:
                                 hora_inicio_val = datetime.strptime('08:00', '%H:%M').time()
 
-                            inicio_key = f"inicio_{dia}"
-                            if inicio_key not in st.session_state:
-                                st.session_state[inicio_key] = hora_inicio_val
-
+                            # Usar valor do banco diretamente, não session_state
                             hora_inicio_novo = st.time_input(
                                 "Hora Início",
-                                key=inicio_key
+                                value=hora_inicio_val,
+                                key=f"inicio_{dia}_{usuario_username}"
                             )
                         
                         with col2:
@@ -7500,13 +7511,11 @@ def configurar_jornada_interface():
                             except Exception:
                                 hora_fim_val = datetime.strptime('17:00', '%H:%M').time()
 
-                            fim_key = f"fim_{dia}"
-                            if fim_key not in st.session_state:
-                                st.session_state[fim_key] = hora_fim_val
-
+                            # Usar valor do banco diretamente, não session_state
                             hora_fim_nova = st.time_input(
                                 "Hora Fim",
-                                key=fim_key
+                                value=hora_fim_val,
+                                key=f"fim_{dia}_{usuario_username}"
                             )
                         
                         intervalo_novo = st.number_input(
@@ -7515,7 +7524,7 @@ def configurar_jornada_interface():
                             min_value=0,
                             max_value=240,
                             step=15,
-                            key=f"intervalo_{dia}"
+                            key=f"intervalo_{dia}_{usuario_username}"
                         )
                     # (se não trabalha_novo, as variáveis já estão inicializadas acima)
 
@@ -7532,23 +7541,6 @@ def configurar_jornada_interface():
                         # Salvar no banco
                         if salvar_jornada_semanal(usuario_id, jornada_atual):
                             log_security_event("SCHEDULE_UPDATED", usuario=st.session_state.usuario, context={"target_user": usuario_username, "dia": dia})
-                            # Atualizar session_state para refletir imediatamente as mudanças nos widgets
-                            try:
-                                inicio_key = f"inicio_{dia}"
-                                fim_key = f"fim_{dia}"
-                                if hora_inicio_novo:
-                                    st.session_state[inicio_key] = hora_inicio_novo
-                                else:
-                                    st.session_state[inicio_key] = datetime.strptime(jornada_atual[dia].get('inicio','08:00'), '%H:%M').time()
-
-                                if hora_fim_nova:
-                                    st.session_state[fim_key] = hora_fim_nova
-                                else:
-                                    st.session_state[fim_key] = datetime.strptime(jornada_atual[dia].get('fim','17:00'), '%H:%M').time()
-                            except Exception:
-                                # não bloquear fluxo principal se algo falhar ao atualizar session_state
-                                pass
-
                             st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
                             st.rerun()
                         else:
