@@ -16,198 +16,39 @@ REQUIRED_TABLES = [
     'auditoria_correcoes'
 ]
 
-def _check_and_reset_sqlite_if_incomplete():
-    """Verifica se o banco SQLite está completo, se não, exclui para recriação."""
-    db_file = 'database/ponto_esa.db'
-    if not os.path.exists(db_file):
-        return  # Banco não existe, será criado normalmente
-    
-    try:
-        conn = sqlite3.connect(db_file)
-        cursor = conn.cursor()
-        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
-        existing_tables = {row[0] for row in cursor.fetchall()}
-        conn.close()
-        
-        missing_tables = set(REQUIRED_TABLES) - existing_tables
-        if missing_tables:
-            logging.warning(f"Tabelas faltando no SQLite: {missing_tables}. Recriando banco...")
-            os.remove(db_file)
-            logging.info(f"Banco SQLite '{db_file}' removido para recriação completa.")
-    except Exception as e:
-        logging.error(f"Erro ao verificar banco SQLite: {e}. Removendo para recriação.")
-        if os.path.exists(db_file):
-            os.remove(db_file)
+# Remover lógica de fallback para SQLite
+USE_POSTGRESQL = True
+SQL_PLACEHOLDER = "%s"
 
-# Executar verificação automática no início
-_check_and_reset_sqlite_if_incomplete()
-
-# Configuração do banco de dados
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
-
-# Placeholder para queries SQL (PostgreSQL usa %s, SQLite usa ?)
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
-
+# Garantir que todas as tabelas sejam criadas no PostgreSQL
 if USE_POSTGRESQL:
-    # Tenta usar psycopg (v3) primeiro; se indisponível, cai para psycopg2
-    _PG_DRIVER = None
-    try:
-        import psycopg as _psycopg
-        _PG_DRIVER = 'psycopg'
-    except Exception:
-        try:
-            import psycopg2 as _psycopg2
-            import psycopg2.extras  # noqa: F401
-            _PG_DRIVER = 'psycopg2'
-        except Exception as _e:
-            raise RuntimeError("Nenhum driver PostgreSQL disponível (psycopg ou psycopg2)") from _e
+    conn = get_connection()
+    cursor = conn.cursor()
 
-    DB_CONFIG = {
-        'host': os.getenv('DB_HOST', 'localhost'),
-        'database': os.getenv('DB_NAME', 'ponto_esa'),
-        'user': os.getenv('DB_USER', 'postgres'),
-        'password': os.getenv('DB_PASSWORD', 'postgres'),
-        'port': os.getenv('DB_PORT', '5432'),
-        'sslmode': os.getenv('DB_SSLMODE', 'require')
-    }
-else:
-    from datetime import date, datetime
+    # Criar tabelas obrigatórias
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            data DATE NOT NULL,
+            hora_inicio TIME NOT NULL,
+            hora_fim TIME NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    ''')
 
-    def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
-        return d.isoformat()
+    cursor.execute('''
+        ALTER TABLE solicitacoes_correcao_registro
+        ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP
+    ''')
 
-    def _adapt_datetime_iso(dt: datetime) -> str:  # type: ignore[override]
-        return dt.isoformat(sep=" ")
-
-    sqlite3.register_adapter(date, _adapt_date_iso)
-    sqlite3.register_adapter(datetime, _adapt_datetime_iso)
-
-
-def get_connection(db_path: str | None = None):
-    """Retorna uma conexão com o banco de dados configurado"""
-    if USE_POSTGRESQL:
-        try:
-            # Tentar estabelecer conexão e atribuir a `conn` para garantir
-            # que qualquer exceção seja capturada pelo bloco abaixo.
-            conn = None
-            if _PG_DRIVER == 'psycopg':
-                cfg = dict(DB_CONFIG)
-                # psycopg3 aceita 'dbname' e também 'database', mas normalizar evita inconsistências
-                cfg['dbname'] = cfg.pop('database', cfg.get('database'))
-                conn = _psycopg.connect(**cfg)
-            else:
-                conn = _psycopg2.connect(**DB_CONFIG)
-
-            # Se chegamos até aqui, a conexão PostgreSQL foi estabelecida
-            return conn
-        except Exception as e:
-            # Registrar exceção completa e cair para o fallback SQLite
-            logging.exception("Falha ao conectar no PostgreSQL, usando fallback para SQLite: %s", e)
-            # Fallback: criar conexão SQLite local
-            try:
-                from datetime import date, datetime
-
-                def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
-                    return d.isoformat()
-
-                def _adapt_datetime_iso(dt: datetime) -> str:  # type: ignore[override]
-                    return dt.isoformat(sep=" ")
-
-                sqlite3.register_adapter(date, _adapt_date_iso)
-                sqlite3.register_adapter(datetime, _adapt_datetime_iso)
-
-                os.makedirs('database', exist_ok=True)
-                if db_path:
-                    conn = sqlite3.connect(db_path)
-                else:
-                    conn = sqlite3.connect('database/ponto_esa.db')
-
-                class AdaptCursor:
-                    def __init__(self, cursor):
-                        self._cursor = cursor
-
-                    def execute(self, sql, params=None):
-                        if isinstance(sql, str):
-                            sql = sql.replace('%s', SQL_PLACEHOLDER)
-                        if params is None:
-                            return self._cursor.execute(sql)
-                        return self._cursor.execute(sql, params)
-
-                    def executemany(self, sql, seq_of_params):
-                        if isinstance(sql, str):
-                            sql = sql.replace('%s', SQL_PLACEHOLDER)
-                        return self._cursor.executemany(sql, seq_of_params)
-
-                    def __getattr__(self, name):
-                        return getattr(self._cursor, name)
-
-                class ConnectionWrapper:
-                    def __init__(self, conn):
-                        self._conn = conn
-
-                    def cursor(self):
-                        return AdaptCursor(self._conn.cursor())
-
-                    def commit(self):
-                        return self._conn.commit()
-
-                    def close(self):
-                        return self._conn.close()
-
-                    def __getattr__(self, name):
-                        return getattr(self._conn, name)
-
-                # Atualizar variáveis globais para refletir o fallback
-                globals()['USE_POSTGRESQL'] = False
-                globals()['SQL_PLACEHOLDER'] = "?"
-
-                return ConnectionWrapper(conn)
-            except Exception:
-                # Se o fallback também falhar, relançar a exceção original
-                raise
-    else:
-        os.makedirs('database', exist_ok=True)
-        if db_path:
-            conn = sqlite3.connect(db_path)
-        else:
-            conn = sqlite3.connect('database/ponto_esa.db')
-
-        class AdaptCursor:
-            def __init__(self, cursor):
-                self._cursor = cursor
-
-            def execute(self, sql, params=None):
-                if isinstance(sql, str):
-                    sql = sql.replace('%s', SQL_PLACEHOLDER)
-                if params is None:
-                    return self._cursor.execute(sql)
-                return self._cursor.execute(sql, params)
-
-            def executemany(self, sql, seq_of_params):
-                if isinstance(sql, str):
-                    sql = sql.replace('%s', SQL_PLACEHOLDER)
-                return self._cursor.executemany(sql, seq_of_params)
-
-            def __getattr__(self, name):
-                return getattr(self._cursor, name)
-
-        class ConnectionWrapper:
-            def __init__(self, conn):
-                self._conn = conn
-
-            def cursor(self):
-                return AdaptCursor(self._conn.cursor())
-
-            def commit(self):
-                return self._conn.commit()
-
-            def close(self):
-                return self._conn.close()
-
-            def __getattr__(self, name):
-                return getattr(self._conn, name)
-
-        return ConnectionWrapper(conn)
+    conn.commit()
+    conn.close()
 
 
 def adapt_sql_for_postgresql(sql):
