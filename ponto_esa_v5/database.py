@@ -37,11 +37,8 @@ if USE_POSTGRESQL:
         'sslmode': os.getenv('DB_SSLMODE', 'require')
     }
 else:
-    import sqlite3
     from datetime import date, datetime
 
-    # Registrar adaptadores explícitos para evitar DeprecationWarning no Python 3.12+
-    # Armazena date/datetime como texto ISO8601 (compatível com consultas por data)
     def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
         return d.isoformat()
 
@@ -74,7 +71,6 @@ def get_connection(db_path: str | None = None):
             logging.exception("Falha ao conectar no PostgreSQL, usando fallback para SQLite: %s", e)
             # Fallback: criar conexão SQLite local
             try:
-                import sqlite3
                 from datetime import date, datetime
 
                 def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
