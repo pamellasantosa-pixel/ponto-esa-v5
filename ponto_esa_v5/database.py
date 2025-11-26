@@ -1,4 +1,3 @@
-
 import os
 import hashlib
 import logging
@@ -416,6 +415,23 @@ def init_db():
             data_resposta TIMESTAMP,
             aprovado_por TEXT,
             respondido_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    ''')
+
+    # Tabela para solicitações de correção de registro
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_correcao_registro (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            registro_id INTEGER NOT NULL,
+            data_hora_original TIMESTAMP NOT NULL,
+            data_hora_corrigida TIMESTAMP NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            aprovado_por TEXT,
             data_aprovacao TIMESTAMP,
             observacoes TEXT
         )
