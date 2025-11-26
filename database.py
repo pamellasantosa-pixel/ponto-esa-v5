@@ -20,3 +20,6 @@ except Exception as _e:
         raise RuntimeError('database shim: módulo interno não disponível')
 
     __all__ = ['get_connection', 'init_db']
+
+# Importar a função get_connection do módulo database_postgresql
+from ponto_esa_v5.database_postgresql import get_connection
