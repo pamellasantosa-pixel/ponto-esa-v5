@@ -7364,10 +7364,10 @@ def configurar_jornada_interface():
     st.markdown(
         """
         <style>
-        /* Aumenta espaço disponível para o seletor de horário */
+        /* Aumenta espaço disponível para o seletor de horário (maior) */
         [data-testid="stTimeInput"] .stTimeInput, [data-baseweb="timepicker"] {
-            min-width: 320px;
-            max-width: 420px;
+            min-width: 280px;
+            max-width: 520px;
             width: 100%;
         }
         /* Força o input a ocupar largura do contêiner interno */
@@ -7539,6 +7539,23 @@ def configurar_jornada_interface():
                         # Salvar no banco
                         if salvar_jornada_semanal(usuario_id, jornada_atual):
                             log_security_event("SCHEDULE_UPDATED", usuario=st.session_state.usuario, context={"target_user": usuario_username, "dia": dia})
+                            # Atualizar session_state para refletir imediatamente as mudanças nos widgets
+                            try:
+                                inicio_key = f"inicio_{dia}"
+                                fim_key = f"fim_{dia}"
+                                if hora_inicio_novo:
+                                    st.session_state[inicio_key] = hora_inicio_novo
+                                else:
+                                    st.session_state[inicio_key] = datetime.strptime(jornada_atual[dia].get('inicio','08:00'), '%H:%M').time()
+
+                                if hora_fim_nova:
+                                    st.session_state[fim_key] = hora_fim_nova
+                                else:
+                                    st.session_state[fim_key] = datetime.strptime(jornada_atual[dia].get('fim','17:00'), '%H:%M').time()
+                            except Exception:
+                                # não bloquear fluxo principal se algo falhar ao atualizar session_state
+                                pass
+
                             st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
                             st.rerun()
                         else:
