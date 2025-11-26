@@ -601,6 +601,29 @@ def init_db():
         )
     ''')
 
+    # Tabela horas_extras_ativas para gerenciar solicitações de horas extras
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT NOT NULL,
+            data DATE NOT NULL,
+            hora_inicio TIME NOT NULL,
+            hora_fim TIME NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    ''')
+
+    # Adicionar coluna data_hora_nova em solicitacoes_correcao_registro
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN data_hora_nova TIMESTAMP")
+    except sqlite3.OperationalError:
+        pass
+
     conn.commit()
     conn.close()
 
