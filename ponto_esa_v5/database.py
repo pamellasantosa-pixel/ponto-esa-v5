@@ -7,15 +7,40 @@ import sqlite3
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Verificar se deve resetar o banco SQLite (usar RESET_SQLITE_DB=true no Render uma vez)
-RESET_SQLITE_DB = os.getenv('RESET_SQLITE_DB', 'false').lower() == 'true'
-if RESET_SQLITE_DB:
+# Lista de tabelas obrigatórias que devem existir no banco
+REQUIRED_TABLES = [
+    'usuarios', 'registros_ponto', 'ausencias', 'projetos',
+    'solicitacoes_horas_extras', 'atestado_horas', 'atestados_horas',
+    'uploads', 'banco_horas', 'feriados', 'jornada_semanal',
+    'Notificacoes', 'solicitacoes_ajuste_ponto', 'solicitacoes_correcao_registro',
+    'auditoria_correcoes'
+]
+
+def _check_and_reset_sqlite_if_incomplete():
+    """Verifica se o banco SQLite está completo, se não, exclui para recriação."""
     db_file = 'database/ponto_esa.db'
-    if os.path.exists(db_file):
-        os.remove(db_file)
-        logging.info(f"Banco SQLite '{db_file}' removido para recriação.")
-    # Desativar flag após execução (evita loop)
-    os.environ['RESET_SQLITE_DB'] = 'false'
+    if not os.path.exists(db_file):
+        return  # Banco não existe, será criado normalmente
+    
+    try:
+        conn = sqlite3.connect(db_file)
+        cursor = conn.cursor()
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table'")
+        existing_tables = {row[0] for row in cursor.fetchall()}
+        conn.close()
+        
+        missing_tables = set(REQUIRED_TABLES) - existing_tables
+        if missing_tables:
+            logging.warning(f"Tabelas faltando no SQLite: {missing_tables}. Recriando banco...")
+            os.remove(db_file)
+            logging.info(f"Banco SQLite '{db_file}' removido para recriação completa.")
+    except Exception as e:
+        logging.error(f"Erro ao verificar banco SQLite: {e}. Removendo para recriação.")
+        if os.path.exists(db_file):
+            os.remove(db_file)
+
+# Executar verificação automática no início
+_check_and_reset_sqlite_if_incomplete()
 
 # Configuração do banco de dados
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
