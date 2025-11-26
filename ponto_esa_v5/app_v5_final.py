@@ -20,9 +20,10 @@ if parent_dir not in sys.path:
     sys.path.insert(0, parent_dir)
 
 from notifications import notification_manager
-from calculo_horas_system import CalculoHorasSystem
+from calculo_horas_system import CalculoHorasSystem, format_time_duration
 from banco_horas_system import BancoHorasSystem, format_saldo_display
-from horas_extras_system import HorasExtrasSystem
+from horas_extras_system import HorasExtrasSystem, get_status_emoji
+from atestado_horas_system import AtestadoHorasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
 # Safe import - provide a robust fallback implementation if streamlit_utils is not available
 # Use dynamic import to avoid static analysis import errors when the optional module is missing.
@@ -32,128 +33,32 @@ try:
     safe_download_button = getattr(_streamlit_utils, 'safe_download_button')
 except Exception:
     def safe_download_button(label, data, file_name, mime="application/octet-stream", use_container_width=False, key=None):
-        """
-        Fallback implementation for safe_download_button:
-        - Accepts bytes or BytesIO
-        - Uses st.download_button when possible, otherwise renders a base64 download link
-        """
-        try:
-            # Ensure we have raw bytes
-            if isinstance(data, BytesIO):
-                content = data.getvalue()
-            else:
-                content = data
+        """Fallback leve caso `streamlit_utils.safe_download_button` não esteja disponível."""
+        from io import BytesIO as _BytesIO
 
-            # Primary: use Streamlit's download button
-            st.download_button(label=label, data=content, file_name=file_name, mime=mime, key=key)
+        if data is None:
+            import streamlit as _st
+            _st.warning("Nenhum arquivo disponível para download.")
+            return
+
+        content = data.getvalue() if isinstance(data, _BytesIO) else data
+        try:
+            import streamlit as _st
+            _st.download_button(
+                label=label,
+                data=content,
+                file_name=file_name,
+                mime=mime,
+                use_container_width=use_container_width,
+                key=key,
+            )
         except Exception:
-            # Secondary: fallback to base64 link (works in most browsers)
-            try:
-                content = data.getvalue() if isinstance(data, BytesIO) else data
-                b64 = base64.b64encode(content).decode()
-                href = f'<a href="data:{mime};base64,{b64}" download="{file_name}">{label}</a>'
-                st.markdown(href, unsafe_allow_html=True)
-            except Exception:
-                # Final fallback: show error message
-                st.error("Erro ao preparar o download do arquivo.")
-from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
-from ajuste_registros_system import AjusteRegistrosSystem
-# Integração com timer (fallback seguro caso o módulo não exista)
-try:
-    try:
-        try:
-            try:
-                from timer_integration_functions import (
-                    exibir_button_solicitar_hora_extra,
-                    exibir_modal_timer_hora_extra,
-                    exibir_dialog_justificativa_hora_extra,
-                    exibir_popup_continuar_hora_extra,
-                    exibir_notificacoes_hora_extra_pendente,
-                )
-            except ImportError:
-                # Fallbacks: implementações seguras que não quebram a aplicação
-                def exibir_button_solicitar_hora_extra(*args, **kwargs):
-                    """Fallback: não exibe nada e retorna False indicando que não foi clicado."""
-                    return False
+            import base64 as _base64
+            import streamlit as _st
 
-                def exibir_modal_timer_hora_extra(*args, **kwargs):
-                    """Fallback: não abre modal, apenas retorna None."""
-                    return None
-
-                def exibir_dialog_justificativa_hora_extra(*args, **kwargs):
-                    """Fallback: ignora solicitação de justificativa e retorna None."""
-                    return None
-
-                def exibir_popup_continuar_hora_extra(*args, **kwargs):
-                    """Fallback: não exibe popup, retorna False."""
-                    return False
-
-                def exibir_notificacoes_hora_extra_pendente(*args, **kwargs):
-                    """Fallback: retorna uma lista vazia de notificações."""
-                    return []
-        except ImportError:
-            # Fallbacks: implementações seguras que não quebram a aplicação
-            def exibir_button_solicitar_hora_extra(*args, **kwargs):
-                """Fallback: não exibe nada e retorna False indicando que não foi clicado."""
-                return False
-
-            def exibir_modal_timer_hora_extra(*args, **kwargs):
-                """Fallback: não abre modal, apenas retorna None."""
-                return None
-
-            def exibir_dialog_justificativa_hora_extra(*args, **kwargs):
-                """Fallback: ignora solicitação de justificativa e retorna None."""
-                return None
-
-            def exibir_popup_continuar_hora_extra(*args, **kwargs):
-                """Fallback: não exibe popup, retorna False."""
-                return False
-
-            def exibir_notificacoes_hora_extra_pendente(*args, **kwargs):
-                """Fallback: retorna uma lista vazia de notificações."""
-                return []
-    except ImportError:
-        # Fallbacks: implementações seguras que não quebram a aplicação
-        def exibir_button_solicitar_hora_extra(*args, **kwargs):
-            """Fallback: não exibe nada e retorna False indicando que não foi clicado."""
-            return False
-
-        def exibir_modal_timer_hora_extra(*args, **kwargs):
-            """Fallback: não abre modal, apenas retorna None."""
-            return None
-
-        def exibir_dialog_justificativa_hora_extra(*args, **kwargs):
-            """Fallback: ignora solicitação de justificativa e retorna None."""
-            return None
-
-        def exibir_popup_continuar_hora_extra(*args, **kwargs):
-            """Fallback: não exibe popup, retorna False."""
-            return False
-
-        def exibir_notificacoes_hora_extra_pendente(*args, **kwargs):
-            """Fallback: retorna uma lista vazia de notificações."""
-            return []
-except Exception:
-    # Fallbacks: implementações seguras que não quebram a aplicação
-    def exibir_button_solicitar_hora_extra(*args, **kwargs):
-        """Fallback: não exibe nada e retorna False indicando que não foi clicado."""
-        return False
-
-    def exibir_modal_timer_hora_extra(*args, **kwargs):
-        """Fallback: não abre modal, apenas retorna None."""
-        return None
-
-    def exibir_dialog_justificativa_hora_extra(*args, **kwargs):
-        """Fallback: ignora solicitação de justificativa e retorna None."""
-        return None
-
-    def exibir_popup_continuar_hora_extra(*args, **kwargs):
-        """Fallback: não exibe popup, retorna False."""
-        return False
-
-    def exibir_notificacoes_hora_extra_pendente(*args, **kwargs):
-        """Fallback: retorna uma lista vazia de notificações."""
-        return []
+            encoded = _base64.b64encode(content).decode()
+            href = f'<a href="data:{mime};base64,{encoded}" download="{file_name}">{label}</a>'
+            _st.markdown(href, unsafe_allow_html=True)
 
 # Importar novos módulos de refatoração
 try:
@@ -192,26 +97,16 @@ logger = logging.getLogger(__name__)
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Verificar se usa PostgreSQL
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+from database import get_connection as get_db_connection, init_db, SQL_PLACEHOLDER
 
-if USE_POSTGRESQL:
-    import psycopg2
-    from database_postgresql import get_connection, init_db
-    # PostgreSQL usa %s como placeholder
-    SQL_PLACEHOLDER = '%s'
-    get_db_connection = get_connection
-else:
-    import sqlite3
-    from database import init_db, get_connection
-    # SQLite usa ? como placeholder
-    SQL_PLACEHOLDER = '?'
-    get_db_connection = get_connection
-
-# Adicionar ao namespace global para que outros módulos possam acessar
-import sys
+# Expoe placeholder no namespace atual para compatibilidade
 current_module = sys.modules[__name__]
 current_module.SQL_PLACEHOLDER = SQL_PLACEHOLDER
+
+
+def get_connection(db_path: str | None = None):
+    """Compat helper que delega para `database.get_connection`."""
+    return get_db_connection(db_path=db_path)
 
 # Configurar timezone do Brasil (Brasília)
 TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
@@ -7379,6 +7274,104 @@ def configurar_jornada_interface():
         """,
         unsafe_allow_html=True
     )
+
+    st.markdown("### ⏰ Jornada Padrão da Empresa")
+
+    if REFACTORING_ENABLED:
+        try:
+            query_configs = """
+                SELECT chave, valor FROM configuracoes
+                WHERE chave IN ('jornada_inicio_padrao', 'jornada_fim_padrao', 'tolerancia_atraso_minutos', 'dias_historico_padrao')
+            """
+            configs_jornada = execute_query(query_configs)
+        except Exception as e:
+            log_error("Erro ao carregar jornada padrão", e, {})
+            configs_jornada = []
+    else:
+        conn_cfg = get_connection()
+        cursor_cfg = conn_cfg.cursor()
+        cursor_cfg.execute(
+            """
+            SELECT chave, valor FROM configuracoes
+            WHERE chave IN ('jornada_inicio_padrao', 'jornada_fim_padrao', 'tolerancia_atraso_minutos', 'dias_historico_padrao')
+            """
+        )
+        configs_jornada = cursor_cfg.fetchall()
+        conn_cfg.close()
+
+    configs_jornada_dict = {chave: valor for chave, valor in configs_jornada}
+
+    with st.form("config_jornada_padrao"):
+        col_padrao_1, col_padrao_2 = st.columns(2)
+
+        with col_padrao_1:
+            jornada_inicio = st.time_input(
+                "Horário padrão de início",
+                value=datetime.strptime(configs_jornada_dict.get('jornada_inicio_padrao', '08:00'), "%H:%M").time()
+            )
+            tolerancia = st.number_input(
+                "Tolerância de atraso (min)",
+                min_value=0,
+                max_value=60,
+                value=int(configs_jornada_dict.get('tolerancia_atraso_minutos', '10'))
+            )
+
+        with col_padrao_2:
+            jornada_fim = st.time_input(
+                "Horário padrão de fim",
+                value=datetime.strptime(configs_jornada_dict.get('jornada_fim_padrao', '17:00'), "%H:%M").time()
+            )
+            dias_historico = st.number_input(
+                "Dias de histórico padrão",
+                min_value=7,
+                max_value=365,
+                value=int(configs_jornada_dict.get('dias_historico_padrao', '30'))
+            )
+
+        if st.form_submit_button("💾 Salvar jornada padrão", use_container_width=True):
+            novos_valores = [
+                ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
+                ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
+                ('tolerancia_atraso_minutos', str(tolerancia)),
+                ('dias_historico_padrao', str(dias_historico)),
+            ]
+
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in novos_valores:
+                        update_query = """
+                            UPDATE configuracoes
+                            SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
+                            WHERE chave = %s
+                        """
+                        execute_update(update_query, (valor, chave))
+                    log_security_event(
+                        "SYSTEM_CONFIG_UPDATED",
+                        usuario=st.session_state.get('usuario', 'sistema'),
+                        context={"configs": [c[0] for c in novos_valores]},
+                    )
+                else:
+                    conn_cfg_update = get_connection()
+                    cursor_cfg_update = conn_cfg_update.cursor()
+                    for chave, valor in novos_valores:
+                        cursor_cfg_update.execute(
+                            f"""
+                                UPDATE configuracoes
+                                SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                                WHERE chave = {SQL_PLACEHOLDER}
+                            """,
+                            (valor, chave),
+                        )
+                    conn_cfg_update.commit()
+                    conn_cfg_update.close()
+
+                st.success("✅ Jornada padrão atualizada!")
+                st.rerun()
+            except Exception as exc:
+                log_error("Erro ao salvar jornada padrão", exc, {"context": "config_jornada_padrao"})
+                st.error(f"❌ Não foi possível salvar: {exc}")
+
+    st.markdown("---")
     
     # Buscar funcionários ativos
     if REFACTORING_ENABLED:

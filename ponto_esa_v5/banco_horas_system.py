@@ -4,18 +4,7 @@ import sys
 import os
 from datetime import datetime, timedelta, date
 
-try:
-    # Tentar import direto primeiro (caso esteja rodando no diretório do pacote)
-    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except ImportError as e:
-    print(f"DEBUG: Import direto falhou em banco_horas_system: {e}")
-    try:
-        # Tentar import absoluto com pacote
-        from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except ImportError as e2:
-        print(f"DEBUG: Import absoluto falhou em banco_horas_system: {e2}")
-        # Tentar import relativo
-        from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 try:
     from calculo_horas_system import CalculoHorasSystem, format_time_duration
@@ -24,6 +13,9 @@ except ImportError:
         from ponto_esa_v5.calculo_horas_system import CalculoHorasSystem, format_time_duration
     except ImportError:
         from .calculo_horas_system import CalculoHorasSystem, format_time_duration
+
+
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class BancoHorasSystem:
@@ -105,8 +97,10 @@ class BancoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         try:
-            query = f"SELECT usuario, nome_completo FROM usuarios WHERE tipo = {SQL_PLACEHOLDER} AND ativo = 1 ORDER BY nome_completo"
-            cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE tipo = %s AND ativo = 1 ORDER BY nome_completo" if USE_POSTGRESQL else "SELECT usuario, nome_completo FROM usuarios WHERE tipo = ? AND ativo = 1 ORDER BY nome_completo", ("funcionario",) if USE_POSTGRESQL else ("funcionario",))
+            cursor.execute(
+                f"SELECT usuario, nome_completo FROM usuarios WHERE tipo = {SQL_PLACEHOLDER} AND ativo = 1 ORDER BY nome_completo",
+                ("funcionario",),
+            )
             rows = cursor.fetchall()
             resultado = []
             for row in rows:

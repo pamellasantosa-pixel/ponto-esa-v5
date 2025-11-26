@@ -4,15 +4,9 @@ import sys
 import os
 from datetime import datetime
 
-try:
-    from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
-except ImportError:
-    try:
-        from database_postgresql import get_connection, USE_POSTGRESQL
-    except ImportError:
-        # Fallback to local database module if postgresql one fails
-        from database import get_connection
-        USE_POSTGRESQL = False
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 # Placeholder implementations
 class AtestadoHorasSystem:
@@ -37,21 +31,14 @@ class AtestadoHorasSystem:
         try:
             conn = get_connection()
             cursor = conn.cursor()
+            placeholders = ", ".join([SQL_PLACEHOLDER] * 8)
             cursor.execute(
-                """
+                f"""
                 INSERT INTO atestado_horas (
                     usuario, data, hora_inicio, hora_fim, total_horas,
                     motivo, arquivo_comprovante, nao_possui_comprovante,
                     status
-                ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 'pendente')
-                """
-                if USE_POSTGRESQL
-                else """
-                INSERT INTO atestado_horas (
-                    usuario, data, hora_inicio, hora_fim, total_horas,
-                    motivo, arquivo_comprovante, nao_possui_comprovante,
-                    status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pendente')
+                ) VALUES ({placeholders}, 'pendente')
                 """,
                 (
                     usuario,
@@ -81,9 +68,7 @@ class AtestadoHorasSystem:
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            "SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = %s"
-            if USE_POSTGRESQL
-            else "SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = ?",
+            f"SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = {SQL_PLACEHOLDER}",
             (usuario,),
         )
         rows = cursor.fetchall()
@@ -106,16 +91,12 @@ class AtestadoHorasSystem:
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                """
+                f"""
                 UPDATE atestado_horas
-                SET status = %s, aprovado_por = %s, data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
-                WHERE id = %s
-                """ if USE_POSTGRESQL else """
-                UPDATE atestado_horas
-                SET status = ?, aprovado_por = ?, data_aprovacao = CURRENT_TIMESTAMP, observacoes = ?
-                WHERE id = ?
+                SET status = {SQL_PLACEHOLDER}, aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
                 """,
-                ("aprovado", gestor, observacoes, atestado_id) if USE_POSTGRESQL else ("aprovado", gestor, observacoes, atestado_id),
+                ("aprovado", gestor, observacoes, atestado_id),
             )
             conn.commit()
             conn.close()
@@ -138,16 +119,12 @@ class AtestadoHorasSystem:
             cursor = conn.cursor()
             # Atualizar status para 'rejeitado' e registrar quem rejeitou
             cursor.execute(
-                """
+                f"""
                 UPDATE atestado_horas
-                SET status = %s, aprovado_por = %s, data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
-                WHERE id = %s
-                """ if USE_POSTGRESQL else """
-                UPDATE atestado_horas
-                SET status = ?, aprovado_por = ?, data_aprovacao = CURRENT_TIMESTAMP, observacoes = ?
-                WHERE id = ?
+                SET status = {SQL_PLACEHOLDER}, aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
                 """,
-                ("rejeitado", gestor, motivo, atestado_id) if USE_POSTGRESQL else ("rejeitado", gestor, motivo, atestado_id)
+                ("rejeitado", gestor, motivo, atestado_id)
             )
             conn.commit()
             conn.close()

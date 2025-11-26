@@ -5,24 +5,16 @@ Permite upload seguro de documentos e comprovantes
 
 import os
 import uuid
-import sqlite3
-try:
-    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except Exception:
-    try:
-        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except Exception:
-        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-
-from database import adapt_sql_for_postgresql
 from datetime import datetime
+from pathlib import Path
 import mimetypes
 import hashlib
 
-from pathlib import Path
+from database import get_connection, adapt_sql_for_postgresql, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+import database as database_module
 
 # SQL Placeholder para compatibilidade SQLite/PostgreSQL
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class UploadSystem:
@@ -237,7 +229,7 @@ class UploadSystem:
             # Construir query com o placeholder correto
             query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
 
-            if USE_POSTGRESQL:
+            if database_module.USE_POSTGRESQL:
                 # Em PostgreSQL, usar RETURNING id para obter o id inserido
                 query = query + " RETURNING id"
                 cursor.execute(query, params)

@@ -8,9 +8,10 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from ponto_esa_v5.notifications import notification_manager
-from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+import database as database_module
 
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 # Configurar logging
 logger = logging.getLogger(__name__)
@@ -187,7 +188,7 @@ class AjusteRegistrosSystem:
         cursor = conn.cursor()
         try:
             dados_json = self._dump_json(dados_solicitados)
-            if USE_POSTGRESQL:
+            if database_module.USE_POSTGRESQL:
                 cursor.execute(
                     """
                     INSERT INTO solicitacoes_ajuste_ponto
@@ -357,7 +358,7 @@ class AjusteRegistrosSystem:
                 projeto = dados_para_aplicar.get("projeto")
                 atividade = dados_para_aplicar.get("atividade")
 
-                if USE_POSTGRESQL:
+                if database_module.USE_POSTGRESQL:
                     cursor.execute(
                         """
                         INSERT INTO registros_ponto

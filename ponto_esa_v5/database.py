@@ -1,6 +1,7 @@
 
 import os
 import hashlib
+import logging
 from dotenv import load_dotenv
 
 # Carregar variáveis de ambiente
@@ -53,13 +54,86 @@ else:
 def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
-        if _PG_DRIVER == 'psycopg':
-            cfg = dict(DB_CONFIG)
-            # psycopg3 aceita 'dbname' e também 'database', mas normalizar evita inconsistências
-            cfg['dbname'] = cfg.pop('database', cfg.get('database'))
-            return _psycopg.connect(**cfg)
-        else:
-            return _psycopg2.connect(**DB_CONFIG)
+        try:
+            # Tentar estabelecer conexão e atribuir a `conn` para garantir
+            # que qualquer exceção seja capturada pelo bloco abaixo.
+            conn = None
+            if _PG_DRIVER == 'psycopg':
+                cfg = dict(DB_CONFIG)
+                # psycopg3 aceita 'dbname' e também 'database', mas normalizar evita inconsistências
+                cfg['dbname'] = cfg.pop('database', cfg.get('database'))
+                conn = _psycopg.connect(**cfg)
+            else:
+                conn = _psycopg2.connect(**DB_CONFIG)
+
+            # Se chegamos até aqui, a conexão PostgreSQL foi estabelecida
+            return conn
+        except Exception as e:
+            # Registrar exceção completa e cair para o fallback SQLite
+            logging.exception("Falha ao conectar no PostgreSQL, usando fallback para SQLite: %s", e)
+            # Fallback: criar conexão SQLite local
+            try:
+                import sqlite3
+                from datetime import date, datetime
+
+                def _adapt_date_iso(d: date) -> str:  # type: ignore[override]
+                    return d.isoformat()
+
+                def _adapt_datetime_iso(dt: datetime) -> str:  # type: ignore[override]
+                    return dt.isoformat(sep=" ")
+
+                sqlite3.register_adapter(date, _adapt_date_iso)
+                sqlite3.register_adapter(datetime, _adapt_datetime_iso)
+
+                os.makedirs('database', exist_ok=True)
+                if db_path:
+                    conn = sqlite3.connect(db_path)
+                else:
+                    conn = sqlite3.connect('database/ponto_esa.db')
+
+                class AdaptCursor:
+                    def __init__(self, cursor):
+                        self._cursor = cursor
+
+                    def execute(self, sql, params=None):
+                        if isinstance(sql, str):
+                            sql = sql.replace('%s', SQL_PLACEHOLDER)
+                        if params is None:
+                            return self._cursor.execute(sql)
+                        return self._cursor.execute(sql, params)
+
+                    def executemany(self, sql, seq_of_params):
+                        if isinstance(sql, str):
+                            sql = sql.replace('%s', SQL_PLACEHOLDER)
+                        return self._cursor.executemany(sql, seq_of_params)
+
+                    def __getattr__(self, name):
+                        return getattr(self._cursor, name)
+
+                class ConnectionWrapper:
+                    def __init__(self, conn):
+                        self._conn = conn
+
+                    def cursor(self):
+                        return AdaptCursor(self._conn.cursor())
+
+                    def commit(self):
+                        return self._conn.commit()
+
+                    def close(self):
+                        return self._conn.close()
+
+                    def __getattr__(self, name):
+                        return getattr(self._conn, name)
+
+                # Atualizar variáveis globais para refletir o fallback
+                globals()['USE_POSTGRESQL'] = False
+                globals()['SQL_PLACEHOLDER'] = "?"
+
+                return ConnectionWrapper(conn)
+            except Exception:
+                # Se o fallback também falhar, relançar a exceção original
+                raise
     else:
         os.makedirs('database', exist_ok=True)
         if db_path:

@@ -5,6 +5,10 @@ Esse arquivo preserva compatibilidade para importações não qualificadas
 implementação principal que fica em `ponto_esa_v5.notifications`.
 """
 
+import json
+
+from database import get_connection, SQL_PLACEHOLDER
+
 class NotificationManager:
     def __init__(self):
         self.active_notifications = {}
@@ -15,17 +19,6 @@ class NotificationManager:
             self.active_notifications[user_id] = []
         self.active_notifications[user_id].append(payload)
         # Persistência mínima em SQLite/PostgreSQL
-        try:
-            from database_postgresql import get_connection, SQL_PLACEHOLDER
-        except ImportError:
-            try:
-                from ponto_esa_v5.database_postgresql import get_connection, SQL_PLACEHOLDER
-            except ImportError:
-                try:
-                    from .database_postgresql import get_connection, SQL_PLACEHOLDER
-                except ImportError:
-                    from database import get_connection, SQL_PLACEHOLDER
-        import json
         conn = get_connection()
         cur = conn.cursor()
         title = payload.get("title") if isinstance(payload, dict) else None

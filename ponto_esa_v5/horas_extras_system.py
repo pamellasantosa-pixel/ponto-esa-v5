@@ -3,19 +3,7 @@ Sistema de Horas Extras - Ponto ExSA v5.0
 Gerencia solicitações e aprovações de horas extras
 """
 
-import sqlite3
-try:
-    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except ImportError as e:
-    print(f"DEBUG: Import direto falhou em horas_extras_system: {e}")
-    try:
-        from ponto_esa_v5.database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except ImportError as e2:
-        print(f"DEBUG: Import absoluto falhou em horas_extras_system: {e2}")
-        try:
-            from .database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-        except ImportError:
-            from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 from datetime import datetime, timedelta, time
 import json
@@ -25,7 +13,7 @@ except Exception:
     from notifications import notification_manager
 
 # SQL Placeholder para compatibilidade SQLite/PostgreSQL
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class HorasExtrasSystem:
