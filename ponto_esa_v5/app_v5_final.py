@@ -2074,9 +2074,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     # ========== SEÇÃO DE HORAS EXTRAS ==========
     from jornada_semanal_system import obter_jornada_usuario
     
-    # Verificar se está no horário de fim de expediente
-    agora = datetime.now()
-    hoje = date.today()
+    # Verificar se está no horário de fim de expediente (usar timezone Brasil)
+    agora = get_datetime_br()
+    hoje = agora.date()
     dia_semana_map = {0: 'seg', 1: 'ter', 2: 'qua', 3: 'qui', 4: 'sex', 5: 'sab', 6: 'dom'}
     dia_semana = dia_semana_map.get(hoje.weekday(), 'seg')
     
@@ -2184,9 +2184,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         with col_sim:
             if st.button("✅ Sim, fazer horas extras", use_container_width=True, type="primary"):
                 st.session_state.horas_extras_ativa = True
-                st.session_state.horas_extras_inicio = datetime.now()
+                st.session_state.horas_extras_inicio = get_datetime_br()
                 st.session_state.popup_hora_extra_mostrado = True
-                st.session_state.ultima_notif_continuar = datetime.now()
+                st.session_state.ultima_notif_continuar = get_datetime_br()
                 st.rerun()
         
         with col_nao:
@@ -2211,20 +2211,28 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     # ========== PAINEL DE HORAS EXTRAS ATIVA ==========
     if st.session_state.horas_extras_ativa and st.session_state.horas_extras_inicio:
-        tempo_decorrido = datetime.now() - st.session_state.horas_extras_inicio
+        agora_br = get_datetime_br()
+        # Se inicio foi salvo sem tz, adicionar tz Brasil para comparação
+        inicio_he = st.session_state.horas_extras_inicio
+        if inicio_he.tzinfo is None:
+            inicio_he = TIMEZONE_BR.localize(inicio_he)
+        tempo_decorrido = agora_br - inicio_he
         horas = int(tempo_decorrido.total_seconds() // 3600)
         minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
         segundos = int(tempo_decorrido.total_seconds() % 60)
         
         # Notificação de continuar após 1 hora
         if st.session_state.ultima_notif_continuar:
-            tempo_desde_notif = datetime.now() - st.session_state.ultima_notif_continuar
+            ultima_notif = st.session_state.ultima_notif_continuar
+            if ultima_notif.tzinfo is None:
+                ultima_notif = TIMEZONE_BR.localize(ultima_notif)
+            tempo_desde_notif = agora_br - ultima_notif
             if tempo_desde_notif.total_seconds() >= 3600:  # 1 hora
                 st.warning("⏰ **Você está fazendo horas extras há mais de 1 hora. Deseja continuar?**")
                 col_cont, col_parar = st.columns(2)
                 with col_cont:
                     if st.button("✅ Continuar", key="continuar_he"):
-                        st.session_state.ultima_notif_continuar = datetime.now()
+                        st.session_state.ultima_notif_continuar = get_datetime_br()
                         st.rerun()
                 with col_parar:
                     if st.button("⏹️ Parar agora", key="parar_he_notif"):
@@ -2298,8 +2306,12 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                         # Extrair username do aprovador
                         aprovador_username = aprovador_selecionado.split("(")[1].rstrip(")")
                         
-                        # Calcular tempo total
-                        tempo_total = datetime.now() - st.session_state.horas_extras_inicio
+                        # Calcular tempo total (usar timezone Brasil)
+                        agora_final = get_datetime_br()
+                        inicio_he = st.session_state.horas_extras_inicio
+                        if inicio_he.tzinfo is None:
+                            inicio_he = TIMEZONE_BR.localize(inicio_he)
+                        tempo_total = agora_final - inicio_he
                         horas_total = tempo_total.total_seconds() / 3600
                         
                         # Registrar solicitação de horas extras
@@ -2307,8 +2319,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                             conn = get_connection()
                             cursor = conn.cursor()
                             
-                            hora_inicio = st.session_state.horas_extras_inicio.strftime("%H:%M")
-                            hora_fim = datetime.now().strftime("%H:%M")
+                            hora_inicio = inicio_he.strftime("%H:%M")
+                            hora_fim = agora_final.strftime("%H:%M")
                             
                             cursor.execute(f"""
                                 INSERT INTO solicitacoes_horas_extras 
