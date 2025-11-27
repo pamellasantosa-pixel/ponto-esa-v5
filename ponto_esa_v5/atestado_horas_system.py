@@ -64,11 +64,14 @@ class AtestadoHorasSystem:
             return {"success": False, "message": str(e)}
     
     def listar_atestados_usuario(self, usuario: str):
-        """Lista atestados de horas para um usuário (visão simples)."""
+        """Lista atestados de horas para um usuário (visão completa)."""
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(
-            f"SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status FROM atestado_horas WHERE usuario = {SQL_PLACEHOLDER}",
+            f"""SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, motivo, status,
+                       aprovado_por, data_aprovacao, observacoes, arquivo_comprovante
+                FROM atestado_horas WHERE usuario = {SQL_PLACEHOLDER}
+                ORDER BY data_registro DESC""",
             (usuario,),
         )
         rows = cursor.fetchall()
@@ -82,6 +85,10 @@ class AtestadoHorasSystem:
             "total_horas",
             "motivo",
             "status",
+            "aprovado_por",
+            "data_aprovacao",
+            "observacoes",
+            "arquivo_comprovante",
         ]
         return [dict(zip(colunas, r)) for r in rows]
     

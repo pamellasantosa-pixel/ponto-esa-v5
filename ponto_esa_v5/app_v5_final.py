@@ -1894,7 +1894,6 @@ def tela_funcionario():
             "🏥 Registrar Ausência",
             f"⏰ Atestado de Horas{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
-            "📊 Relatórios de Horas Extras",
             "🏦 Meu Banco de Horas",
             "📁 Meus Arquivos",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
@@ -1957,15 +1956,6 @@ def tela_funcionario():
         atestado_horas_interface(atestado_system, upload_system)
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
-    elif opcao == "📊 Relatórios de Horas Extras":
-        # Relatório simplificado de horas extras
-        st.markdown("""
-        <div class="feature-card">
-            <h3>📊 Relatórios de Horas Extras</h3>
-            <p>Visualize seu histórico de horas extras</p>
-        </div>
-        """, unsafe_allow_html=True)
-        st.info("📋 Seus relatórios de horas extras estão disponíveis na seção 'Horas Extras'.")
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
@@ -2992,15 +2982,26 @@ def notificacoes_interface(horas_extras_system):
     with tabs[2]:
         st.subheader("⏰ Meus Atestados de Horas Pendentes")
         
-        cursor.execute("""
-            SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
-                   arquivo_comprovante, data_registro
-            FROM atestado_horas
-            WHERE usuario = %s AND status = 'pendente'
-            ORDER BY data_registro DESC
-        """, (st.session_state.usuario,))
-        
-        atestados = cursor.fetchall()
+        if REFACTORING_ENABLED:
+            atestados = execute_query("""
+                SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
+                       arquivo_comprovante, data_registro
+                FROM atestado_horas
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_registro DESC
+            """, (st.session_state.usuario,))
+        else:
+            conn3 = get_connection()
+            cursor3 = conn3.cursor()
+            cursor3.execute("""
+                SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
+                       arquivo_comprovante, data_registro
+                FROM atestado_horas
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_registro DESC
+            """, (st.session_state.usuario,))
+            atestados = cursor3.fetchall()
+            conn3.close()
         
         if atestados:
             st.warning(f"⏳ Você tem {len(atestados)} atestado(s) aguardando aprovação do gestor")
@@ -3025,8 +3026,6 @@ def notificacoes_interface(horas_extras_system):
                     st.info("⏳ Aguardando aprovação do gestor...")
         else:
             st.info("✅ Nenhum atestado aguardando aprovação")
-    
-    conn.close()
 
 # Continuar com as outras interfaces...
 
