@@ -1958,8 +1958,14 @@ def tela_funcionario():
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
     elif opcao == "📊 Relatórios de Horas Extras":
-        from relatorios_horas_extras import relatorios_horas_extras_interface
-        relatorios_horas_extras_interface()
+        # Relatório simplificado de horas extras
+        st.markdown("""
+        <div class="feature-card">
+            <h3>📊 Relatórios de Horas Extras</h3>
+            <p>Visualize seu histórico de horas extras</p>
+        </div>
+        """, unsafe_allow_html=True)
+        st.info("📋 Seus relatórios de horas extras estão disponíveis na seção 'Horas Extras'.")
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
@@ -1983,38 +1989,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     </div>
     """, unsafe_allow_html=True)
 
-    # Inserir script GPS
-    st.components.v1.html(GPS_SCRIPT, height=0)
-
-    # Status do GPS
-    st.markdown('<div id="gps-status">📍 Obtendo localização...</div>',
-                unsafe_allow_html=True)
+    # GPS desabilitado temporariamente para simplificar
+    # st.components.v1.html(GPS_SCRIPT, height=0)
     
-    # Campos ocultos para receber coordenadas GPS do JavaScript
-    # Usando CSS para esconder os campos
-    st.markdown("""
-    <style>
-    div[data-testid="stTextInput"]:has(label:contains("GPS_LAT_HIDDEN")),
-    div[data-testid="stTextInput"]:has(label:contains("GPS_LNG_HIDDEN")) {
-        display: none !important;
-    }
-    .gps-hidden-fields {
-        position: absolute;
-        left: -9999px;
-        opacity: 0;
-        height: 0;
-        overflow: hidden;
-    }
-    </style>
-    """, unsafe_allow_html=True)
-    
-    # Campos para capturar GPS (serão preenchidos pelo JavaScript)
-    with st.container():
-        st.markdown('<div class="gps-hidden-fields">', unsafe_allow_html=True)
-        gps_lat_input = st.text_input("GPS_LAT_HIDDEN", key="gps_lat_hidden", label_visibility="collapsed")
-        gps_lng_input = st.text_input("GPS_LNG_HIDDEN", key="gps_lng_hidden", label_visibility="collapsed")
-        st.markdown('</div>', unsafe_allow_html=True)
-
     st.subheader("➕ Novo Registro")
 
     with st.form("registro_ponto"):
@@ -2089,43 +2066,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
                 st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
-                # 🔧 CORREÇÃO: Verificar se GPS é obrigatório
-                gps_obrigatorio = False
-                try:
-                    if REFACTORING_ENABLED:
-                        query = "SELECT valor FROM configuracoes WHERE chave = 'gps_obrigatorio'"
-                        result = execute_query(query, fetch_one=True)
-                        if result:
-                            gps_obrigatorio = result[0].lower() in ['true', '1', 'sim', 'yes']
-                    else:
-                        cursor = get_db_connection().cursor()
-                        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'gps_obrigatorio'")
-                        resultado = cursor.fetchone()
-                        if resultado:
-                            gps_obrigatorio = resultado[0].lower() in ['true', '1', 'sim', 'yes']
-                        cursor.close()
-                except Exception as e:
-                    logger.warning(f"Não foi possível verificar configuração de GPS obrigatório: {e}")
-                
-                # Obter coordenadas GPS dos campos ocultos preenchidos pelo JavaScript
+                # GPS: Coordenadas (funcionalidade desabilitada temporariamente)
                 latitude = None
                 longitude = None
-                
-                try:
-                    if gps_lat_input and gps_lat_input.strip():
-                        latitude = float(gps_lat_input.strip())
-                    if gps_lng_input and gps_lng_input.strip():
-                        longitude = float(gps_lng_input.strip())
-                except (ValueError, TypeError) as e:
-                    logger.warning(f"Erro ao converter coordenadas GPS: {e}")
-                    latitude = None
-                    longitude = None
-                
-                # Validar GPS se obrigatório
-                if gps_obrigatorio and (latitude is None or longitude is None):
-                    st.error("❌ O registro de ponto com GPS é obrigatório! Por favor, permita o acesso à localização no seu navegador e tente novamente.")
-                    st.info("💡 Dica: Clique no ícone de cadeado na barra de endereços e permita o acesso à localização.")
-                    st.stop()
 
                 # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
@@ -2994,7 +2937,7 @@ def notificacoes_interface(horas_extras_system):
     
     # Tab 2: Correções Pendentes
     with tabs[1]:
-        st.subheader("� Minhas Solicitações de Correção Pendentes")
+        st.subheader("🔧 Minhas Solicitações de Correção Pendentes")
         
         if REFACTORING_ENABLED:
             correcoes = execute_query("""
@@ -3006,7 +2949,9 @@ def notificacoes_interface(horas_extras_system):
                 ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
         else:
-            cursor.execute("""
+            conn2 = get_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute("""
                 SELECT id, registro_id, data_hora_original, data_hora_nova,
                        tipo_original, tipo_novo, justificativa, 
                        data_solicitacao
@@ -3015,7 +2960,8 @@ def notificacoes_interface(horas_extras_system):
                 ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
             
-            correcoes = cursor.fetchall()
+            correcoes = cursor2.fetchall()
+            conn2.close()
         
         if correcoes:
             st.warning(f"⏳ Você tem {len(correcoes)} solicitação(ões) aguardando aprovação do gestor")
@@ -3350,9 +3296,7 @@ def atestado_horas_interface(atestado_system, upload_system):
 
             # Buscar atestados
             atestados = atestado_system.listar_atestados_usuario(
-                st.session_state.usuario,
-                data_inicio.strftime("%Y-%m-%d"),
-                data_fim.strftime("%Y-%m-%d")
+                st.session_state.usuario
             )
 
             if status_filtro != "Todos":
