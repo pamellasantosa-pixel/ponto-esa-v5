@@ -78,7 +78,7 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
 
-    # Tabela usuarios com novos campos para jornada prevista
+    # Tabela usuarios com novos campos para jornada prevista, CPF e data nascimento
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS usuarios (
             id SERIAL PRIMARY KEY,
@@ -86,12 +86,21 @@ def init_db():
             senha TEXT NOT NULL,
             tipo TEXT NOT NULL,
             nome_completo TEXT,
+            cpf TEXT,
+            data_nascimento DATE,
             ativo INTEGER DEFAULT 1,
             data_criacao TIMESTAMP DEFAULT NOW(),
             jornada_inicio_previsto TIME DEFAULT '08:00',
             jornada_fim_previsto TIME DEFAULT '17:00'
         )
     '''))
+    
+    # Adicionar colunas CPF e data_nascimento se não existirem (migração)
+    try:
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cpf TEXT")
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_nascimento DATE")
+    except:
+        pass
 
     # Tabela registros_ponto com campos de GPS
     c.execute(adapt_sql_for_postgresql('''

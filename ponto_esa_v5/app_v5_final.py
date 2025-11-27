@@ -7461,9 +7461,18 @@ def gerenciar_usuarios_interface():
                     "Login:*", placeholder="Ex: joao.silva")
                 novo_nome = st.text_input(
                     "Nome Completo:*", placeholder="Ex: João Silva")
+                novo_cpf = st.text_input(
+                    "CPF:*", placeholder="Ex: 123.456.789-00",
+                    help="Digite o CPF com ou sem pontuação")
                 nova_senha = st.text_input("Senha:*", type="password")
 
             with col2:
+                nova_data_nascimento = st.date_input(
+                    "Data de Nascimento:*",
+                    value=None,
+                    min_value=date(1940, 1, 1),
+                    max_value=date.today() - timedelta(days=365*16),  # Mínimo 16 anos
+                    help="O funcionário deve ter no mínimo 16 anos")
                 confirmar_senha = st.text_input(
                     "Confirmar Senha:*", type="password")
                 novo_tipo = st.selectbox(
@@ -7486,9 +7495,23 @@ def gerenciar_usuarios_interface():
                 "➕ Cadastrar Usuário", use_container_width=True)
 
             if submitted:
+                # Função para validar e limpar CPF
+                def validar_cpf(cpf):
+                    # Remove caracteres não numéricos
+                    cpf_limpo = ''.join(filter(str.isdigit, cpf))
+                    if len(cpf_limpo) != 11:
+                        return None
+                    return cpf_limpo
+                
                 # Validações
+                cpf_validado = validar_cpf(novo_cpf) if novo_cpf else None
+                
                 if not novo_login or not novo_nome or not nova_senha:
                     st.error("❌ Preencha todos os campos obrigatórios!")
+                elif not novo_cpf or not cpf_validado:
+                    st.error("❌ CPF inválido! Digite um CPF com 11 dígitos.")
+                elif nova_data_nascimento is None:
+                    st.error("❌ Data de Nascimento é obrigatória!")
                 elif nova_senha != confirmar_senha:
                     st.error("❌ As senhas não conferem!")
                 else:
@@ -7499,15 +7522,17 @@ def gerenciar_usuarios_interface():
 
                             insert_query = f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """
                             novo_usuario_id = execute_update(insert_query, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
+                                cpf_validado,
+                                nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
                                 jornada_fim.strftime("%H:%M")
@@ -7535,14 +7560,16 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute(f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
+                                cpf_validado,
+                                nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
                                 jornada_fim.strftime("%H:%M")
