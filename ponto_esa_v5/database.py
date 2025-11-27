@@ -208,7 +208,9 @@ def init_db():
             hash_arquivo TEXT,
             relacionado_a TEXT,
             relacionado_id INTEGER,
-            data_upload TIMESTAMP DEFAULT NOW()
+            data_upload TIMESTAMP DEFAULT NOW(),
+            conteudo BYTEA,
+            status TEXT DEFAULT 'ativo'
         )
     '''))
 
@@ -414,6 +416,13 @@ def init_db():
         pass
     try:
         c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ativo'")
+    except Exception:
+        pass
+    
+    # 🔧 CORREÇÃO: Adicionar coluna conteudo para armazenar arquivos no banco de dados
+    # Isso resolve o problema de arquivos perdidos em sistemas de arquivos efêmeros (Render, Heroku, etc)
+    try:
+        c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS conteudo BYTEA")
     except Exception:
         pass
 

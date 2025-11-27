@@ -152,7 +152,7 @@ class UploadSystem:
         return f"{self.upload_dir}/{base_dir}/{year}/{month:02d}/{filename}"
 
     def save_file(self, file_content, usuario, original_filename, categoria='documento', relacionado_a=None, relacionado_id=None):
-        """Salva arquivo no sistema"""
+        """Salva arquivo no sistema (banco de dados para persistência em nuvem)"""
         try:
             file_size = len(file_content)
 
@@ -170,9 +170,6 @@ class UploadSystem:
             safe_filename = self.generate_safe_filename(original_filename)
             file_path = self.get_upload_path(categoria, safe_filename)
 
-            # Criar diretório se não existir
-            os.makedirs(os.path.dirname(file_path), exist_ok=True)
-
             # Calcular hash
             file_hash = self.calculate_file_hash(file_content)
 
@@ -185,11 +182,20 @@ class UploadSystem:
                     "existing_file": existing_file
                 }
 
-            # Salvar arquivo
-            with open(file_path, 'wb') as f:
-                f.write(file_content)
+            # 🔧 CORREÇÃO: Não salvar mais no sistema de arquivos local (efêmero em Render)
+            # O conteúdo será armazenado diretamente no banco de dados
+            # Manter file_path para compatibilidade, mas conteúdo vem do banco
+            
+            # Tentar criar diretório e salvar arquivo localmente como backup
+            try:
+                os.makedirs(os.path.dirname(file_path), exist_ok=True)
+                with open(file_path, 'wb') as f:
+                    f.write(file_content)
+            except Exception:
+                # Se não conseguir salvar localmente, continua (arquivo estará no banco)
+                pass
 
-            # Registrar no banco
+            # Registrar no banco COM conteúdo
             mime_type, _ = mimetypes.guess_type(original_filename)
             upload_id = self.register_upload(
                 usuario=usuario,
@@ -200,7 +206,8 @@ class UploadSystem:
                 caminho=file_path,
                 hash_arquivo=file_hash,
                 relacionado_a=relacionado_a,
-                relacionado_id=relacionado_id
+                relacionado_id=relacionado_id,
+                conteudo=file_content  # 🔧 NOVO: Salvar conteúdo no banco
             )
 
             return {
@@ -218,16 +225,19 @@ class UploadSystem:
                 "message": f"Erro ao salvar arquivo: {str(e)}"
             }
 
-    def register_upload(self, usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a=None, relacionado_id=None):
-        """Registra upload no banco de dados"""
+    def register_upload(self, usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a=None, relacionado_id=None, conteudo=None):
+        """Registra upload no banco de dados (incluindo conteúdo binário)"""
         conn = self._get_connection()
         cursor = conn.cursor()
 
         try:
-            params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
-
-            # Construir query com o placeholder correto
-            query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
+            # 🔧 CORREÇÃO: Incluir coluna conteudo na inserção
+            if conteudo is not None:
+                params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id, conteudo)
+                query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id, conteudo) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
+            else:
+                params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
+                query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
 
             if database_module.USE_POSTGRESQL:
                 # Em PostgreSQL, usar RETURNING id para obter o id inserido
@@ -385,13 +395,37 @@ class UploadSystem:
             conn.close()
 
     def get_file_content(self, upload_id, usuario=None):
-        """Obtém conteúdo de um arquivo para download"""
+        """Obtém conteúdo de um arquivo para download (prioriza banco de dados)"""
         # Suporta upload_id como id (int) ou caminho (str)
         file_info = self.get_file_info(upload_id, usuario)
 
         if not file_info:
             return None, None
 
+        # 🔧 CORREÇÃO: Primeiro tentar obter do banco de dados (para funcionar no Render)
+        try:
+            conn = self._get_connection()
+            cursor = conn.cursor()
+            
+            # Obter conteúdo do banco de dados
+            cursor.execute(
+                f"SELECT conteudo FROM uploads WHERE id = {SQL_PLACEHOLDER}",
+                (file_info['id'],)
+            )
+            result = cursor.fetchone()
+            conn.close()
+            
+            if result and result[0]:
+                # Conteúdo encontrado no banco de dados
+                content = result[0]
+                # Em PostgreSQL, BYTEA pode vir como memoryview, converter para bytes
+                if isinstance(content, memoryview):
+                    content = bytes(content)
+                return content, file_info
+        except Exception:
+            pass  # Se falhar, tenta arquivo local
+        
+        # Fallback: tentar ler do sistema de arquivos local
         try:
             with open(file_info['caminho'], 'rb') as f:
                 content = f.read()

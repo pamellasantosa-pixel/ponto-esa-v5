@@ -397,6 +397,30 @@ function getLocation() {
                 sessionStorage.setItem('gps_accuracy', accuracy);
                 sessionStorage.setItem('gps_timestamp', Date.now());
                 
+                // Preencher campos ocultos do Streamlit
+                setTimeout(function() {
+                    // Encontrar e preencher campos de latitude e longitude
+                    const inputs = document.querySelectorAll('input[type="text"]');
+                    inputs.forEach(function(input) {
+                        const label = input.closest('.stTextInput');
+                        if (label) {
+                            const labelText = label.querySelector('label');
+                            if (labelText) {
+                                if (labelText.innerText.includes('GPS_LAT_HIDDEN')) {
+                                    input.value = lat.toString();
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
+                                if (labelText.innerText.includes('GPS_LNG_HIDDEN')) {
+                                    input.value = lng.toString();
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
+                            }
+                        }
+                    });
+                }, 1000);
+                
                 // Atualizar display
                 const gpsDiv = document.getElementById('gps-status');
                 if (gpsDiv) {
@@ -413,10 +437,12 @@ function getLocation() {
                 if (gpsDiv) {
                     gpsDiv.innerHTML = `
                         <div class="gps-status gps-error">
-                            ❌ Erro ao obter localização: ${error.message}
+                            ⚠️ GPS não disponível: ${error.message}
                         </div>
                     `;
                 }
+                // Marcar que GPS falhou
+                sessionStorage.setItem('gps_error', error.message);
             },
             {
                 enableHighAccuracy: true,
@@ -438,21 +464,8 @@ function getLocation() {
 
 // Executar quando a página carregar
 document.addEventListener('DOMContentLoaded', getLocation);
-
-// Função para obter coordenadas do sessionStorage
-function getStoredGPS() {
-    const lat = sessionStorage.getItem('gps_lat');
-    const lng = sessionStorage.getItem('gps_lng');
-    const timestamp = sessionStorage.getItem('gps_timestamp');
-    
-    // Verificar se os dados são recentes (menos de 5 minutos)
-                longitude: parseFloat(lng),
-                timestamp: parseInt(timestamp)
-            };
-        }
-    }
-    return null;
-}
+// Também executar imediatamente
+getLocation();
 </script>
 """
 
@@ -1887,7 +1900,25 @@ def tela_funcionario():
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
 
-        opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
+        # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
+        if 'menu_func_index' not in st.session_state:
+            st.session_state.menu_func_index = 0
+        
+        opcao = st.selectbox(
+            "Escolha uma opção:", 
+            opcoes_menu,
+            index=st.session_state.menu_func_index,
+            key="menu_func_selectbox"
+        )
+        
+        # Atualizar índice no session_state
+        if opcao in opcoes_menu:
+            st.session_state.menu_func_index = opcoes_menu.index(opcao)
+        else:
+            for i, opt in enumerate(opcoes_menu):
+                if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
+                    st.session_state.menu_func_index = i
+                    break
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -1958,6 +1989,31 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     # Status do GPS
     st.markdown('<div id="gps-status">📍 Obtendo localização...</div>',
                 unsafe_allow_html=True)
+    
+    # Campos ocultos para receber coordenadas GPS do JavaScript
+    # Usando CSS para esconder os campos
+    st.markdown("""
+    <style>
+    div[data-testid="stTextInput"]:has(label:contains("GPS_LAT_HIDDEN")),
+    div[data-testid="stTextInput"]:has(label:contains("GPS_LNG_HIDDEN")) {
+        display: none !important;
+    }
+    .gps-hidden-fields {
+        position: absolute;
+        left: -9999px;
+        opacity: 0;
+        height: 0;
+        overflow: hidden;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Campos para capturar GPS (serão preenchidos pelo JavaScript)
+    with st.container():
+        st.markdown('<div class="gps-hidden-fields">', unsafe_allow_html=True)
+        gps_lat_input = st.text_input("GPS_LAT_HIDDEN", key="gps_lat_hidden", label_visibility="collapsed")
+        gps_lng_input = st.text_input("GPS_LNG_HIDDEN", key="gps_lng_hidden", label_visibility="collapsed")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     st.subheader("➕ Novo Registro")
 
@@ -2033,9 +2089,43 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
                 st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
-                # Coordenadas GPS (simplificado - GPS desabilitado temporariamente)
+                # 🔧 CORREÇÃO: Verificar se GPS é obrigatório
+                gps_obrigatorio = False
+                try:
+                    if REFACTORING_ENABLED:
+                        query = "SELECT valor FROM configuracoes WHERE chave = 'gps_obrigatorio'"
+                        result = execute_query(query, fetch_one=True)
+                        if result:
+                            gps_obrigatorio = result[0].lower() in ['true', '1', 'sim', 'yes']
+                    else:
+                        cursor = get_db_connection().cursor()
+                        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'gps_obrigatorio'")
+                        resultado = cursor.fetchone()
+                        if resultado:
+                            gps_obrigatorio = resultado[0].lower() in ['true', '1', 'sim', 'yes']
+                        cursor.close()
+                except Exception as e:
+                    logger.warning(f"Não foi possível verificar configuração de GPS obrigatório: {e}")
+                
+                # Obter coordenadas GPS dos campos ocultos preenchidos pelo JavaScript
                 latitude = None
                 longitude = None
+                
+                try:
+                    if gps_lat_input and gps_lat_input.strip():
+                        latitude = float(gps_lat_input.strip())
+                    if gps_lng_input and gps_lng_input.strip():
+                        longitude = float(gps_lng_input.strip())
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Erro ao converter coordenadas GPS: {e}")
+                    latitude = None
+                    longitude = None
+                
+                # Validar GPS se obrigatório
+                if gps_obrigatorio and (latitude is None or longitude is None):
+                    st.error("❌ O registro de ponto com GPS é obrigatório! Por favor, permita o acesso à localização no seu navegador e tente novamente.")
+                    st.info("💡 Dica: Clique no ícone de cadeado na barra de endereços e permita o acesso à localização.")
+                    st.stop()
 
                 # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
@@ -4127,7 +4217,27 @@ def tela_gestor():
             "⚙️ Sistema"
         ]
         
-        opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
+        # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
+        if 'menu_gestor_index' not in st.session_state:
+            st.session_state.menu_gestor_index = 0
+        
+        # Encontrar índice da opção atual para manter a seleção após rerun
+        opcao = st.selectbox(
+            "Escolha uma opção:", 
+            opcoes_menu,
+            index=st.session_state.menu_gestor_index,
+            key="menu_gestor_selectbox"
+        )
+        
+        # Atualizar índice no session_state
+        if opcao in opcoes_menu:
+            st.session_state.menu_gestor_index = opcoes_menu.index(opcao)
+        else:
+            # Se a opção tem badges dinâmicos, procurar pelo prefixo
+            for i, opt in enumerate(opcoes_menu):
+                if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
+                    st.session_state.menu_gestor_index = i
+                    break
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -5770,11 +5880,101 @@ def todos_registros_interface(calculo_horas_system):
             st.markdown(
                 f"### 📋 Listagem de Registros ({len(registros)} encontrados)")
         with col2:
-            # Preparar dados para exportação
-            df_export = pd.DataFrame(registros, columns=[
-                'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade',
-                'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Nome Completo'
-            ])
+            # 🔧 CORREÇÃO: Preparar dados para exportação COM horas trabalhadas e previstas
+            # Primeiro, organizar registros por usuário e data para calcular horas
+            from jornada_semanal_system import obter_jornada_usuario
+            
+            registros_para_export = {}
+            for registro in registros:
+                reg_id, usuario, data_hora_str, tipo, modalidade, projeto, atividade, localizacao, lat, lng, nome_completo = registro
+                data_hora = safe_datetime_parse(data_hora_str)
+                data_str = data_hora.strftime("%Y-%m-%d")
+                
+                chave = f"{usuario}_{data_str}"
+                if chave not in registros_para_export:
+                    registros_para_export[chave] = {
+                        'usuario': usuario,
+                        'nome_completo': nome_completo or usuario,
+                        'data': data_hora.date(),
+                        'registros': [],
+                        'inicio': None,
+                        'fim': None
+                    }
+                
+                registros_para_export[chave]['registros'].append({
+                    'tipo': tipo,
+                    'data_hora': data_hora
+                })
+                
+                if tipo == "Início" and not registros_para_export[chave]['inicio']:
+                    registros_para_export[chave]['inicio'] = data_hora
+                elif tipo == "Fim":
+                    registros_para_export[chave]['fim'] = data_hora
+            
+            # Calcular horas trabalhadas e previstas
+            export_data = []
+            for chave, dados in registros_para_export.items():
+                usuario = dados['usuario']
+                nome_completo = dados['nome_completo']
+                data = dados['data']
+                inicio = dados['inicio']
+                fim = dados['fim']
+                
+                # Calcular horas trabalhadas
+                horas_trabalhadas_min = 0
+                if inicio and fim:
+                    delta = fim - inicio
+                    horas_trabalhadas_min = delta.total_seconds() / 60
+                
+                # Calcular horas previstas baseado na jornada do usuário
+                horas_previstas_min = 0
+                try:
+                    jornada = obter_jornada_usuario(usuario)
+                    # Mapear dia da semana para chave da jornada
+                    dias_map = {0: 'seg', 1: 'ter', 2: 'qua', 3: 'qui', 4: 'sex', 5: 'sab', 6: 'dom'}
+                    dia_semana = dias_map.get(data.weekday(), 'seg')
+                    
+                    config_dia = jornada.get(dia_semana, {})
+                    if config_dia.get('trabalha', False):
+                        inicio_jornada = config_dia.get('inicio', '08:00')
+                        fim_jornada = config_dia.get('fim', '17:00')
+                        intervalo = config_dia.get('intervalo', 60)
+                        
+                        # Calcular duração da jornada
+                        h_inicio, m_inicio = map(int, inicio_jornada.split(':'))
+                        h_fim, m_fim = map(int, fim_jornada.split(':'))
+                        
+                        duracao_jornada_min = (h_fim * 60 + m_fim) - (h_inicio * 60 + m_inicio) - intervalo
+                        horas_previstas_min = duracao_jornada_min
+                except Exception as e:
+                    logger.warning(f"Erro ao calcular jornada para {usuario}: {e}")
+                    horas_previstas_min = 480  # 8 horas padrão
+                
+                # Formatar para exibição
+                horas_trabalhadas_str = f"{int(horas_trabalhadas_min // 60)}h {int(horas_trabalhadas_min % 60)}min"
+                horas_previstas_str = f"{int(horas_previstas_min // 60)}h {int(horas_previstas_min % 60)}min"
+                
+                # Calcular saldo (horas extras ou horas devidas)
+                saldo_min = horas_trabalhadas_min - horas_previstas_min
+                if saldo_min >= 0:
+                    saldo_str = f"+{int(saldo_min // 60)}h {int(saldo_min % 60)}min"
+                else:
+                    saldo_min_abs = abs(saldo_min)
+                    saldo_str = f"-{int(saldo_min_abs // 60)}h {int(saldo_min_abs % 60)}min"
+                
+                export_data.append({
+                    'Usuário': usuario,
+                    'Nome Completo': nome_completo,
+                    'Data': data.strftime('%d/%m/%Y'),
+                    'Entrada': inicio.strftime('%H:%M') if inicio else '-',
+                    'Saída': fim.strftime('%H:%M') if fim else '-',
+                    'Horas Trabalhadas': horas_trabalhadas_str if inicio and fim else '-',
+                    'Horas Previstas': horas_previstas_str,
+                    'Saldo': saldo_str if inicio and fim else '-',
+                    'Qtd Registros': len(dados['registros'])
+                })
+            
+            df_export = pd.DataFrame(export_data)
             csv = df_export.to_csv(index=False).encode('utf-8-sig')
             safe_download_button(
                 label="📥 Exportar CSV",
