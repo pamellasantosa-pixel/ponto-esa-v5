@@ -6367,7 +6367,7 @@ def gerenciar_arquivos_interface(upload_system):
         for arquivo in arquivos:
             arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_arquivo, nome_completo = arquivo
 
-            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}"):
+            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}", expanded=False):
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
@@ -6388,8 +6388,16 @@ def gerenciar_arquivos_interface(upload_system):
                             data=content,
                             file_name=nome,
                             mime=tipo_arquivo,
-                            use_container_width=True
+                            use_container_width=True,
+                            key=f"download_arq_{arquivo_id}"
                         )
+                        
+                        # Visualização de imagens inline
+                        if is_image_file(tipo_arquivo):
+                            st.image(content, caption=nome, width=300)
+                    else:
+                        st.warning("⚠️ Arquivo indisponível")
+                        st.caption("O arquivo não está mais acessível no servidor. Solicite ao usuário que faça o re-upload.")
 
                     # Botão de exclusão (com confirmação)
                     if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", use_container_width=True):
@@ -6409,13 +6417,6 @@ def gerenciar_arquivos_interface(upload_system):
                             if st.button("❌ Não", key=f"no_{arquivo_id}"):
                                 del st.session_state[f"confirm_delete_{arquivo_id}"]
                                 st.rerun()
-
-                # Visualização de imagens
-                if is_image_file(tipo_arquivo):
-                    content, _ = upload_system.get_file_content(
-                        arquivo_id, usuario)
-                    if content:
-                        st.image(content, caption=nome, width=400)
     else:
         st.info("📁 Nenhum arquivo encontrado com os filtros aplicados")
 
