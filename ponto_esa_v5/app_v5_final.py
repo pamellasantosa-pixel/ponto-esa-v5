@@ -2381,20 +2381,78 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         
         st.markdown("---")
     
-    # ========== BOTÃO SOLICITAR HORAS EXTRAS (manual) ==========
-    if not st.session_state.horas_extras_ativa and ja_registrou_inicio and not ja_registrou_fim:
-        col_btn1, col_btn2 = st.columns([1, 3])
-        with col_btn1:
-            if st.button("🕐 Solicitar Horas Extras", use_container_width=True, 
-                        disabled=not passou_horario_fim,
-                        help="Disponível após o horário de fim do expediente" if not passou_horario_fim else "Clique para iniciar horas extras"):
-                st.session_state.horas_extras_ativa = True
-                st.session_state.horas_extras_inicio = datetime.now()
-                st.session_state.ultima_notif_continuar = datetime.now()
-                st.rerun()
+    # ========== PAINEL DE STATUS HORAS EXTRAS ==========
+    # Mostrar status da jornada para o funcionário
+    st.markdown("---")
+    
+    # Mostrar informações de debug temporárias
+    with st.expander("ℹ️ Status da Jornada", expanded=False):
+        st.write(f"**Hora atual (Brasil):** {agora.strftime('%H:%M:%S')}")
+        st.write(f"**Data de hoje:** {hoje.strftime('%d/%m/%Y')} ({dia_semana})")
+        st.write(f"**Dia trabalha:** {config_dia.get('trabalha', 'Não configurado')}")
+        st.write(f"**Horário fim jornada:** {horario_fim_jornada}")
+        st.write(f"**Já passou do horário:** {passou_horario_fim}")
+        st.write(f"**Registrou entrada hoje:** {ja_registrou_inicio}")
+        st.write(f"**Registrou saída hoje:** {ja_registrou_fim}")
+        st.write(f"**Horas extras ativa:** {st.session_state.horas_extras_ativa}")
+    
+    # Se não registrou entrada, informar
+    if not ja_registrou_inicio:
+        st.info("""
+        📌 **Você ainda não registrou sua entrada hoje.**
         
+        Registre sua entrada para começar o expediente. Após o horário de término, 
+        você poderá optar por fazer horas extras.
+        """)
+    elif ja_registrou_inicio and not ja_registrou_fim and not st.session_state.horas_extras_ativa:
+        # Calcular tempo restante até fim do expediente
         if not passou_horario_fim:
-            st.caption(f"⏰ O botão será habilitado às {horario_fim_jornada}")
+            tempo_restante = hora_fim_jornada - agora
+            min_restantes = int(tempo_restante.total_seconds() // 60)
+            if min_restantes > 0:
+                st.info(f"""
+                ⏰ **Expediente em andamento**
+                
+                Seu horário de término é às **{horario_fim_jornada}** ({min_restantes} minutos restantes).
+                
+                Após esse horário, aparecerá uma opção para fazer **horas extras**.
+                """)
+            else:
+                # Está próximo do horário
+                st.warning(f"""
+                ⏰ **Expediente quase terminando!**
+                
+                Seu horário de término é às **{horario_fim_jornada}**.
+                """)
+        else:
+            # Já passou do horário - mostrar opção de horas extras
+            st.warning(f"""
+            🕐 **Horário de expediente encerrado às {horario_fim_jornada}**
+            
+            Você ainda não registrou sua saída. Deseja fazer horas extras?
+            """)
+            
+            col_sim, col_nao = st.columns(2)
+            with col_sim:
+                if st.button("✅ Sim, fazer horas extras", use_container_width=True, type="primary", key="btn_he_manual"):
+                    st.session_state.horas_extras_ativa = True
+                    st.session_state.horas_extras_inicio = get_datetime_br()
+                    st.session_state.popup_hora_extra_mostrado = True
+                    st.session_state.ultima_notif_continuar = get_datetime_br()
+                    st.rerun()
+            
+            with col_nao:
+                if st.button("❌ Não, registrar saída agora", use_container_width=True, key="btn_saida_manual"):
+                    # Vai para o formulário normal de registro
+                    pass
+    elif ja_registrou_fim:
+        st.success("""
+        ✅ **Expediente encerrado!**
+        
+        Você já registrou entrada e saída para hoje.
+        """)
+    
+    st.markdown("---")
     
     st.subheader("➕ Novo Registro")
 
