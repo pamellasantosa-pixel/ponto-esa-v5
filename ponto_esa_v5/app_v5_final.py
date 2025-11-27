@@ -1639,18 +1639,25 @@ def aprovar_hora_extra_rapida_interface():
 
 
 def exibir_widget_notificacoes(horas_extras_system):
-    """Exibe widget fixo de notificações pendentes até serem respondidas"""
+    """Exibe widget fixo de notificações pendentes até serem respondidas - COM DETALHES DE HORAS EXTRAS"""
     try:
         # Buscar todas as notificações pendentes
+        he_pendentes = 0
+        correcoes_pendentes = 0
+        atestados_pendentes = 0
+        solicitacoes_he_detalhes = []
+        
         if REFACTORING_ENABLED:
             try:
-                # Solicitações de horas extras pendentes (para aprovar)
-                result_he = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                he_pendentes = result_he[0] if result_he else 0
+                # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
+                solicitacoes_he_detalhes = execute_query(
+                    """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                       FROM solicitacoes_horas_extras 
+                       WHERE aprovador_solicitado = %s AND status = 'pendente'
+                       ORDER BY data_solicitacao DESC""",
+                    (st.session_state.usuario,)
+                ) or []
+                he_pendentes = len(solicitacoes_he_detalhes)
                 
                 # Solicitações de correção de registro pendentes (enviadas pelo usuário)
                 result_corr = execute_query(
@@ -1675,12 +1682,15 @@ def exibir_widget_notificacoes(horas_extras_system):
             conn = get_connection()
             cursor = conn.cursor()
             
-            # Solicitações de horas extras pendentes (para aprovar)
+            # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
             cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                FROM solicitacoes_horas_extras 
                 WHERE aprovador_solicitado = %s AND status = 'pendente'
+                ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
-            he_pendentes = cursor.fetchone()[0]
+            solicitacoes_he_detalhes = cursor.fetchall()
+            he_pendentes = len(solicitacoes_he_detalhes)
             
             # Solicitações de correção de registro pendentes (enviadas pelo usuário)
             cursor.execute("""
@@ -1700,8 +1710,126 @@ def exibir_widget_notificacoes(horas_extras_system):
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
-        if total_notificacoes > 0:
-            # Criar container de notificações fixo
+        # ========== NOTIFICAÇÃO URGENTE DE HORAS EXTRAS PARA APROVAR ==========
+        if he_pendentes > 0:
+            st.markdown("""
+            <style>
+            .urgente-he-widget {
+                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                padding: 20px;
+                border-radius: 15px;
+                margin: 15px 0;
+                box-shadow: 0 4px 20px rgba(220, 53, 69, 0.5);
+                border: 3px solid #fff;
+                animation: urgente-pulse 1s infinite;
+            }
+            
+            @keyframes urgente-pulse {
+                0%, 100% { box-shadow: 0 4px 20px rgba(220, 53, 69, 0.5); }
+                50% { box-shadow: 0 4px 30px rgba(220, 53, 69, 0.8); }
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+            <div class="urgente-he-widget">
+                <h2 style="margin: 0; color: white; text-align: center;">
+                    ⚠️🕐 SOLICITAÇÃO DE HORAS EXTRAS AGUARDANDO SUA APROVAÇÃO! ⚠️
+                </h2>
+                <p style="margin: 10px 0; color: white; text-align: center; font-size: 16px;">
+                    Você tem <strong>{he_pendentes}</strong> solicitação(ões) pendente(s). Por favor, responda!
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Mostrar detalhes de cada solicitação pendente
+            for sol in solicitacoes_he_detalhes:
+                sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
+                
+                # Buscar nome do solicitante
+                nome_solicitante = sol_usuario
+                try:
+                    if REFACTORING_ENABLED:
+                        result = execute_query(
+                            "SELECT nome_completo FROM usuarios WHERE usuario = %s",
+                            (sol_usuario,),
+                            fetch_one=True
+                        )
+                        if result:
+                            nome_solicitante = result[0]
+                    else:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT nome_completo FROM usuarios WHERE usuario = %s", (sol_usuario,))
+                        result = cursor.fetchone()
+                        if result:
+                            nome_solicitante = result[0]
+                        conn.close()
+                except:
+                    pass
+                
+                with st.expander(f"🕐 {nome_solicitante} - {sol_data} - {format_time_duration(sol_total)}", expanded=True):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Solicitante:** {nome_solicitante} ({sol_usuario})")
+                        st.write(f"**Data:** {sol_data}")
+                        st.write(f"**Horário:** {sol_h_inicio} às {sol_h_fim}")
+                        st.write(f"**Total:** {format_time_duration(sol_total)}")
+                        st.write(f"**Justificativa:** {sol_just}")
+                    
+                    with col2:
+                        observacoes_he = st.text_area(
+                            "Observações:",
+                            key=f"obs_he_widget_{sol_id}",
+                            height=80
+                        )
+                        
+                        col_apr, col_rej = st.columns(2)
+                        
+                        with col_apr:
+                            if st.button("✅ Aprovar", key=f"apr_he_widget_{sol_id}", use_container_width=True, type="primary"):
+                                try:
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
+                                    cursor.execute(f"""
+                                        UPDATE solicitacoes_horas_extras 
+                                        SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, 
+                                            data_aprovacao = NOW(), observacoes = {SQL_PLACEHOLDER}
+                                        WHERE id = {SQL_PLACEHOLDER}
+                                    """, (st.session_state.usuario, observacoes_he, sol_id))
+                                    conn.commit()
+                                    conn.close()
+                                    st.success("✅ Horas extras aprovadas!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro: {e}")
+                        
+                        with col_rej:
+                            if st.button("❌ Rejeitar", key=f"rej_he_widget_{sol_id}", use_container_width=True):
+                                if not observacoes_he or not observacoes_he.strip():
+                                    st.error("❌ Informe o motivo da rejeição!")
+                                else:
+                                    try:
+                                        conn = get_connection()
+                                        cursor = conn.cursor()
+                                        cursor.execute(f"""
+                                            UPDATE solicitacoes_horas_extras 
+                                            SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER}, 
+                                                data_aprovacao = NOW(), observacoes = {SQL_PLACEHOLDER}
+                                            WHERE id = {SQL_PLACEHOLDER}
+                                        """, (st.session_state.usuario, observacoes_he, sol_id))
+                                        conn.commit()
+                                        conn.close()
+                                        st.warning("❌ Horas extras rejeitadas.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Erro: {e}")
+            
+            st.markdown("---")
+        
+        # ========== OUTRAS NOTIFICAÇÕES ==========
+        if correcoes_pendentes > 0 or atestados_pendentes > 0:
             st.markdown("""
             <style>
             .notification-widget {
@@ -1711,31 +1839,6 @@ def exibir_widget_notificacoes(horas_extras_system):
                 margin: 15px 0;
                 box-shadow: 0 4px 12px rgba(255, 99, 71, 0.3);
                 border-left: 5px solid #FF4500;
-                animation: pulse 2s infinite;
-            }
-            
-            @keyframes pulse {
-                0%, 100% { transform: scale(1); }
-                50% { transform: scale(1.02); }
-            }
-            
-            .notification-badge {
-                background: white;
-                color: #FF4500;
-                padding: 5px 12px;
-                border-radius: 20px;
-                font-weight: bold;
-                font-size: 16px;
-                display: inline-block;
-                margin-left: 10px;
-            }
-            
-            .notification-item {
-                background: rgba(255, 255, 255, 0.2);
-                padding: 8px 12px;
-                border-radius: 5px;
-                margin: 5px 0;
-                color: white;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -1744,7 +1847,6 @@ def exibir_widget_notificacoes(horas_extras_system):
             <div class="notification-widget">
                 <h3 style="margin: 0; color: white; display: inline-block;">
                     🔔 Notificações Pendentes
-                    <span class="notification-badge">{total_notificacoes}</span>
                 </h3>
                 <p style="margin: 10px 0 5px 0; color: white; font-size: 14px;">
                     Você tem ações aguardando resposta:
@@ -1752,20 +1854,10 @@ def exibir_widget_notificacoes(horas_extras_system):
             </div>
             """, unsafe_allow_html=True)
             
-            # Mostrar detalhes em colunas
-            cols = st.columns(3)
-            
-            if he_pendentes > 0:
-                with cols[0]:
-                    if st.button(f"🕐 {he_pendentes} Hora(s) Extra para Aprovar", 
-                                use_container_width=True, 
-                                type="primary",
-                                key="notif_he"):
-                        st.session_state.ir_para_notificacoes = True
-                        st.rerun()
+            cols = st.columns(2)
             
             if correcoes_pendentes > 0:
-                with cols[1]:
+                with cols[0]:
                     if st.button(f"🔧 {correcoes_pendentes} Correção(ões) Pendente(s)", 
                                 use_container_width=True,
                                 type="secondary",
@@ -1774,7 +1866,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                         st.rerun()
             
             if atestados_pendentes > 0:
-                with cols[2]:
+                with cols[1]:
                     if st.button(f"⏰ {atestados_pendentes} Atestado(s) Pendente(s)", 
                                 use_container_width=True,
                                 type="secondary",
@@ -2042,24 +2134,28 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     if 'ultima_notif_continuar' not in st.session_state:
         st.session_state.ultima_notif_continuar = None
     
-    # Obter lista de gestores para aprovação
-    gestores_lista = []
+    # Obter lista de TODOS os usuários cadastrados (exceto o solicitante) para aprovação
+    usuarios_lista = []
     if REFACTORING_ENABLED:
         try:
-            gestores = execute_query(
-                "SELECT usuario, nome_completo FROM usuarios WHERE tipo = 'gestor' AND ativo = 1 ORDER BY nome_completo"
+            usuarios = execute_query(
+                "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo",
+                (st.session_state.usuario,)
             )
-            if gestores:
-                gestores_lista = [f"{g[1]} ({g[0]})" for g in gestores]
+            if usuarios:
+                usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
         except:
             pass
     else:
         try:
             conn = get_connection()
             cursor = conn.cursor()
-            cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE tipo = 'gestor' AND ativo = 1 ORDER BY nome_completo")
-            gestores = cursor.fetchall()
-            gestores_lista = [f"{g[1]} ({g[0]})" for g in gestores]
+            cursor.execute(
+                "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo",
+                (st.session_state.usuario,)
+            )
+            usuarios = cursor.fetchall()
+            usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
             conn.close()
         except:
             pass
@@ -2171,7 +2267,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         with col2:
             aprovador_selecionado = st.selectbox(
                 "👤 Quem deve autorizar:",
-                ["Selecione um gestor..."] + gestores_lista,
+                ["Selecione quem vai autorizar..."] + usuarios_lista,
                 key="aprovador_he"
             )
         
@@ -2194,8 +2290,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             
             with col_confirmar:
                 if st.button("✅ Confirmar e Enviar", use_container_width=True, type="primary"):
-                    if aprovador_selecionado == "Selecione um gestor...":
-                        st.error("❌ Selecione um gestor para autorizar as horas extras!")
+                    if aprovador_selecionado == "Selecione quem vai autorizar...":
+                        st.error("❌ Selecione alguém para autorizar as horas extras!")
                     elif not justificativa_he or not justificativa_he.strip():
                         st.error("❌ A justificativa é obrigatória!")
                     else:
