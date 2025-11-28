@@ -3557,6 +3557,8 @@ def registrar_ausencia_interface(upload_system):
         elif data_inicio > data_fim:
             st.error(
                 "❌ Data de início deve ser anterior ou igual à data de fim")
+        elif not nao_possui_comprovante and uploaded_file is None:
+            st.error("❌ Você deve anexar um comprovante OU marcar a opção 'Não possuo comprovante físico no momento'")
         else:
             arquivo_comprovante = None
             
@@ -3699,6 +3701,8 @@ def atestado_horas_interface(atestado_system, upload_system):
             if submitted:
                 if not motivo.strip():
                     st.error("❌ O motivo é obrigatório")
+                elif not nao_possui_comprovante and uploaded_file is None:
+                    st.error("❌ Você deve anexar um comprovante OU marcar a opção 'Não possuo atestado físico no momento'")
                 else:
                     # Validar formato de hora
                     try:

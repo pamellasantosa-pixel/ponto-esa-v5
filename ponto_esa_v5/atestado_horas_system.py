@@ -26,9 +26,19 @@ class AtestadoHorasSystem:
     ):
         """Registra um atestado de horas simples, compatível com os testes.
 
-        Retorna dict com `success` e `message`.
+        Retorna dict com `success`, `message` e `total_horas`.
         """
         try:
+            # Calcular total de horas
+            h_inicio, m_inicio = map(int, hora_inicio.split(':'))
+            h_fim, m_fim = map(int, hora_fim.split(':'))
+            
+            minutos_inicio = h_inicio * 60 + m_inicio
+            minutos_fim = h_fim * 60 + m_fim
+            
+            total_minutos = minutos_fim - minutos_inicio
+            total_horas = total_minutos / 60.0
+            
             conn = get_connection()
             cursor = conn.cursor()
             placeholders = ", ".join([SQL_PLACEHOLDER] * 8)
@@ -45,7 +55,7 @@ class AtestadoHorasSystem:
                     data,
                     hora_inicio,
                     hora_fim,
-                    0.0,
+                    round(total_horas, 2),
                     motivo,
                     arquivo_comprovante,
                     nao_possui_comprovante,
@@ -54,14 +64,14 @@ class AtestadoHorasSystem:
             conn.commit()
             atestado_id = cursor.lastrowid if hasattr(cursor, "lastrowid") else None
             conn.close()
-            return {"success": True, "message": "Atestado registrado", "id": atestado_id}
+            return {"success": True, "message": "Atestado registrado com sucesso!", "id": atestado_id, "total_horas": total_horas}
         except Exception as e:
             try:
                 conn.rollback()
                 conn.close()
             except Exception:
                 pass
-            return {"success": False, "message": str(e)}
+            return {"success": False, "message": str(e), "total_horas": 0}
     
     def listar_atestados_usuario(self, usuario: str):
         """Lista atestados de horas para um usuário (visão completa)."""
