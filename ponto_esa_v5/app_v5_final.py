@@ -2162,9 +2162,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     # ========== POPUP: Deseja fazer horas extras? ==========
     if passou_horario_fim and ja_registrou_inicio and not ja_registrou_fim and not st.session_state.popup_hora_extra_mostrado and not st.session_state.horas_extras_ativa:
-        st.markdown("""
+        st.markdown(f"""
         <style>
-        .hora-extra-popup {
+        .hora-extra-popup {{
             background: linear-gradient(135deg, #ff9800, #f57c00);
             padding: 20px;
             border-radius: 15px;
@@ -2172,13 +2172,13 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             text-align: center;
             margin-bottom: 20px;
             box-shadow: 0 4px 15px rgba(255, 152, 0, 0.4);
-        }
+        }}
         </style>
         <div class="hora-extra-popup">
             <h3>⏰ Expediente Encerrado!</h3>
-            <p>Seu horário de trabalho terminou às {horario_fim}. Deseja fazer horas extras?</p>
+            <p>Seu horário de trabalho terminou às {horario_fim_jornada}. Deseja fazer horas extras?</p>
         </div>
-        """.format(horario_fim=horario_fim_jornada), unsafe_allow_html=True)
+        """, unsafe_allow_html=True)
         
         col_sim, col_nao = st.columns(2)
         with col_sim:
