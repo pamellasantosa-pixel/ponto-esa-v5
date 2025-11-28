@@ -2214,12 +2214,14 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     # Calcular tempo de horas extras (se ativa)
     tempo_he_str = "00:00:00"
+    tempo_total_segundos = 0
     if st.session_state.horas_extras_ativa and st.session_state.horas_extras_inicio:
         agora_br = get_datetime_br()
         inicio_he = st.session_state.horas_extras_inicio
         if inicio_he.tzinfo is None:
             inicio_he = TIMEZONE_BR.localize(inicio_he)
         tempo_decorrido = agora_br - inicio_he
+        tempo_total_segundos = int(tempo_decorrido.total_seconds())
         horas = int(tempo_decorrido.total_seconds() // 3600)
         minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
         segundos = int(tempo_decorrido.total_seconds() % 60)
@@ -2229,33 +2231,51 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     pode_iniciar_he = ja_registrou_inicio and not ja_registrou_fim and passou_horario_fim and not st.session_state.horas_extras_ativa
     he_em_andamento = st.session_state.horas_extras_ativa
     
-    # CSS para o painel de horas extras
+    # Mensagem após 1 hora de horas extras
+    if he_em_andamento and tempo_total_segundos >= 3600:
+        horas_completas = tempo_total_segundos // 3600
+        st.warning(f"⏰ **Atenção!** Você está fazendo horas extras há **{horas_completas} hora(s)**. Lembre-se de finalizar quando terminar.")
+    
+    # CSS para o painel de horas extras - contador menor e letras brancas
     st.markdown("""
     <style>
-    .he-panel {
-        background: linear-gradient(135deg, #1e3a5f, #2d5a87);
-        padding: 15px;
-        border-radius: 12px;
-        margin-bottom: 20px;
-    }
     .he-contador {
-        background: #0d1b2a;
-        color: #00ff88;
+        background: #1a1a2e;
+        color: #ffffff;
         font-family: 'Courier New', monospace;
-        font-size: 2em;
+        font-size: 1.4em;
         font-weight: bold;
-        padding: 10px 25px;
-        border-radius: 8px;
+        padding: 8px 15px;
+        border-radius: 6px;
         display: inline-block;
-        min-width: 150px;
+        min-width: 100px;
         text-align: center;
     }
+    .he-contador-ativo {
+        background: #2d5a3d;
+        color: #ffffff;
+        animation: pulse 1s infinite;
+    }
     .he-contador-inativo {
-        background: #1a1a2e;
-        color: #666;
+        background: #333;
+        color: #888;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.8; }
     }
     </style>
     """, unsafe_allow_html=True)
+    
+    # Auto-refresh a cada 1 segundo se HE ativa (usando JavaScript)
+    if he_em_andamento:
+        st.markdown("""
+        <script>
+        setTimeout(function(){
+            window.parent.document.querySelector('button[kind="secondary"]')?.click();
+        }, 1000);
+        </script>
+        """, unsafe_allow_html=True)
     
     # Layout do painel de horas extras
     col_btn1, col_contador, col_aprovador, col_btn2 = st.columns([1.2, 1, 1.5, 1.2])
@@ -2275,7 +2295,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             st.button("▶️ Solicitar Horas Extras", disabled=True, use_container_width=True, help=btn_help)
     
     with col_contador:
-        contador_class = "he-contador" if he_em_andamento else "he-contador he-contador-inativo"
+        contador_class = "he-contador he-contador-ativo" if he_em_andamento else "he-contador he-contador-inativo"
         st.markdown(f'<div class="{contador_class}">{tempo_he_str}</div>', unsafe_allow_html=True)
     
     with col_aprovador:
@@ -2302,13 +2322,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.session_state.mostrar_finalizar_he = True
         else:
             st.button("⏹️ Finalizar Horas Extras", disabled=True, use_container_width=True)
-    
-    # Botão de atualizar contador (se HE ativa)
-    if he_em_andamento:
-        col_refresh, col_empty = st.columns([1, 4])
-        with col_refresh:
-            if st.button("🔄 Atualizar Contador", use_container_width=True):
-                st.rerun()
     
     # Modal de finalização de horas extras
     if st.session_state.get('mostrar_finalizar_he', False) and he_em_andamento:

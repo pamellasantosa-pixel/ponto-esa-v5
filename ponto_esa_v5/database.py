@@ -154,6 +154,7 @@ def init_db():
             data DATE NOT NULL,
             hora_inicio TIME NOT NULL,
             hora_fim TIME NOT NULL,
+            total_horas REAL,
             justificativa TEXT NOT NULL,
             aprovador_solicitado TEXT NOT NULL,
             status TEXT DEFAULT 'pendente',
@@ -163,6 +164,12 @@ def init_db():
             observacoes TEXT
         )
     '''))
+    
+    # Migração: adicionar coluna total_horas se não existir
+    try:
+        c.execute("ALTER TABLE solicitacoes_horas_extras ADD COLUMN IF NOT EXISTS total_horas REAL")
+    except:
+        pass
 
     # Tabela para atestado de horas (schema antigo - manter para compatibilidade)
     c.execute(adapt_sql_for_postgresql('''
