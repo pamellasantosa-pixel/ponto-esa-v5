@@ -2094,19 +2094,19 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     # Verificar se passou do horário de fim
     passou_horario_fim = agora >= hora_fim_jornada and config_dia.get('trabalha', False)
     
-    # Verificar se já registrou entrada hoje
+    # Verificar se já registrou entrada hoje (case-insensitive)
     ja_registrou_inicio = False
     ja_registrou_fim = False
     if REFACTORING_ENABLED:
         try:
             result = execute_query(
-                "SELECT tipo FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
+                "SELECT LOWER(tipo) FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
                 (st.session_state.usuario, hoje.strftime("%Y-%m-%d"))
             )
             if result:
-                tipos = [r[0] for r in result]
-                ja_registrou_inicio = 'Início' in tipos
-                ja_registrou_fim = 'Fim' in tipos
+                tipos = [r[0].lower() if r[0] else '' for r in result]
+                ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
+                ja_registrou_fim = 'fim' in tipos
         except:
             pass
     else:
@@ -2114,12 +2114,12 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             conn = get_connection()
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT tipo FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
+                "SELECT LOWER(tipo) FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
                 (st.session_state.usuario, hoje.strftime("%Y-%m-%d"))
             )
-            tipos = [r[0] for r in cursor.fetchall()]
-            ja_registrou_inicio = 'Início' in tipos
-            ja_registrou_fim = 'Fim' in tipos
+            tipos = [r[0].lower() if r[0] else '' for r in cursor.fetchall()]
+            ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
+            ja_registrou_fim = 'fim' in tipos
             conn.close()
         except:
             pass
@@ -2209,10 +2209,13 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.success("✅ Expediente encerrado automaticamente!")
                 st.rerun()
     
-    # ========== PAINEL DE HORAS EXTRAS ATIVA ==========
+    # ========== PAINEL DE HORAS EXTRAS - SEMPRE VISÍVEL ==========
+    # Contador e botões sempre visíveis (como no layout)
+    
+    # Calcular tempo de horas extras (se ativa)
+    tempo_he_str = "00:00:00"
     if st.session_state.horas_extras_ativa and st.session_state.horas_extras_inicio:
         agora_br = get_datetime_br()
-        # Se inicio foi salvo sem tz, adicionar tz Brasil para comparação
         inicio_he = st.session_state.horas_extras_inicio
         if inicio_he.tzinfo is None:
             inicio_he = TIMEZONE_BR.localize(inicio_he)
@@ -2220,237 +2223,180 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         horas = int(tempo_decorrido.total_seconds() // 3600)
         minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
         segundos = int(tempo_decorrido.total_seconds() % 60)
-        
-        # Notificação de continuar após 1 hora
-        if st.session_state.ultima_notif_continuar:
-            ultima_notif = st.session_state.ultima_notif_continuar
-            if ultima_notif.tzinfo is None:
-                ultima_notif = TIMEZONE_BR.localize(ultima_notif)
-            tempo_desde_notif = agora_br - ultima_notif
-            if tempo_desde_notif.total_seconds() >= 3600:  # 1 hora
-                st.warning("⏰ **Você está fazendo horas extras há mais de 1 hora. Deseja continuar?**")
-                col_cont, col_parar = st.columns(2)
-                with col_cont:
-                    if st.button("✅ Continuar", key="continuar_he"):
-                        st.session_state.ultima_notif_continuar = get_datetime_br()
-                        st.rerun()
-                with col_parar:
-                    if st.button("⏹️ Parar agora", key="parar_he_notif"):
-                        st.session_state.mostrar_finalizar_he = True
-                        st.rerun()
-        
-        st.markdown(f"""
-        <style>
-        .horas-extras-panel {{
-            background: linear-gradient(135deg, #4CAF50, #2E7D32);
-            padding: 15px 25px;
-            border-radius: 12px;
-            color: white;
-            margin-bottom: 20px;
-        }}
-        .contador-tempo {{
-            font-size: 2.5em;
-            font-weight: bold;
-            font-family: 'Courier New', monospace;
-            text-align: center;
-            background: rgba(0,0,0,0.2);
-            padding: 10px 20px;
-            border-radius: 8px;
-            display: inline-block;
-        }}
-        </style>
-        <div class="horas-extras-panel">
-            <h4>🕐 Horas Extras em Andamento</h4>
-            <div class="contador-tempo">{horas:02d}:{minutos:02d}:{segundos:02d}</div>
-        </div>
-        """, unsafe_allow_html=True)
-        
-        # Botões de controle
-        col1, col2, col3 = st.columns([1, 2, 1])
-        
-        with col1:
-            if st.button("🔄 Atualizar", use_container_width=True):
+        tempo_he_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+    
+    # Verificar se botões devem estar ativos
+    pode_iniciar_he = ja_registrou_inicio and not ja_registrou_fim and passou_horario_fim and not st.session_state.horas_extras_ativa
+    he_em_andamento = st.session_state.horas_extras_ativa
+    
+    # CSS para o painel de horas extras
+    st.markdown("""
+    <style>
+    .he-panel {
+        background: linear-gradient(135deg, #1e3a5f, #2d5a87);
+        padding: 15px;
+        border-radius: 12px;
+        margin-bottom: 20px;
+    }
+    .he-contador {
+        background: #0d1b2a;
+        color: #00ff88;
+        font-family: 'Courier New', monospace;
+        font-size: 2em;
+        font-weight: bold;
+        padding: 10px 25px;
+        border-radius: 8px;
+        display: inline-block;
+        min-width: 150px;
+        text-align: center;
+    }
+    .he-contador-inativo {
+        background: #1a1a2e;
+        color: #666;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Layout do painel de horas extras
+    col_btn1, col_contador, col_aprovador, col_btn2 = st.columns([1.2, 1, 1.5, 1.2])
+    
+    with col_btn1:
+        if he_em_andamento:
+            st.button("🕐 HE em Andamento", disabled=True, use_container_width=True)
+        elif pode_iniciar_he:
+            if st.button("▶️ Solicitar Horas Extras", use_container_width=True, type="primary"):
+                st.session_state.horas_extras_ativa = True
+                st.session_state.horas_extras_inicio = get_datetime_br()
+                st.session_state.popup_hora_extra_mostrado = True
+                st.session_state.ultima_notif_continuar = get_datetime_br()
                 st.rerun()
-        
-        with col2:
-            aprovador_selecionado = st.selectbox(
-                "👤 Quem deve autorizar:",
-                ["Selecione quem vai autorizar..."] + usuarios_lista,
-                key="aprovador_he"
+        else:
+            btn_help = "Registre entrada primeiro" if not ja_registrou_inicio else "Disponível após " + horario_fim_jornada if not passou_horario_fim else "Já registrou saída"
+            st.button("▶️ Solicitar Horas Extras", disabled=True, use_container_width=True, help=btn_help)
+    
+    with col_contador:
+        contador_class = "he-contador" if he_em_andamento else "he-contador he-contador-inativo"
+        st.markdown(f'<div class="{contador_class}">{tempo_he_str}</div>', unsafe_allow_html=True)
+    
+    with col_aprovador:
+        aprovador_key = "aprovador_he_panel"
+        if he_em_andamento:
+            st.session_state.aprovador_he_selecionado = st.selectbox(
+                "Quem deve autorizar:",
+                ["Selecione..."] + usuarios_lista,
+                key=aprovador_key,
+                label_visibility="collapsed"
             )
-        
-        with col3:
+        else:
+            st.selectbox(
+                "Quem deve autorizar:",
+                ["Quem deve autorizar ↓"],
+                disabled=True,
+                key=f"{aprovador_key}_disabled",
+                label_visibility="collapsed"
+            )
+    
+    with col_btn2:
+        if he_em_andamento:
             if st.button("⏹️ Finalizar Horas Extras", use_container_width=True, type="primary"):
                 st.session_state.mostrar_finalizar_he = True
-        
-        # Modal de finalização
-        if st.session_state.get('mostrar_finalizar_he', False):
-            st.markdown("---")
-            st.subheader("📝 Finalizar Horas Extras")
-            
-            justificativa_he = st.text_area(
-                "📋 Justificativa (obrigatória):",
-                placeholder="Descreva o motivo das horas extras realizadas...",
-                key="justificativa_he"
-            )
-            
-            col_confirmar, col_cancelar = st.columns(2)
-            
-            with col_confirmar:
-                if st.button("✅ Confirmar e Enviar", use_container_width=True, type="primary"):
-                    if aprovador_selecionado == "Selecione quem vai autorizar...":
-                        st.error("❌ Selecione alguém para autorizar as horas extras!")
-                    elif not justificativa_he or not justificativa_he.strip():
-                        st.error("❌ A justificativa é obrigatória!")
-                    else:
-                        # Extrair username do aprovador
-                        aprovador_username = aprovador_selecionado.split("(")[1].rstrip(")")
-                        
-                        # Calcular tempo total (usar timezone Brasil)
-                        agora_final = get_datetime_br()
-                        inicio_he = st.session_state.horas_extras_inicio
-                        if inicio_he.tzinfo is None:
-                            inicio_he = TIMEZONE_BR.localize(inicio_he)
-                        tempo_total = agora_final - inicio_he
-                        horas_total = tempo_total.total_seconds() / 3600
-                        
-                        # Registrar solicitação de horas extras
-                        try:
-                            conn = get_connection()
-                            cursor = conn.cursor()
-                            
-                            hora_inicio = inicio_he.strftime("%H:%M")
-                            hora_fim = agora_final.strftime("%H:%M")
-                            
-                            cursor.execute(f"""
-                                INSERT INTO solicitacoes_horas_extras 
-                                (usuario, data, hora_inicio, hora_fim, total_horas, justificativa, 
-                                 aprovador_solicitado, status, data_solicitacao)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 
-                                        {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
-                                        {SQL_PLACEHOLDER}, 'pendente', NOW())
-                            """, (
-                                st.session_state.usuario,
-                                hoje.strftime("%Y-%m-%d"),
-                                hora_inicio,
-                                hora_fim,
-                                round(horas_total, 2),
-                                justificativa_he.strip(),
-                                aprovador_username
-                            ))
-                            conn.commit()
-                            conn.close()
-                            
-                            # Registrar fim do expediente
-                            registrar_ponto(
-                                st.session_state.usuario,
-                                "Fim",
-                                "Presencial",
-                                obter_projetos_ativos()[0] if obter_projetos_ativos() else "Geral",
-                                f"Fim com horas extras: {justificativa_he.strip()[:100]}",
-                                hoje.strftime("%Y-%m-%d"),
-                                None,
-                                None,
-                                None
-                            )
-                            
-                            # Limpar session state
-                            st.session_state.horas_extras_ativa = False
-                            st.session_state.horas_extras_inicio = None
-                            st.session_state.mostrar_finalizar_he = False
-                            
-                            st.success(f"""
-                            ✅ Horas extras registradas com sucesso!
-                            
-                            **Tempo total:** {int(horas_total)}h {int((horas_total % 1) * 60)}min
-                            
-                            **Enviado para aprovação de:** {aprovador_selecionado.split('(')[0].strip()}
-                            """)
-                            st.balloons()
-                            import time
-                            time.sleep(2)
-                            st.rerun()
-                            
-                        except Exception as e:
-                            st.error(f"❌ Erro ao registrar horas extras: {str(e)}")
-            
-            with col_cancelar:
-                if st.button("❌ Cancelar", use_container_width=True):
-                    st.session_state.mostrar_finalizar_he = False
-                    st.rerun()
-        
-        st.markdown("---")
-    
-    # ========== PAINEL DE STATUS HORAS EXTRAS ==========
-    # Mostrar status da jornada para o funcionário
-    st.markdown("---")
-    
-    # Mostrar informações de debug temporárias
-    with st.expander("ℹ️ Status da Jornada", expanded=False):
-        st.write(f"**Hora atual (Brasil):** {agora.strftime('%H:%M:%S')}")
-        st.write(f"**Data de hoje:** {hoje.strftime('%d/%m/%Y')} ({dia_semana})")
-        st.write(f"**Dia trabalha:** {config_dia.get('trabalha', 'Não configurado')}")
-        st.write(f"**Horário fim jornada:** {horario_fim_jornada}")
-        st.write(f"**Já passou do horário:** {passou_horario_fim}")
-        st.write(f"**Registrou entrada hoje:** {ja_registrou_inicio}")
-        st.write(f"**Registrou saída hoje:** {ja_registrou_fim}")
-        st.write(f"**Horas extras ativa:** {st.session_state.horas_extras_ativa}")
-    
-    # Se não registrou entrada, informar
-    if not ja_registrou_inicio:
-        st.info("""
-        📌 **Você ainda não registrou sua entrada hoje.**
-        
-        Registre sua entrada para começar o expediente. Após o horário de término, 
-        você poderá optar por fazer horas extras.
-        """)
-    elif ja_registrou_inicio and not ja_registrou_fim and not st.session_state.horas_extras_ativa:
-        # Calcular tempo restante até fim do expediente
-        if not passou_horario_fim:
-            tempo_restante = hora_fim_jornada - agora
-            min_restantes = int(tempo_restante.total_seconds() // 60)
-            if min_restantes > 0:
-                st.info(f"""
-                ⏰ **Expediente em andamento**
-                
-                Seu horário de término é às **{horario_fim_jornada}** ({min_restantes} minutos restantes).
-                
-                Após esse horário, aparecerá uma opção para fazer **horas extras**.
-                """)
-            else:
-                # Está próximo do horário
-                st.warning(f"""
-                ⏰ **Expediente quase terminando!**
-                
-                Seu horário de término é às **{horario_fim_jornada}**.
-                """)
         else:
-            # Já passou do horário - mostrar opção de horas extras
-            st.warning(f"""
-            🕐 **Horário de expediente encerrado às {horario_fim_jornada}**
-            
-            Você ainda não registrou sua saída. Deseja fazer horas extras?
-            """)
-            
-            col_sim, col_nao = st.columns(2)
-            with col_sim:
-                if st.button("✅ Sim, fazer horas extras", use_container_width=True, type="primary", key="btn_he_manual"):
-                    st.session_state.horas_extras_ativa = True
-                    st.session_state.horas_extras_inicio = get_datetime_br()
-                    st.session_state.popup_hora_extra_mostrado = True
-                    st.session_state.ultima_notif_continuar = get_datetime_br()
-                    st.rerun()
-            
-            with col_nao:
-                if st.button("❌ Não, registrar saída agora", use_container_width=True, key="btn_saida_manual"):
-                    # Vai para o formulário normal de registro
-                    pass
-    elif ja_registrou_fim:
-        st.success("""
-        ✅ **Expediente encerrado!**
+            st.button("⏹️ Finalizar Horas Extras", disabled=True, use_container_width=True)
+    
+    # Botão de atualizar contador (se HE ativa)
+    if he_em_andamento:
+        col_refresh, col_empty = st.columns([1, 4])
+        with col_refresh:
+            if st.button("🔄 Atualizar Contador", use_container_width=True):
+                st.rerun()
+    
+    # Modal de finalização de horas extras
+    if st.session_state.get('mostrar_finalizar_he', False) and he_em_andamento:
+        st.markdown("---")
+        st.subheader("📝 Finalizar Horas Extras")
         
-        Você já registrou entrada e saída para hoje.
-        """)
+        justificativa_he = st.text_area(
+            "📋 Justificativa (obrigatória):",
+            placeholder="Descreva o motivo das horas extras realizadas...",
+            key="justificativa_he_final"
+        )
+        
+        col_confirmar, col_cancelar = st.columns(2)
+        
+        with col_confirmar:
+            if st.button("✅ Confirmar e Enviar", use_container_width=True, type="primary", key="btn_confirmar_he"):
+                aprovador_sel = st.session_state.get('aprovador_he_selecionado', 'Selecione...')
+                if aprovador_sel == "Selecione...":
+                    st.error("❌ Selecione quem vai autorizar as horas extras!")
+                elif not justificativa_he or not justificativa_he.strip():
+                    st.error("❌ A justificativa é obrigatória!")
+                else:
+                    # Extrair username do aprovador
+                    aprovador_username = aprovador_sel.split("(")[1].rstrip(")")
+                    
+                    # Calcular tempo total
+                    agora_final = get_datetime_br()
+                    inicio_he = st.session_state.horas_extras_inicio
+                    if inicio_he.tzinfo is None:
+                        inicio_he = TIMEZONE_BR.localize(inicio_he)
+                    tempo_total = agora_final - inicio_he
+                    horas_total = tempo_total.total_seconds() / 3600
+                    
+                    try:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        
+                        hora_inicio = inicio_he.strftime("%H:%M")
+                        hora_fim = agora_final.strftime("%H:%M")
+                        
+                        cursor.execute(f"""
+                            INSERT INTO solicitacoes_horas_extras 
+                            (usuario, data, hora_inicio, hora_fim, total_horas, justificativa, 
+                             aprovador_solicitado, status, data_solicitacao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 
+                                    {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                    {SQL_PLACEHOLDER}, 'pendente', NOW())
+                        """, (
+                            st.session_state.usuario,
+                            hoje.strftime("%Y-%m-%d"),
+                            hora_inicio,
+                            hora_fim,
+                            round(horas_total, 2),
+                            justificativa_he.strip(),
+                            aprovador_username
+                        ))
+                        conn.commit()
+                        conn.close()
+                        
+                        # Registrar fim do expediente
+                        registrar_ponto(
+                            st.session_state.usuario,
+                            "Fim",
+                            "Presencial",
+                            obter_projetos_ativos()[0] if obter_projetos_ativos() else "Geral",
+                            f"Fim com horas extras: {justificativa_he.strip()[:100]}",
+                            hoje.strftime("%Y-%m-%d"),
+                            None, None, None
+                        )
+                        
+                        # Limpar session state
+                        st.session_state.horas_extras_ativa = False
+                        st.session_state.horas_extras_inicio = None
+                        st.session_state.mostrar_finalizar_he = False
+                        
+                        st.success(f"✅ Horas extras registradas! Total: {int(horas_total)}h {int((horas_total % 1) * 60)}min")
+                        st.balloons()
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erro: {str(e)}")
+        
+        with col_cancelar:
+            if st.button("❌ Cancelar", use_container_width=True, key="btn_cancelar_he"):
+                st.session_state.mostrar_finalizar_he = False
+                st.rerun()
     
     st.markdown("---")
     
