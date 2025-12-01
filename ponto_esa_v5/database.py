@@ -171,6 +171,25 @@ def init_db():
     except:
         pass
 
+    # Tabela para uploads de arquivos (DEVE vir antes de atestados_horas por causa da FK)
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS uploads (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            nome_original TEXT NOT NULL,
+            nome_arquivo TEXT NOT NULL,
+            tipo_arquivo TEXT NOT NULL,
+            tamanho INTEGER NOT NULL,
+            caminho TEXT NOT NULL,
+            hash_arquivo TEXT,
+            relacionado_a TEXT,
+            relacionado_id INTEGER,
+            data_upload TIMESTAMP DEFAULT NOW(),
+            conteudo BYTEA,
+            status TEXT DEFAULT 'ativo'
+        )
+    '''))
+
     # Tabela para atestado de horas (schema antigo - manter para compatibilidade)
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS atestado_horas (
@@ -208,25 +227,6 @@ def init_db():
             motivo_rejeicao TEXT,
             observacoes TEXT,
             FOREIGN KEY (arquivo_id) REFERENCES uploads(id)
-        )
-    '''))
-
-    # Tabela para uploads de arquivos
-    c.execute(adapt_sql_for_postgresql('''
-        CREATE TABLE IF NOT EXISTS uploads (
-            id SERIAL PRIMARY KEY,
-            usuario TEXT NOT NULL,
-            nome_original TEXT NOT NULL,
-            nome_arquivo TEXT NOT NULL,
-            tipo_arquivo TEXT NOT NULL,
-            tamanho INTEGER NOT NULL,
-            caminho TEXT NOT NULL,
-            hash_arquivo TEXT,
-            relacionado_a TEXT,
-            relacionado_id INTEGER,
-            data_upload TIMESTAMP DEFAULT NOW(),
-            conteudo BYTEA,
-            status TEXT DEFAULT 'ativo'
         )
     '''))
 
