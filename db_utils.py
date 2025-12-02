@@ -1,73 +1,61 @@
-"""Utilitários de banco de dados e context managers."""
+"""Utilitários simples de banco de dados e helpers de resposta.
 
-from __future__ import annotations
+Este módulo fornece apenas o mínimo necessário para que os sistemas
+de horas extras funcionem nos testes, sem adicionar complexidade
+desnecessária à aplicação.
+"""
 
-import logging
 from contextlib import contextmanager
-from typing import Any, Callable, Dict, Generator, Optional
+from typing import Any, Dict
 
-from database_postgresql import get_connection, USE_POSTGRESQL
+from .database import get_connection
 
-logger = logging.getLogger(__name__)
+
+def create_success_response(message: str, **extra: Any) -> Dict[str, Any]:
+    """Cria um dicionário de resposta de sucesso padronizado."""
+    data: Dict[str, Any] = {"success": True, "message": message}
+    data.update(extra)
+    return data
+
+
+def create_error_response(message: str, error: Exception | None = None, **extra: Any) -> Dict[str, Any]:
+    """Cria um dicionário de resposta de erro padronizado.
+
+    Aceita um parâmetro opcional ``error`` apenas para compatibilidade
+    com chamadas existentes; ele é convertido em string na chave
+    "error_detail".
+    """
+
+    data: Dict[str, Any] = {"success": False, "message": message}
+    if error is not None:
+        data["error_detail"] = str(error)
+    data.update(extra)
+    return data
 
 
 @contextmanager
-def database_transaction() -> Generator[Any, None, None]:
-    """Context manager para transações de banco de dados."""
-    conn = get_connection()
+def database_transaction(db_path: str | None = None):
+    """Context manager simples para transações de banco.
+
+    Usa ``get_connection`` do módulo ``database`` e garante commit/rollback
+    adequado em caso de erro.
+    """
+
+    conn = get_connection(db_path)
+    cursor = conn.cursor()
     try:
-        yield conn
+        yield cursor
         conn.commit()
-    except Exception as e:
+    except Exception:
         conn.rollback()
-        logger.error(f"Erro em transação de banco de dados: {e}")
         raise
     finally:
+        cursor.close()
         conn.close()
-
-
-def create_error_response(message: str, details: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Cria uma resposta de erro padronizada."""
-    response = {"success": False, "message": message}
-    if details:
-        response.update(details)
-    return response
-
-
-def create_success_response(
-    message: str, data: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """Cria uma resposta de sucesso padronizada."""
-    response = {"success": True, "message": message}
-    if data:
-        response.update(data)
-    return response
-
-
-def execute_safe_query(
-    query: str, params: tuple = (), fetch_one: bool = False
-) -> Optional[Any]:
-    """Executa uma query de forma segura com tratamento de erro."""
-    try:
-        conn = get_connection()
-        cursor = conn.cursor()
-        cursor.execute(query, params)
-        
-        if fetch_one:
-            result = cursor.fetchone()
-        else:
-            result = cursor.fetchall()
-            
-        conn.close()
-        return result
-    except Exception as e:
-        logger.error(f"Erro ao executar query: {e}")
-        return None
 
 
 __all__ = [
-    "database_transaction",
-    "create_error_response",
     "create_success_response",
-    "execute_safe_query",
+    "create_error_response",
+    "database_transaction",
 ]

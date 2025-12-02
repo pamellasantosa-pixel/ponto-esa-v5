@@ -3,14 +3,7 @@ Sistema de Horas Extras - Ponto ExSA v5.0
 Gerencia solicitações e aprovações de horas extras
 """
 
-import sqlite3
-try:
-    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except Exception:
-    try:
-        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except Exception:
-        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 from datetime import datetime, timedelta, time
 import json
@@ -20,7 +13,7 @@ except Exception:
     from notifications import notification_manager
 
 # SQL Placeholder para compatibilidade SQLite/PostgreSQL
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class HorasExtrasSystem:
@@ -84,7 +77,15 @@ class HorasExtrasSystem:
 
     def solicitar_horas_extras(self, usuario, data, hora_inicio, hora_fim, justificativa, aprovador_solicitado):
         """Registra uma nova solicitação de horas extras"""
-        from db_utils import database_transaction, create_error_response, create_success_response
+        try:
+            from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError as err_direct:
+            print(f"DEBUG: Import direto db_utils falhou em horas_extras_system.aprovar_solicitacao: {err_direct}")
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError as err_pkg:
+                print(f"DEBUG: Import ponto_esa_v5.db_utils falhou: {err_pkg}")
+                raise
         
         try:
             # Validações básicas
@@ -219,7 +220,15 @@ class HorasExtrasSystem:
 
     def aprovar_solicitacao(self, solicitacao_id, aprovador, observacoes=None):
         """Aprova uma solicitação de horas extras"""
-        from db_utils import database_transaction, create_error_response, create_success_response
+        try:
+            from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError as err_direct:
+            print(f"DEBUG: Import direto db_utils falhou em horas_extras_system.rejeitar_solicitacao: {err_direct}")
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError as err_pkg:
+                print(f"DEBUG: Import ponto_esa_v5.db_utils falhou: {err_pkg}")
+                raise
         
         try:
             with database_transaction(self.db_path) as cursor:
@@ -266,7 +275,13 @@ class HorasExtrasSystem:
 
     def rejeitar_solicitacao(self, solicitacao_id, aprovador, observacoes):
         """Rejeita uma solicitação de horas extras"""
-        from db_utils import database_transaction, create_error_response, create_success_response
+        try:
+            from db_utils import database_transaction, create_error_response, create_success_response
+        except ImportError:
+            try:
+                from ponto_esa_v5.db_utils import database_transaction, create_error_response, create_success_response
+            except ImportError:
+                from .db_utils import database_transaction, create_error_response, create_success_response
         
         try:
             with database_transaction(self.db_path) as cursor:

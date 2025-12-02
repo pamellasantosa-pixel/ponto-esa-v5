@@ -4,13 +4,7 @@ Implementa regras de negócio para cálculo de horas trabalhadas
 """
 
 import sqlite3
-try:
-    from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-except Exception:
-    try:
-        from database_postgresql import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
-    except Exception:
-        from database import get_connection, USE_POSTGRESQL, SQL_PLACEHOLDER
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 from datetime import datetime, timedelta, date
 import calendar
 
@@ -29,6 +23,9 @@ def safe_datetime_parse(value):
             except ValueError:
                 continue
     return None
+
+
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class CalculoHorasSystem:

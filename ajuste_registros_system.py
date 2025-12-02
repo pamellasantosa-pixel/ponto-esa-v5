@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
-from notifications import notification_manager
-from database_postgresql import get_connection, USE_POSTGRESQL
+from ponto_esa_v5.notifications import notification_manager
+from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+import database as database_module
 
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
+SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
+
+# Configurar logging
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.DEBUG)
 
 
 class AjusteRegistrosSystem:
@@ -17,6 +23,13 @@ class AjusteRegistrosSystem:
 
     def __init__(self, connection_factory: Optional[Callable[[], Any]] = None) -> None:
         self._get_connection = connection_factory or get_connection
+
+        # Verificar dependências críticas
+        logger.debug("Verificando dependências críticas...")
+        if not self._check_database_connection():
+            logger.critical("Erro crítico: Banco de dados não está acessível.")
+            raise RuntimeError("Banco de dados não está acessível. Verifique a configuração.")
+        logger.debug("Todas as dependências críticas estão disponíveis.")
 
     # ===== Métodos auxiliares internos =====
     def _dump_json(self, payload: Dict[str, Any]) -> str:
@@ -40,6 +53,18 @@ class AjusteRegistrosSystem:
         notification_manager.stop_repeating_notification(
             f"ajuste_registro_{solicitacao_id}"
         )
+
+    # Adicionar verificação de conexão ao banco de dados
+    def _check_database_connection(self) -> bool:
+        try:
+            logger.debug("Verificando conexão com o banco de dados...")
+            conn = self._get_connection()
+            conn.close()
+            logger.debug("Conexão com o banco de dados bem-sucedida.")
+            return True
+        except Exception as exc:
+            logger.error(f"Erro ao conectar ao banco de dados: {exc}")
+            return False
 
     # ===== Consultas =====
     def is_solicitacao_resolvida(self, solicitacao_id: int) -> bool:
@@ -156,11 +181,14 @@ class AjusteRegistrosSystem:
         dados_solicitados: Dict[str, Any],
         justificativa: str,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
             dados_json = self._dump_json(dados_solicitados)
-            if USE_POSTGRESQL:
+            if database_module.USE_POSTGRESQL:
                 cursor.execute(
                     """
                     INSERT INTO solicitacoes_ajuste_ponto
@@ -229,6 +257,9 @@ class AjusteRegistrosSystem:
         dados_confirmados: Dict[str, Any],
         observacoes: Optional[str] = None,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
@@ -327,7 +358,7 @@ class AjusteRegistrosSystem:
                 projeto = dados_para_aplicar.get("projeto")
                 atividade = dados_para_aplicar.get("atividade")
 
-                if USE_POSTGRESQL:
+                if database_module.USE_POSTGRESQL:
                     cursor.execute(
                         """
                         INSERT INTO registros_ponto
@@ -425,6 +456,9 @@ class AjusteRegistrosSystem:
         gestor: str,
         observacoes: str,
     ) -> Dict[str, Any]:
+        if not self._check_database_connection():
+            return {"success": False, "message": "Erro de conexão com o banco de dados."}
+
         if not observacoes.strip():
             return {"success": False, "message": "Observações são obrigatórias para rejeição."}
 

@@ -6,21 +6,59 @@ Desenvolvido por Pâmella SAR para Expressão Socioambiental Pesquisa e Projetos
 Deploy: Render.com | Banco: PostgreSQL
 """
 
+import sys
+import os
+
+# Configuração de PATH deve vir antes de imports locais que podem depender de pacotes
+# Adicionar o diretório atual ao path
+if os.path.dirname(os.path.abspath(__file__)) not in sys.path:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+# Adicionar o diretório pai ao path para permitir importação do pacote ponto_esa_v5
+parent_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if parent_dir not in sys.path:
+    sys.path.insert(0, parent_dir)
+
 from notifications import notification_manager
-from calculo_horas_system import CalculoHorasSystem
+from calculo_horas_system import CalculoHorasSystem, format_time_duration
 from banco_horas_system import BancoHorasSystem, format_saldo_display
-from horas_extras_system import HorasExtrasSystem
+from horas_extras_system import HorasExtrasSystem, get_status_emoji
+from atestado_horas_system import AtestadoHorasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
-from streamlit_utils import safe_download_button
-from atestado_horas_system import AtestadoHorasSystem, format_time_duration, get_status_color, get_status_emoji
-from ajuste_registros_system import AjusteRegistrosSystem
-from timer_integration_functions import (
-    exibir_button_solicitar_hora_extra,
-    exibir_modal_timer_hora_extra,
-    exibir_dialog_justificativa_hora_extra,
-    exibir_popup_continuar_hora_extra,
-    exibir_notificacoes_hora_extra_pendente,
-)
+# Safe import - provide a robust fallback implementation if streamlit_utils is not available
+# Use dynamic import to avoid static analysis import errors when the optional module is missing.
+import importlib
+try:
+    _streamlit_utils = importlib.import_module('streamlit_utils')
+    safe_download_button = getattr(_streamlit_utils, 'safe_download_button')
+except Exception:
+    def safe_download_button(label, data, file_name, mime="application/octet-stream", use_container_width=False, key=None):
+        """Fallback leve caso `streamlit_utils.safe_download_button` não esteja disponível."""
+        from io import BytesIO as _BytesIO
+
+        if data is None:
+            import streamlit as _st
+            _st.warning("Nenhum arquivo disponível para download.")
+            return
+
+        content = data.getvalue() if isinstance(data, _BytesIO) else data
+        try:
+            import streamlit as _st
+            _st.download_button(
+                label=label,
+                data=content,
+                file_name=file_name,
+                mime=mime,
+                use_container_width=use_container_width,
+                key=key,
+            )
+        except Exception:
+            import base64 as _base64
+            import streamlit as _st
+
+            encoded = _base64.b64encode(content).decode()
+            href = f'<a href="data:{mime};base64,{encoded}" download="{file_name}">{label}</a>'
+            _st.markdown(href, unsafe_allow_html=True)
 
 # Importar novos módulos de refatoração
 try:
@@ -28,6 +66,14 @@ try:
     from error_handler import log_error, get_logger, log_security_event
     REFACTORING_ENABLED = True
 except ImportError:
+    # Fallbacks for error_handler functions
+    def log_error(msg, *args, **kwargs):
+        print(f"[ERROR] {msg}", args, kwargs)
+    def get_logger(name=None):
+        import logging
+        return logging.getLogger(name)
+    def log_security_event(event, **kwargs):
+        print(f"[SECURITY EVENT] {event}", kwargs)
     REFACTORING_ENABLED = False
     print("[AVISO] Modulos de refatoracao nao disponíveis. Usando get_connection() tradicional.")
 
@@ -51,30 +97,16 @@ logger = logging.getLogger(__name__)
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Verificar se usa PostgreSQL
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+from database import get_connection as get_db_connection, init_db, SQL_PLACEHOLDER
 
-if USE_POSTGRESQL:
-    import psycopg2
-    from database_postgresql import get_connection, init_db
-    # PostgreSQL usa %s como placeholder
-    SQL_PLACEHOLDER = '%s'
-    get_db_connection = get_connection
-else:
-    import sqlite3
-    from database import init_db, get_connection
-    # SQLite usa ? como placeholder
-    SQL_PLACEHOLDER = '?'
-    get_db_connection = get_connection
-
-# Adicionar ao namespace global para que outros módulos possam acessar
-import sys
+# Expoe placeholder no namespace atual para compatibilidade
 current_module = sys.modules[__name__]
 current_module.SQL_PLACEHOLDER = SQL_PLACEHOLDER
 
-# Adicionar o diretório atual ao path para permitir importações
-if os.path.dirname(__file__) not in sys.path:
-    sys.path.insert(0, os.path.dirname(__file__))
+
+def get_connection(db_path: str | None = None):
+    """Compat helper que delega para `database.get_connection`."""
+    return get_db_connection(db_path=db_path)
 
 # Configurar timezone do Brasil (Brasília)
 TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
@@ -346,6 +378,9 @@ setInterval(updateClock, 60000);
 // Atualizar imediatamente
 updateClock();
 </script>
+
+<!-- Push Notifications Script -->
+<script src="/static/push-notifications.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -365,6 +400,30 @@ function getLocation() {
                 sessionStorage.setItem('gps_accuracy', accuracy);
                 sessionStorage.setItem('gps_timestamp', Date.now());
                 
+                // Preencher campos ocultos do Streamlit
+                setTimeout(function() {
+                    // Encontrar e preencher campos de latitude e longitude
+                    const inputs = document.querySelectorAll('input[type="text"]');
+                    inputs.forEach(function(input) {
+                        const label = input.closest('.stTextInput');
+                        if (label) {
+                            const labelText = label.querySelector('label');
+                            if (labelText) {
+                                if (labelText.innerText.includes('GPS_LAT_HIDDEN')) {
+                                    input.value = lat.toString();
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
+                                if (labelText.innerText.includes('GPS_LNG_HIDDEN')) {
+                                    input.value = lng.toString();
+                                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                                    input.dispatchEvent(new Event('change', { bubbles: true }));
+                                }
+                            }
+                        }
+                    });
+                }, 1000);
+                
                 // Atualizar display
                 const gpsDiv = document.getElementById('gps-status');
                 if (gpsDiv) {
@@ -381,10 +440,12 @@ function getLocation() {
                 if (gpsDiv) {
                     gpsDiv.innerHTML = `
                         <div class="gps-status gps-error">
-                            ❌ Erro ao obter localização: ${error.message}
+                            ⚠️ GPS não disponível: ${error.message}
                         </div>
                     `;
                 }
+                // Marcar que GPS falhou
+                sessionStorage.setItem('gps_error', error.message);
             },
             {
                 enableHighAccuracy: true,
@@ -406,21 +467,8 @@ function getLocation() {
 
 // Executar quando a página carregar
 document.addEventListener('DOMContentLoaded', getLocation);
-
-// Função para obter coordenadas do sessionStorage
-function getStoredGPS() {
-    const lat = sessionStorage.getItem('gps_lat');
-    const lng = sessionStorage.getItem('gps_lng');
-    const timestamp = sessionStorage.getItem('gps_timestamp');
-    
-    // Verificar se os dados são recentes (menos de 5 minutos)
-                longitude: parseFloat(lng),
-                timestamp: parseInt(timestamp)
-            };
-        }
-    }
-    return null;
-}
+// Também executar imediatamente
+getLocation();
 </script>
 """
 
@@ -1594,18 +1642,25 @@ def aprovar_hora_extra_rapida_interface():
 
 
 def exibir_widget_notificacoes(horas_extras_system):
-    """Exibe widget fixo de notificações pendentes até serem respondidas"""
+    """Exibe widget fixo de notificações pendentes até serem respondidas - COM DETALHES DE HORAS EXTRAS"""
     try:
         # Buscar todas as notificações pendentes
+        he_pendentes = 0
+        correcoes_pendentes = 0
+        atestados_pendentes = 0
+        solicitacoes_he_detalhes = []
+        
         if REFACTORING_ENABLED:
             try:
-                # Solicitações de horas extras pendentes (para aprovar)
-                result_he = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                he_pendentes = result_he[0] if result_he else 0
+                # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
+                solicitacoes_he_detalhes = execute_query(
+                    """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                       FROM solicitacoes_horas_extras 
+                       WHERE aprovador_solicitado = %s AND status = 'pendente'
+                       ORDER BY data_solicitacao DESC""",
+                    (st.session_state.usuario,)
+                ) or []
+                he_pendentes = len(solicitacoes_he_detalhes)
                 
                 # Solicitações de correção de registro pendentes (enviadas pelo usuário)
                 result_corr = execute_query(
@@ -1630,12 +1685,15 @@ def exibir_widget_notificacoes(horas_extras_system):
             conn = get_connection()
             cursor = conn.cursor()
             
-            # Solicitações de horas extras pendentes (para aprovar)
+            # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
             cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                FROM solicitacoes_horas_extras 
                 WHERE aprovador_solicitado = %s AND status = 'pendente'
+                ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
-            he_pendentes = cursor.fetchone()[0]
+            solicitacoes_he_detalhes = cursor.fetchall()
+            he_pendentes = len(solicitacoes_he_detalhes)
             
             # Solicitações de correção de registro pendentes (enviadas pelo usuário)
             cursor.execute("""
@@ -1655,8 +1713,126 @@ def exibir_widget_notificacoes(horas_extras_system):
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
-        if total_notificacoes > 0:
-            # Criar container de notificações fixo
+        # ========== NOTIFICAÇÃO URGENTE DE HORAS EXTRAS PARA APROVAR ==========
+        if he_pendentes > 0:
+            st.markdown("""
+            <style>
+            .urgente-he-widget {
+                background: linear-gradient(135deg, #dc3545 0%, #c82333 100%);
+                padding: 20px;
+                border-radius: 15px;
+                margin: 15px 0;
+                box-shadow: 0 4px 20px rgba(220, 53, 69, 0.5);
+                border: 3px solid #fff;
+                animation: urgente-pulse 1s infinite;
+            }
+            
+            @keyframes urgente-pulse {
+                0%, 100% { box-shadow: 0 4px 20px rgba(220, 53, 69, 0.5); }
+                50% { box-shadow: 0 4px 30px rgba(220, 53, 69, 0.8); }
+            }
+            </style>
+            """, unsafe_allow_html=True)
+            
+            st.markdown(f"""
+            <div class="urgente-he-widget">
+                <h2 style="margin: 0; color: white; text-align: center;">
+                    ⚠️🕐 SOLICITAÇÃO DE HORAS EXTRAS AGUARDANDO SUA APROVAÇÃO! ⚠️
+                </h2>
+                <p style="margin: 10px 0; color: white; text-align: center; font-size: 16px;">
+                    Você tem <strong>{he_pendentes}</strong> solicitação(ões) pendente(s). Por favor, responda!
+                </p>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Mostrar detalhes de cada solicitação pendente
+            for sol in solicitacoes_he_detalhes:
+                sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
+                
+                # Buscar nome do solicitante
+                nome_solicitante = sol_usuario
+                try:
+                    if REFACTORING_ENABLED:
+                        result = execute_query(
+                            "SELECT nome_completo FROM usuarios WHERE usuario = %s",
+                            (sol_usuario,),
+                            fetch_one=True
+                        )
+                        if result:
+                            nome_solicitante = result[0]
+                    else:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute("SELECT nome_completo FROM usuarios WHERE usuario = %s", (sol_usuario,))
+                        result = cursor.fetchone()
+                        if result:
+                            nome_solicitante = result[0]
+                        conn.close()
+                except:
+                    pass
+                
+                with st.expander(f"🕐 {nome_solicitante} - {sol_data} - {format_time_duration(sol_total)}", expanded=True):
+                    col1, col2 = st.columns([2, 1])
+                    
+                    with col1:
+                        st.write(f"**Solicitante:** {nome_solicitante} ({sol_usuario})")
+                        st.write(f"**Data:** {sol_data}")
+                        st.write(f"**Horário:** {sol_h_inicio} às {sol_h_fim}")
+                        st.write(f"**Total:** {format_time_duration(sol_total)}")
+                        st.write(f"**Justificativa:** {sol_just}")
+                    
+                    with col2:
+                        observacoes_he = st.text_area(
+                            "Observações:",
+                            key=f"obs_he_widget_{sol_id}",
+                            height=80
+                        )
+                        
+                        col_apr, col_rej = st.columns(2)
+                        
+                        with col_apr:
+                            if st.button("✅ Aprovar", key=f"apr_he_widget_{sol_id}", use_container_width=True, type="primary"):
+                                try:
+                                    conn = get_connection()
+                                    cursor = conn.cursor()
+                                    cursor.execute(f"""
+                                        UPDATE solicitacoes_horas_extras 
+                                        SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, 
+                                            data_aprovacao = NOW(), observacoes = {SQL_PLACEHOLDER}
+                                        WHERE id = {SQL_PLACEHOLDER}
+                                    """, (st.session_state.usuario, observacoes_he, sol_id))
+                                    conn.commit()
+                                    conn.close()
+                                    st.success("✅ Horas extras aprovadas!")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Erro: {e}")
+                        
+                        with col_rej:
+                            if st.button("❌ Rejeitar", key=f"rej_he_widget_{sol_id}", use_container_width=True):
+                                if not observacoes_he or not observacoes_he.strip():
+                                    st.error("❌ Informe o motivo da rejeição!")
+                                else:
+                                    try:
+                                        conn = get_connection()
+                                        cursor = conn.cursor()
+                                        cursor.execute(f"""
+                                            UPDATE solicitacoes_horas_extras 
+                                            SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER}, 
+                                                data_aprovacao = NOW(), observacoes = {SQL_PLACEHOLDER}
+                                            WHERE id = {SQL_PLACEHOLDER}
+                                        """, (st.session_state.usuario, observacoes_he, sol_id))
+                                        conn.commit()
+                                        conn.close()
+                                        st.warning("❌ Horas extras rejeitadas.")
+                                        st.rerun()
+                                    except Exception as e:
+                                        st.error(f"Erro: {e}")
+            
+            st.markdown("---")
+        
+        # ========== OUTRAS NOTIFICAÇÕES ==========
+        if correcoes_pendentes > 0 or atestados_pendentes > 0:
             st.markdown("""
             <style>
             .notification-widget {
@@ -1666,31 +1842,6 @@ def exibir_widget_notificacoes(horas_extras_system):
                 margin: 15px 0;
                 box-shadow: 0 4px 12px rgba(255, 99, 71, 0.3);
                 border-left: 5px solid #FF4500;
-                animation: pulse 2s infinite;
-            }
-            
-            @keyframes pulse {
-                0%, 100% { transform: scale(1); }
-                50% { transform: scale(1.02); }
-            }
-            
-            .notification-badge {
-                background: white;
-                color: #FF4500;
-                padding: 5px 12px;
-                border-radius: 20px;
-                font-weight: bold;
-                font-size: 16px;
-                display: inline-block;
-                margin-left: 10px;
-            }
-            
-            .notification-item {
-                background: rgba(255, 255, 255, 0.2);
-                padding: 8px 12px;
-                border-radius: 5px;
-                margin: 5px 0;
-                color: white;
             }
             </style>
             """, unsafe_allow_html=True)
@@ -1699,7 +1850,6 @@ def exibir_widget_notificacoes(horas_extras_system):
             <div class="notification-widget">
                 <h3 style="margin: 0; color: white; display: inline-block;">
                     🔔 Notificações Pendentes
-                    <span class="notification-badge">{total_notificacoes}</span>
                 </h3>
                 <p style="margin: 10px 0 5px 0; color: white; font-size: 14px;">
                     Você tem ações aguardando resposta:
@@ -1707,20 +1857,10 @@ def exibir_widget_notificacoes(horas_extras_system):
             </div>
             """, unsafe_allow_html=True)
             
-            # Mostrar detalhes em colunas
-            cols = st.columns(3)
-            
-            if he_pendentes > 0:
-                with cols[0]:
-                    if st.button(f"🕐 {he_pendentes} Hora(s) Extra para Aprovar", 
-                                use_container_width=True, 
-                                type="primary",
-                                key="notif_he"):
-                        st.session_state.ir_para_notificacoes = True
-                        st.rerun()
+            cols = st.columns(2)
             
             if correcoes_pendentes > 0:
-                with cols[1]:
+                with cols[0]:
                     if st.button(f"🔧 {correcoes_pendentes} Correção(ões) Pendente(s)", 
                                 use_container_width=True,
                                 type="secondary",
@@ -1729,7 +1869,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                         st.rerun()
             
             if atestados_pendentes > 0:
-                with cols[2]:
+                with cols[1]:
                     if st.button(f"⏰ {atestados_pendentes} Atestado(s) Pendente(s)", 
                                 use_container_width=True,
                                 type="secondary",
@@ -1849,13 +1989,30 @@ def tela_funcionario():
             "🏥 Registrar Ausência",
             f"⏰ Atestado de Horas{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
-            "📊 Relatórios de Horas Extras",
             "🏦 Meu Banco de Horas",
             "📁 Meus Arquivos",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
 
-        opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
+        # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
+        if 'menu_func_index' not in st.session_state:
+            st.session_state.menu_func_index = 0
+        
+        opcao = st.selectbox(
+            "Escolha uma opção:", 
+            opcoes_menu,
+            index=st.session_state.menu_func_index,
+            key="menu_func_selectbox"
+        )
+        
+        # Atualizar índice no session_state
+        if opcao in opcoes_menu:
+            st.session_state.menu_func_index = opcoes_menu.index(opcao)
+        else:
+            for i, opt in enumerate(opcoes_menu):
+                if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
+                    st.session_state.menu_func_index = i
+                    break
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -1894,9 +2051,6 @@ def tela_funcionario():
         atestado_horas_interface(atestado_system, upload_system)
     elif opcao.startswith("🕐 Horas Extras"):
         horas_extras_interface(horas_extras_system)
-    elif opcao == "📊 Relatórios de Horas Extras":
-        from relatorios_horas_extras import relatorios_horas_extras_interface
-        relatorios_horas_extras_interface()
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
     elif opcao == "📁 Meus Arquivos":
@@ -1920,13 +2074,348 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     </div>
     """, unsafe_allow_html=True)
 
-    # Inserir script GPS
-    st.components.v1.html(GPS_SCRIPT, height=0)
-
-    # Status do GPS
-    st.markdown('<div id="gps-status">📍 Obtendo localização...</div>',
-                unsafe_allow_html=True)
-
+    # ========== SEÇÃO DE HORAS EXTRAS ==========
+    from jornada_semanal_system import obter_jornada_usuario
+    
+    # Verificar se está no horário de fim de expediente (usar timezone Brasil)
+    agora = get_datetime_br()
+    hoje = agora.date()
+    dia_semana_map = {0: 'seg', 1: 'ter', 2: 'qua', 3: 'qui', 4: 'sex', 5: 'sab', 6: 'dom'}
+    dia_semana = dia_semana_map.get(hoje.weekday(), 'seg')
+    
+    jornada = obter_jornada_usuario(st.session_state.usuario)
+    config_dia = jornada.get(dia_semana, {})
+    
+    # Obter horário de fim da jornada
+    horario_fim_jornada = config_dia.get('fim', '17:00')
+    try:
+        h_fim, m_fim = map(int, horario_fim_jornada.split(':'))
+        hora_fim_jornada = agora.replace(hour=h_fim, minute=m_fim, second=0, microsecond=0)
+    except:
+        hora_fim_jornada = agora.replace(hour=17, minute=0, second=0, microsecond=0)
+    
+    # Verificar se passou do horário de fim
+    passou_horario_fim = agora >= hora_fim_jornada and config_dia.get('trabalha', False)
+    
+    # Verificar se já registrou entrada hoje (case-insensitive)
+    ja_registrou_inicio = False
+    ja_registrou_fim = False
+    if REFACTORING_ENABLED:
+        try:
+            result = execute_query(
+                "SELECT LOWER(tipo) FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
+                (st.session_state.usuario, hoje.strftime("%Y-%m-%d"))
+            )
+            if result:
+                tipos = [r[0].lower() if r[0] else '' for r in result]
+                ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
+                ja_registrou_fim = 'fim' in tipos
+        except:
+            pass
+    else:
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT LOWER(tipo) FROM registros_ponto WHERE usuario = %s AND DATE(data_hora) = %s",
+                (st.session_state.usuario, hoje.strftime("%Y-%m-%d"))
+            )
+            tipos = [r[0].lower() if r[0] else '' for r in cursor.fetchall()]
+            ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
+            ja_registrou_fim = 'fim' in tipos
+            conn.close()
+        except:
+            pass
+    
+    # Inicializar session_state para horas extras
+    if 'horas_extras_ativa' not in st.session_state:
+        st.session_state.horas_extras_ativa = False
+    if 'horas_extras_inicio' not in st.session_state:
+        st.session_state.horas_extras_inicio = None
+    if 'popup_hora_extra_mostrado' not in st.session_state:
+        st.session_state.popup_hora_extra_mostrado = False
+    if 'ultima_notif_continuar' not in st.session_state:
+        st.session_state.ultima_notif_continuar = None
+    
+    # Obter lista de TODOS os usuários cadastrados (exceto o solicitante) para aprovação
+    usuarios_lista = []
+    if REFACTORING_ENABLED:
+        try:
+            usuarios = execute_query(
+                "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo",
+                (st.session_state.usuario,)
+            )
+            if usuarios:
+                usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
+        except:
+            pass
+    else:
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo",
+                (st.session_state.usuario,)
+            )
+            usuarios = cursor.fetchall()
+            usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
+            conn.close()
+        except:
+            pass
+    
+    # ========== POPUP: Deseja fazer horas extras? ==========
+    if passou_horario_fim and ja_registrou_inicio and not ja_registrou_fim and not st.session_state.popup_hora_extra_mostrado and not st.session_state.horas_extras_ativa:
+        st.markdown(f"""
+        <style>
+        .hora-extra-popup {{
+            background: linear-gradient(135deg, #ff9800, #f57c00);
+            padding: 20px;
+            border-radius: 15px;
+            color: white;
+            text-align: center;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 15px rgba(255, 152, 0, 0.4);
+        }}
+        </style>
+        <div class="hora-extra-popup">
+            <h3>⏰ Expediente Encerrado!</h3>
+            <p>Seu horário de trabalho terminou às {horario_fim_jornada}. Deseja fazer horas extras?</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col_sim, col_nao = st.columns(2)
+        with col_sim:
+            if st.button("✅ Sim, fazer horas extras", use_container_width=True, type="primary"):
+                st.session_state.horas_extras_ativa = True
+                st.session_state.horas_extras_inicio = get_datetime_br()
+                st.session_state.popup_hora_extra_mostrado = True
+                st.session_state.ultima_notif_continuar = get_datetime_br()
+                st.rerun()
+        
+        with col_nao:
+            if st.button("❌ Não, encerrar expediente", use_container_width=True):
+                # Registrar fim automaticamente
+                st.session_state.popup_hora_extra_mostrado = True
+                latitude = None
+                longitude = None
+                data_hora_registro = registrar_ponto(
+                    st.session_state.usuario,
+                    "Fim",
+                    "Presencial",
+                    obter_projetos_ativos()[0] if obter_projetos_ativos() else "Geral",
+                    "Fim de expediente automático",
+                    hoje.strftime("%Y-%m-%d"),
+                    None,
+                    latitude,
+                    longitude
+                )
+                st.success("✅ Expediente encerrado automaticamente!")
+                st.rerun()
+    
+    # ========== PAINEL DE HORAS EXTRAS - SEMPRE VISÍVEL ==========
+    # Contador e botões sempre visíveis (como no layout)
+    
+    # Calcular tempo de horas extras (se ativa)
+    tempo_he_str = "00:00:00"
+    tempo_total_segundos = 0
+    if st.session_state.horas_extras_ativa and st.session_state.horas_extras_inicio:
+        agora_br = get_datetime_br()
+        inicio_he = st.session_state.horas_extras_inicio
+        if inicio_he.tzinfo is None:
+            inicio_he = TIMEZONE_BR.localize(inicio_he)
+        tempo_decorrido = agora_br - inicio_he
+        tempo_total_segundos = int(tempo_decorrido.total_seconds())
+        horas = int(tempo_decorrido.total_seconds() // 3600)
+        minutos = int((tempo_decorrido.total_seconds() % 3600) // 60)
+        segundos = int(tempo_decorrido.total_seconds() % 60)
+        tempo_he_str = f"{horas:02d}:{minutos:02d}:{segundos:02d}"
+    
+    # Verificar se botões devem estar ativos
+    pode_iniciar_he = ja_registrou_inicio and not ja_registrou_fim and passou_horario_fim and not st.session_state.horas_extras_ativa
+    he_em_andamento = st.session_state.horas_extras_ativa
+    
+    # Mensagem após 1 hora de horas extras
+    if he_em_andamento and tempo_total_segundos >= 3600:
+        horas_completas = tempo_total_segundos // 3600
+        st.warning(f"⏰ **Atenção!** Você está fazendo horas extras há **{horas_completas} hora(s)**. Lembre-se de finalizar quando terminar.")
+    
+    # CSS para o painel de horas extras - contador menor e letras brancas
+    st.markdown("""
+    <style>
+    .he-contador {
+        background: #1a1a2e;
+        color: #ffffff;
+        font-family: 'Courier New', monospace;
+        font-size: 1.4em;
+        font-weight: bold;
+        padding: 8px 15px;
+        border-radius: 6px;
+        display: inline-block;
+        min-width: 100px;
+        text-align: center;
+    }
+    .he-contador-ativo {
+        background: #2d5a3d;
+        color: #ffffff;
+        animation: pulse 1s infinite;
+    }
+    .he-contador-inativo {
+        background: #333;
+        color: #888;
+    }
+    @keyframes pulse {
+        0%, 100% { opacity: 1; }
+        50% { opacity: 0.8; }
+    }
+    </style>
+    """, unsafe_allow_html=True)
+    
+    # Auto-refresh a cada 1 segundo se HE ativa (usando JavaScript)
+    if he_em_andamento:
+        st.markdown("""
+        <script>
+        setTimeout(function(){
+            window.parent.document.querySelector('button[kind="secondary"]')?.click();
+        }, 1000);
+        </script>
+        """, unsafe_allow_html=True)
+    
+    # Layout do painel de horas extras
+    col_btn1, col_contador, col_aprovador, col_btn2 = st.columns([1.2, 1, 1.5, 1.2])
+    
+    with col_btn1:
+        if he_em_andamento:
+            st.button("🕐 HE em Andamento", disabled=True, use_container_width=True)
+        elif pode_iniciar_he:
+            if st.button("▶️ Solicitar Horas Extras", use_container_width=True, type="primary"):
+                st.session_state.horas_extras_ativa = True
+                st.session_state.horas_extras_inicio = get_datetime_br()
+                st.session_state.popup_hora_extra_mostrado = True
+                st.session_state.ultima_notif_continuar = get_datetime_br()
+                st.rerun()
+        else:
+            btn_help = "Registre entrada primeiro" if not ja_registrou_inicio else "Disponível após " + horario_fim_jornada if not passou_horario_fim else "Já registrou saída"
+            st.button("▶️ Solicitar Horas Extras", disabled=True, use_container_width=True, help=btn_help)
+    
+    with col_contador:
+        contador_class = "he-contador he-contador-ativo" if he_em_andamento else "he-contador he-contador-inativo"
+        st.markdown(f'<div class="{contador_class}">{tempo_he_str}</div>', unsafe_allow_html=True)
+    
+    with col_aprovador:
+        aprovador_key = "aprovador_he_panel"
+        if he_em_andamento:
+            st.session_state.aprovador_he_selecionado = st.selectbox(
+                "Quem deve autorizar:",
+                ["Selecione..."] + usuarios_lista,
+                key=aprovador_key,
+                label_visibility="collapsed"
+            )
+        else:
+            st.selectbox(
+                "Quem deve autorizar:",
+                ["Quem deve autorizar ↓"],
+                disabled=True,
+                key=f"{aprovador_key}_disabled",
+                label_visibility="collapsed"
+            )
+    
+    with col_btn2:
+        if he_em_andamento:
+            if st.button("⏹️ Finalizar Horas Extras", use_container_width=True, type="primary"):
+                st.session_state.mostrar_finalizar_he = True
+        else:
+            st.button("⏹️ Finalizar Horas Extras", disabled=True, use_container_width=True)
+    
+    # Modal de finalização de horas extras
+    if st.session_state.get('mostrar_finalizar_he', False) and he_em_andamento:
+        st.markdown("---")
+        st.subheader("📝 Finalizar Horas Extras")
+        
+        justificativa_he = st.text_area(
+            "📋 Justificativa (obrigatória):",
+            placeholder="Descreva o motivo das horas extras realizadas...",
+            key="justificativa_he_final"
+        )
+        
+        col_confirmar, col_cancelar = st.columns(2)
+        
+        with col_confirmar:
+            if st.button("✅ Confirmar e Enviar", use_container_width=True, type="primary", key="btn_confirmar_he"):
+                aprovador_sel = st.session_state.get('aprovador_he_selecionado', 'Selecione...')
+                if aprovador_sel == "Selecione...":
+                    st.error("❌ Selecione quem vai autorizar as horas extras!")
+                elif not justificativa_he or not justificativa_he.strip():
+                    st.error("❌ A justificativa é obrigatória!")
+                else:
+                    # Extrair username do aprovador
+                    aprovador_username = aprovador_sel.split("(")[1].rstrip(")")
+                    
+                    # Calcular tempo total
+                    agora_final = get_datetime_br()
+                    inicio_he = st.session_state.horas_extras_inicio
+                    if inicio_he.tzinfo is None:
+                        inicio_he = TIMEZONE_BR.localize(inicio_he)
+                    tempo_total = agora_final - inicio_he
+                    horas_total = tempo_total.total_seconds() / 3600
+                    
+                    try:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        
+                        hora_inicio = inicio_he.strftime("%H:%M")
+                        hora_fim = agora_final.strftime("%H:%M")
+                        
+                        cursor.execute(f"""
+                            INSERT INTO solicitacoes_horas_extras 
+                            (usuario, data, hora_inicio, hora_fim, total_horas, justificativa, 
+                             aprovador_solicitado, status, data_solicitacao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 
+                                    {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                    {SQL_PLACEHOLDER}, 'pendente', NOW())
+                        """, (
+                            st.session_state.usuario,
+                            hoje.strftime("%Y-%m-%d"),
+                            hora_inicio,
+                            hora_fim,
+                            round(horas_total, 2),
+                            justificativa_he.strip(),
+                            aprovador_username
+                        ))
+                        conn.commit()
+                        conn.close()
+                        
+                        # Registrar fim do expediente
+                        registrar_ponto(
+                            st.session_state.usuario,
+                            "Fim",
+                            "Presencial",
+                            obter_projetos_ativos()[0] if obter_projetos_ativos() else "Geral",
+                            f"Fim com horas extras: {justificativa_he.strip()[:100]}",
+                            hoje.strftime("%Y-%m-%d"),
+                            None, None, None
+                        )
+                        
+                        # Limpar session state
+                        st.session_state.horas_extras_ativa = False
+                        st.session_state.horas_extras_inicio = None
+                        st.session_state.mostrar_finalizar_he = False
+                        
+                        st.success(f"✅ Horas extras registradas! Total: {int(horas_total)}h {int((horas_total % 1) * 60)}min")
+                        st.balloons()
+                        import time
+                        time.sleep(2)
+                        st.rerun()
+                        
+                    except Exception as e:
+                        st.error(f"❌ Erro: {str(e)}")
+        
+        with col_cancelar:
+            if st.button("❌ Cancelar", use_container_width=True, key="btn_cancelar_he"):
+                st.session_state.mostrar_finalizar_he = False
+                st.rerun()
+    
+    st.markdown("---")
+    
     st.subheader("➕ Novo Registro")
 
     with st.form("registro_ponto"):
@@ -2001,7 +2490,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
                 st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
-                # Coordenadas GPS (simplificado - GPS desabilitado temporariamente)
+                # GPS: Coordenadas (funcionalidade desabilitada temporariamente)
                 latitude = None
                 longitude = None
 
@@ -2025,7 +2514,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 # ✨ NOVO: Integração com sistema de jornada e hora extra
                 if tipo_registro == "Fim":
                     try:
-                        from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
+                        try:
+                            from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
+                        except ImportError:
+                            JornadaSemanalCalculoSystem = None
+                            logger.warning("Módulo 'jornada_semanal_calculo_system' não encontrado. Algumas funcionalidades podem estar indisponíveis.")
                         
                         # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
                         tolerancia_minutos = 5  # padrão
@@ -2868,7 +3361,7 @@ def notificacoes_interface(horas_extras_system):
     
     # Tab 2: Correções Pendentes
     with tabs[1]:
-        st.subheader("� Minhas Solicitações de Correção Pendentes")
+        st.subheader("🔧 Minhas Solicitações de Correção Pendentes")
         
         if REFACTORING_ENABLED:
             correcoes = execute_query("""
@@ -2880,7 +3373,9 @@ def notificacoes_interface(horas_extras_system):
                 ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
         else:
-            cursor.execute("""
+            conn2 = get_connection()
+            cursor2 = conn2.cursor()
+            cursor2.execute("""
                 SELECT id, registro_id, data_hora_original, data_hora_nova,
                        tipo_original, tipo_novo, justificativa, 
                        data_solicitacao
@@ -2889,7 +3384,8 @@ def notificacoes_interface(horas_extras_system):
                 ORDER BY data_solicitacao DESC
             """, (st.session_state.usuario,))
             
-            correcoes = cursor.fetchall()
+            correcoes = cursor2.fetchall()
+            conn2.close()
         
         if correcoes:
             st.warning(f"⏳ Você tem {len(correcoes)} solicitação(ões) aguardando aprovação do gestor")
@@ -2920,15 +3416,26 @@ def notificacoes_interface(horas_extras_system):
     with tabs[2]:
         st.subheader("⏰ Meus Atestados de Horas Pendentes")
         
-        cursor.execute("""
-            SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
-                   arquivo_comprovante, data_registro
-            FROM atestado_horas
-            WHERE usuario = %s AND status = 'pendente'
-            ORDER BY data_registro DESC
-        """, (st.session_state.usuario,))
-        
-        atestados = cursor.fetchall()
+        if REFACTORING_ENABLED:
+            atestados = execute_query("""
+                SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
+                       arquivo_comprovante, data_registro
+                FROM atestado_horas
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_registro DESC
+            """, (st.session_state.usuario,))
+        else:
+            conn3 = get_connection()
+            cursor3 = conn3.cursor()
+            cursor3.execute("""
+                SELECT id, data, hora_inicio, hora_fim, total_horas, motivo, 
+                       arquivo_comprovante, data_registro
+                FROM atestado_horas
+                WHERE usuario = %s AND status = 'pendente'
+                ORDER BY data_registro DESC
+            """, (st.session_state.usuario,))
+            atestados = cursor3.fetchall()
+            conn3.close()
         
         if atestados:
             st.warning(f"⏳ Você tem {len(atestados)} atestado(s) aguardando aprovação do gestor")
@@ -2953,8 +3460,6 @@ def notificacoes_interface(horas_extras_system):
                     st.info("⏳ Aguardando aprovação do gestor...")
         else:
             st.info("✅ Nenhum atestado aguardando aprovação")
-    
-    conn.close()
 
 # Continuar com as outras interfaces...
 
@@ -3014,6 +3519,8 @@ def registrar_ausencia_interface(upload_system):
         elif data_inicio > data_fim:
             st.error(
                 "❌ Data de início deve ser anterior ou igual à data de fim")
+        elif not nao_possui_comprovante and uploaded_file is None:
+            st.error("❌ Você deve anexar um comprovante OU marcar a opção 'Não possuo comprovante físico no momento'")
         else:
             arquivo_comprovante = None
             
@@ -3156,6 +3663,8 @@ def atestado_horas_interface(atestado_system, upload_system):
             if submitted:
                 if not motivo.strip():
                     st.error("❌ O motivo é obrigatório")
+                elif not nao_possui_comprovante and uploaded_file is None:
+                    st.error("❌ Você deve anexar um comprovante OU marcar a opção 'Não possuo atestado físico no momento'")
                 else:
                     # Validar formato de hora
                     try:
@@ -3224,9 +3733,7 @@ def atestado_horas_interface(atestado_system, upload_system):
 
             # Buscar atestados
             atestados = atestado_system.listar_atestados_usuario(
-                st.session_state.usuario,
-                data_inicio.strftime("%Y-%m-%d"),
-                data_fim.strftime("%Y-%m-%d")
+                st.session_state.usuario
             )
 
             if status_filtro != "Todos":
@@ -4091,7 +4598,27 @@ def tela_gestor():
             "⚙️ Sistema"
         ]
         
-        opcao = st.selectbox("Escolha uma opção:", opcoes_menu)
+        # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
+        if 'menu_gestor_index' not in st.session_state:
+            st.session_state.menu_gestor_index = 0
+        
+        # Encontrar índice da opção atual para manter a seleção após rerun
+        opcao = st.selectbox(
+            "Escolha uma opção:", 
+            opcoes_menu,
+            index=st.session_state.menu_gestor_index,
+            key="menu_gestor_selectbox"
+        )
+        
+        # Atualizar índice no session_state
+        if opcao in opcoes_menu:
+            st.session_state.menu_gestor_index = opcoes_menu.index(opcao)
+        else:
+            # Se a opção tem badges dinâmicos, procurar pelo prefixo
+            for i, opt in enumerate(opcoes_menu):
+                if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
+                    st.session_state.menu_gestor_index = i
+                    break
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -4957,8 +5484,8 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
         if REFACTORING_ENABLED:
             try:
                 query_he = """
-                    SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
-                           h.data_solicitacao, u.nome_completo
+                      SELECT h.id, h.usuario, h.data, h.hora_inicio, h.hora_fim, h.justificativa,
+                          h.data_solicitacao, u.nome_completo
                     FROM solicitacoes_horas_extras h
                     LEFT JOIN usuarios u ON h.usuario = u.usuario
                     WHERE h.status = 'pendente'
@@ -4973,7 +5500,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             cursor = conn.cursor()
             
             cursor.execute("""
-                SELECT h.id, h.usuario, h.data, h.horas_solicitadas, h.justificativa,
+                SELECT h.id, h.usuario, h.data, h.hora_inicio, h.hora_fim, h.justificativa,
                        h.data_solicitacao, u.nome_completo
                 FROM solicitacoes_horas_extras h
                 LEFT JOIN usuarios u ON h.usuario = u.usuario
@@ -4987,8 +5514,34 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             st.info(f"📋 {len(he_pendentes)} solicitação(ões) de horas extras")
             
             for he in he_pendentes:
-                he_id, usuario, data, horas, justificativa, data_solicitacao, nome_completo = he
-                
+                # he: id, usuario, data, hora_inicio, hora_fim, justificativa, data_solicitacao, nome_completo
+                he_id, usuario, data, hora_inicio, hora_fim, justificativa, data_solicitacao, nome_completo = he
+
+                # Calcular duração em horas a partir de hora_inicio/hora_fim
+                horas = 0
+                try:
+                    if isinstance(hora_inicio, str):
+                        fmt = '%H:%M:%S' if hora_inicio.count(':') == 2 else '%H:%M'
+                        hi = datetime.strptime(hora_inicio, fmt).time()
+                    else:
+                        hi = hora_inicio
+
+                    if isinstance(hora_fim, str):
+                        fmt = '%H:%M:%S' if hora_fim.count(':') == 2 else '%H:%M'
+                        hf = datetime.strptime(hora_fim, fmt).time()
+                    else:
+                        hf = hora_fim
+
+                    if hi and hf:
+                        dt_hi = datetime.combine(date.today(), hi)
+                        dt_hf = datetime.combine(date.today(), hf)
+                        delta = (dt_hf - dt_hi).total_seconds()
+                        if delta < 0:
+                            delta += 24 * 3600
+                        horas = delta / 3600
+                except Exception:
+                    horas = 0
+
                 with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(f"**Data:** {data}")
@@ -5708,11 +6261,101 @@ def todos_registros_interface(calculo_horas_system):
             st.markdown(
                 f"### 📋 Listagem de Registros ({len(registros)} encontrados)")
         with col2:
-            # Preparar dados para exportação
-            df_export = pd.DataFrame(registros, columns=[
-                'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade',
-                'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Nome Completo'
-            ])
+            # 🔧 CORREÇÃO: Preparar dados para exportação COM horas trabalhadas e previstas
+            # Primeiro, organizar registros por usuário e data para calcular horas
+            from jornada_semanal_system import obter_jornada_usuario
+            
+            registros_para_export = {}
+            for registro in registros:
+                reg_id, usuario, data_hora_str, tipo, modalidade, projeto, atividade, localizacao, lat, lng, nome_completo = registro
+                data_hora = safe_datetime_parse(data_hora_str)
+                data_str = data_hora.strftime("%Y-%m-%d")
+                
+                chave = f"{usuario}_{data_str}"
+                if chave not in registros_para_export:
+                    registros_para_export[chave] = {
+                        'usuario': usuario,
+                        'nome_completo': nome_completo or usuario,
+                        'data': data_hora.date(),
+                        'registros': [],
+                        'inicio': None,
+                        'fim': None
+                    }
+                
+                registros_para_export[chave]['registros'].append({
+                    'tipo': tipo,
+                    'data_hora': data_hora
+                })
+                
+                if tipo == "Início" and not registros_para_export[chave]['inicio']:
+                    registros_para_export[chave]['inicio'] = data_hora
+                elif tipo == "Fim":
+                    registros_para_export[chave]['fim'] = data_hora
+            
+            # Calcular horas trabalhadas e previstas
+            export_data = []
+            for chave, dados in registros_para_export.items():
+                usuario = dados['usuario']
+                nome_completo = dados['nome_completo']
+                data = dados['data']
+                inicio = dados['inicio']
+                fim = dados['fim']
+                
+                # Calcular horas trabalhadas
+                horas_trabalhadas_min = 0
+                if inicio and fim:
+                    delta = fim - inicio
+                    horas_trabalhadas_min = delta.total_seconds() / 60
+                
+                # Calcular horas previstas baseado na jornada do usuário
+                horas_previstas_min = 0
+                try:
+                    jornada = obter_jornada_usuario(usuario)
+                    # Mapear dia da semana para chave da jornada
+                    dias_map = {0: 'seg', 1: 'ter', 2: 'qua', 3: 'qui', 4: 'sex', 5: 'sab', 6: 'dom'}
+                    dia_semana = dias_map.get(data.weekday(), 'seg')
+                    
+                    config_dia = jornada.get(dia_semana, {})
+                    if config_dia.get('trabalha', False):
+                        inicio_jornada = config_dia.get('inicio', '08:00')
+                        fim_jornada = config_dia.get('fim', '17:00')
+                        intervalo = config_dia.get('intervalo', 60)
+                        
+                        # Calcular duração da jornada
+                        h_inicio, m_inicio = map(int, inicio_jornada.split(':'))
+                        h_fim, m_fim = map(int, fim_jornada.split(':'))
+                        
+                        duracao_jornada_min = (h_fim * 60 + m_fim) - (h_inicio * 60 + m_inicio) - intervalo
+                        horas_previstas_min = duracao_jornada_min
+                except Exception as e:
+                    logger.warning(f"Erro ao calcular jornada para {usuario}: {e}")
+                    horas_previstas_min = 480  # 8 horas padrão
+                
+                # Formatar para exibição
+                horas_trabalhadas_str = f"{int(horas_trabalhadas_min // 60)}h {int(horas_trabalhadas_min % 60)}min"
+                horas_previstas_str = f"{int(horas_previstas_min // 60)}h {int(horas_previstas_min % 60)}min"
+                
+                # Calcular saldo (horas extras ou horas devidas)
+                saldo_min = horas_trabalhadas_min - horas_previstas_min
+                if saldo_min >= 0:
+                    saldo_str = f"+{int(saldo_min // 60)}h {int(saldo_min % 60)}min"
+                else:
+                    saldo_min_abs = abs(saldo_min)
+                    saldo_str = f"-{int(saldo_min_abs // 60)}h {int(saldo_min_abs % 60)}min"
+                
+                export_data.append({
+                    'Usuário': usuario,
+                    'Nome Completo': nome_completo,
+                    'Data': data.strftime('%d/%m/%Y'),
+                    'Entrada': inicio.strftime('%H:%M') if inicio else '-',
+                    'Saída': fim.strftime('%H:%M') if fim else '-',
+                    'Horas Trabalhadas': horas_trabalhadas_str if inicio and fim else '-',
+                    'Horas Previstas': horas_previstas_str,
+                    'Saldo': saldo_str if inicio and fim else '-',
+                    'Qtd Registros': len(dados['registros'])
+                })
+            
+            df_export = pd.DataFrame(export_data)
             csv = df_export.to_csv(index=False).encode('utf-8-sig')
             safe_download_button(
                 label="📥 Exportar CSV",
@@ -6105,7 +6748,7 @@ def gerenciar_arquivos_interface(upload_system):
         for arquivo in arquivos:
             arquivo_id, usuario, nome, tipo_arquivo, data, tamanho, tipo_arquivo, nome_completo = arquivo
 
-            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}"):
+            with st.expander(f"{get_file_icon(tipo_arquivo)} {nome} - {nome_completo or usuario}", expanded=False):
                 col1, col2 = st.columns([3, 1])
 
                 with col1:
@@ -6126,8 +6769,16 @@ def gerenciar_arquivos_interface(upload_system):
                             data=content,
                             file_name=nome,
                             mime=tipo_arquivo,
-                            use_container_width=True
+                            use_container_width=True,
+                            key=f"download_arq_{arquivo_id}"
                         )
+                        
+                        # Visualização de imagens inline
+                        if is_image_file(tipo_arquivo):
+                            st.image(content, caption=nome, width=300)
+                    else:
+                        st.warning("⚠️ Arquivo indisponível")
+                        st.caption("O arquivo não está mais acessível no servidor. Solicite ao usuário que faça o re-upload.")
 
                     # Botão de exclusão (com confirmação)
                     if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", use_container_width=True):
@@ -6147,13 +6798,6 @@ def gerenciar_arquivos_interface(upload_system):
                             if st.button("❌ Não", key=f"no_{arquivo_id}"):
                                 del st.session_state[f"confirm_delete_{arquivo_id}"]
                                 st.rerun()
-
-                # Visualização de imagens
-                if is_image_file(tipo_arquivo):
-                    content, _ = upload_system.get_file_content(
-                        arquivo_id, usuario)
-                    if content:
-                        st.image(content, caption=nome, width=400)
     else:
         st.info("📁 Nenhum arquivo encontrado com os filtros aplicados")
 
@@ -6783,9 +7427,18 @@ def gerenciar_usuarios_interface():
                     "Login:*", placeholder="Ex: joao.silva")
                 novo_nome = st.text_input(
                     "Nome Completo:*", placeholder="Ex: João Silva")
+                novo_cpf = st.text_input(
+                    "CPF:*", placeholder="Ex: 123.456.789-00",
+                    help="Digite o CPF com ou sem pontuação")
                 nova_senha = st.text_input("Senha:*", type="password")
 
             with col2:
+                nova_data_nascimento = st.date_input(
+                    "Data de Nascimento:*",
+                    value=None,
+                    min_value=date(1940, 1, 1),
+                    max_value=date.today() - timedelta(days=365*16),  # Mínimo 16 anos
+                    help="O funcionário deve ter no mínimo 16 anos")
                 confirmar_senha = st.text_input(
                     "Confirmar Senha:*", type="password")
                 novo_tipo = st.selectbox(
@@ -6808,9 +7461,23 @@ def gerenciar_usuarios_interface():
                 "➕ Cadastrar Usuário", use_container_width=True)
 
             if submitted:
+                # Função para validar e limpar CPF
+                def validar_cpf(cpf):
+                    # Remove caracteres não numéricos
+                    cpf_limpo = ''.join(filter(str.isdigit, cpf))
+                    if len(cpf_limpo) != 11:
+                        return None
+                    return cpf_limpo
+                
                 # Validações
+                cpf_validado = validar_cpf(novo_cpf) if novo_cpf else None
+                
                 if not novo_login or not novo_nome or not nova_senha:
                     st.error("❌ Preencha todos os campos obrigatórios!")
+                elif not novo_cpf or not cpf_validado:
+                    st.error("❌ CPF inválido! Digite um CPF com 11 dígitos.")
+                elif nova_data_nascimento is None:
+                    st.error("❌ Data de Nascimento é obrigatória!")
                 elif nova_senha != confirmar_senha:
                     st.error("❌ As senhas não conferem!")
                 else:
@@ -6821,15 +7488,17 @@ def gerenciar_usuarios_interface():
 
                             insert_query = f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """
                             novo_usuario_id = execute_update(insert_query, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
+                                cpf_validado,
+                                nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
                                 jornada_fim.strftime("%H:%M")
@@ -6857,14 +7526,16 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute(f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
+                                cpf_validado,
+                                nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
                                 jornada_fim.strftime("%H:%M")
@@ -6924,7 +7595,6 @@ def sistema_interface():
             )
         """)
         conn.commit()
-        conn.close()
 
     # Configurações padrão
     configs_padrao = [
@@ -7194,6 +7864,128 @@ def configurar_jornada_interface():
         <p>Configure horários de trabalho variáveis para cada funcionário</p>
     </div>
     """, unsafe_allow_html=True)
+
+    st.markdown(
+        """
+        <style>
+        /* Estilo para campos de hora no formulário de jornada */
+        .stTimeInput > div > div > input {
+            width: 80px !important;
+            height: 38px !important;
+            font-size: 14px !important;
+        }
+        /* Aumenta altura do dropdown de horário */
+        [data-baseweb="popover"] [data-baseweb="menu"],
+        [data-baseweb="popover"] ul,
+        [data-baseweb="popover"] [role="listbox"] {
+            max-height: 400px !important;
+            overflow-y: auto !important;
+        }
+        [data-baseweb="menu"] {
+            max-height: 400px !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True
+    )
+
+    st.markdown("### ⏰ Jornada Padrão da Empresa")
+
+    if REFACTORING_ENABLED:
+        try:
+            query_configs = """
+                SELECT chave, valor FROM configuracoes
+                WHERE chave IN ('jornada_inicio_padrao', 'jornada_fim_padrao', 'tolerancia_atraso_minutos', 'dias_historico_padrao')
+            """
+            configs_jornada = execute_query(query_configs)
+        except Exception as e:
+            log_error("Erro ao carregar jornada padrão", e, {})
+            configs_jornada = []
+    else:
+        conn_cfg = get_connection()
+        cursor_cfg = conn_cfg.cursor()
+        cursor_cfg.execute(
+            """
+            SELECT chave, valor FROM configuracoes
+            WHERE chave IN ('jornada_inicio_padrao', 'jornada_fim_padrao', 'tolerancia_atraso_minutos', 'dias_historico_padrao')
+            """
+        )
+        configs_jornada = cursor_cfg.fetchall()
+        conn_cfg.close()
+
+    configs_jornada_dict = {chave: valor for chave, valor in configs_jornada}
+
+    with st.form("config_jornada_padrao"):
+        col_padrao_1, col_padrao_2 = st.columns(2)
+
+        with col_padrao_1:
+            jornada_inicio = st.time_input(
+                "Horário padrão de início",
+                value=datetime.strptime(configs_jornada_dict.get('jornada_inicio_padrao', '08:00'), "%H:%M").time()
+            )
+            tolerancia = st.number_input(
+                "Tolerância de atraso (min)",
+                min_value=0,
+                max_value=60,
+                value=int(configs_jornada_dict.get('tolerancia_atraso_minutos', '10'))
+            )
+
+        with col_padrao_2:
+            jornada_fim = st.time_input(
+                "Horário padrão de fim",
+                value=datetime.strptime(configs_jornada_dict.get('jornada_fim_padrao', '17:00'), "%H:%M").time()
+            )
+            dias_historico = st.number_input(
+                "Dias de histórico padrão",
+                min_value=7,
+                max_value=365,
+                value=int(configs_jornada_dict.get('dias_historico_padrao', '30'))
+            )
+
+        if st.form_submit_button("💾 Salvar jornada padrão", use_container_width=True):
+            novos_valores = [
+                ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
+                ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
+                ('tolerancia_atraso_minutos', str(tolerancia)),
+                ('dias_historico_padrao', str(dias_historico)),
+            ]
+
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in novos_valores:
+                        update_query = """
+                            UPDATE configuracoes
+                            SET valor = %s, data_atualizacao = CURRENT_TIMESTAMP
+                            WHERE chave = %s
+                        """
+                        execute_update(update_query, (valor, chave))
+                    log_security_event(
+                        "SYSTEM_CONFIG_UPDATED",
+                        usuario=st.session_state.get('usuario', 'sistema'),
+                        context={"configs": [c[0] for c in novos_valores]},
+                    )
+                else:
+                    conn_cfg_update = get_connection()
+                    cursor_cfg_update = conn_cfg_update.cursor()
+                    for chave, valor in novos_valores:
+                        cursor_cfg_update.execute(
+                            f"""
+                                UPDATE configuracoes
+                                SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                                WHERE chave = {SQL_PLACEHOLDER}
+                            """,
+                            (valor, chave),
+                        )
+                    conn_cfg_update.commit()
+                    conn_cfg_update.close()
+
+                st.success("✅ Jornada padrão atualizada!")
+                st.rerun()
+            except Exception as exc:
+                log_error("Erro ao salvar jornada padrão", exc, {"context": "config_jornada_padrao"})
+                st.error(f"❌ Não foi possível salvar: {exc}")
+
+    st.markdown("---")
     
     # Buscar funcionários ativos
     if REFACTORING_ENABLED:
@@ -7275,42 +8067,61 @@ def configurar_jornada_interface():
             # Usar expander para editar
             with st.expander(f"{trabalha_emoji} {NOMES_DIAS.get(dia, dia).split('-')[0]}\n{horario_texto}"):
                 # Form para editar este dia
-                with st.form(f"form_jornada_{dia}"):
+                with st.form(f"form_jornada_{dia}_{usuario_username}"):
                     trabalha_novo = st.checkbox(
                         "Trabalha neste dia",
                         value=dia_config.get('trabalha', True),
-                        key=f"trabalha_{dia}"
+                        key=f"trabalha_{dia}_{usuario_username}"
                     )
-                    
+                    # Garantir variáveis definidas em todos os fluxos (evita UnboundLocalError)
+                    hora_inicio_novo = None
+                    hora_fim_nova = None
+                    intervalo_novo = 0
+
                     if trabalha_novo:
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            hora_inicio_novo = st.time_input(
-                                "Hora Início",
-                                value=datetime.strptime(dia_config.get('inicio', '08:00'), '%H:%M').time(),
-                                key=f"inicio_{dia}"
-                            )
+                        # Campos de hora em layout vertical (um embaixo do outro)
+                        # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
+                        try:
+                            inicio_val = dia_config.get('inicio', '08:00')
+                            if isinstance(inicio_val, str) and inicio_val.count(":") == 2:
+                                hora_inicio_val = datetime.strptime(inicio_val, '%H:%M:%S').time()
+                            else:
+                                hora_inicio_val = datetime.strptime(str(inicio_val), '%H:%M').time()
+                        except Exception:
+                            hora_inicio_val = datetime.strptime('08:00', '%H:%M').time()
+
+                        hora_inicio_novo = st.time_input(
+                            "Início",
+                            value=hora_inicio_val,
+                            key=f"inicio_{dia}_{usuario_username}"
+                        )
                         
-                        with col2:
-                            hora_fim_nova = st.time_input(
-                                "Hora Fim",
-                                value=datetime.strptime(dia_config.get('fim', '17:00'), '%H:%M').time(),
-                                key=f"fim_{dia}"
-                            )
+                        # Compatibilidade com formatos 'HH:MM' e 'HH:MM:SS'
+                        try:
+                            fim_val = dia_config.get('fim', '17:00')
+                            if isinstance(fim_val, str) and fim_val.count(":") == 2:
+                                hora_fim_val = datetime.strptime(fim_val, '%H:%M:%S').time()
+                            else:
+                                hora_fim_val = datetime.strptime(str(fim_val), '%H:%M').time()
+                        except Exception:
+                            hora_fim_val = datetime.strptime('17:00', '%H:%M').time()
+
+                        hora_fim_nova = st.time_input(
+                            "Fim",
+                            value=hora_fim_val,
+                            key=f"fim_{dia}_{usuario_username}"
+                        )
                         
                         intervalo_novo = st.number_input(
-                            "Intervalo (minutos)",
+                            "Intervalo (min)",
                             value=int(dia_config.get('intervalo', 60)),
                             min_value=0,
                             max_value=240,
                             step=15,
-                            key=f"intervalo_{dia}"
+                            key=f"intervalo_{dia}_{usuario_username}"
                         )
-                    else:
-                        hora_inicio_novo = None
-                        hora_fim_nova = None
-                        intervalo_novo = 0
-                    
+                    # (se não trabalha_novo, as variáveis já estão inicializadas acima)
+
                     # Botão para salvar este dia
                     if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", use_container_width=True):
                         # Atualizar configuração
@@ -7321,8 +8132,8 @@ def configurar_jornada_interface():
                             'intervalo': int(intervalo_novo)
                         }
                         
-                        # Salvar no banco
-                        if salvar_jornada_semanal(usuario_id, jornada_atual):
+                        # Salvar no banco - usar usuario_username (texto) em vez de usuario_id (número)
+                        if salvar_jornada_semanal(usuario_username, jornada_atual):
                             log_security_event("SCHEDULE_UPDATED", usuario=st.session_state.usuario, context={"target_user": usuario_username, "dia": dia})
                             st.success(f"✅ {NOMES_DIAS.get(dia, dia)} atualizado!")
                             st.rerun()
@@ -7342,7 +8153,7 @@ def configurar_jornada_interface():
             for dia in ['ter', 'qua', 'qui', 'sex']:
                 jornada_atual[dia] = padrao.copy()
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Padrão copiado para dias úteis!")
                 st.rerun()
             else:
@@ -7353,7 +8164,7 @@ def configurar_jornada_interface():
             for dia in ['sab', 'dom']:
                 jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Fim de semana desativado!")
                 st.rerun()
             else:
@@ -7368,7 +8179,7 @@ def configurar_jornada_interface():
                 else:
                     jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
             
-            if salvar_jornada_semanal(usuario_id, jornada_atual):
+            if salvar_jornada_semanal(usuario_username, jornada_atual):
                 st.success("✅ Jornada resetada para padrão!")
                 st.rerun()
             else:

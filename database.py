@@ -1,78 +1,53 @@
-
 import os
 import hashlib
+import logging
 from dotenv import load_dotenv
+import sqlite3
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Configuração do banco de dados
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+# Lista de tabelas obrigatórias que devem existir no banco
+REQUIRED_TABLES = [
+    'usuarios', 'registros_ponto', 'ausencias', 'projetos',
+    'solicitacoes_horas_extras', 'atestado_horas', 'atestados_horas',
+    'uploads', 'banco_horas', 'feriados', 'jornada_semanal',
+    'Notificacoes', 'solicitacoes_ajuste_ponto', 'solicitacoes_correcao_registro',
+    'auditoria_correcoes'
+]
 
-# Placeholder para queries SQL (PostgreSQL usa %s, SQLite usa ?)
+# Configuração do banco de dados - usar PostgreSQL
+USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'true').lower() == 'true'
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
+# Importar psycopg2 se necessário
 if USE_POSTGRESQL:
     import psycopg2
     import psycopg2.extras
-    DB_CONFIG = {
-        'host': os.getenv('DB_HOST', 'localhost'),
-        'database': os.getenv('DB_NAME', 'ponto_esa'),
-        'user': os.getenv('DB_USER', 'postgres'),
-        'password': os.getenv('DB_PASSWORD', 'postgres'),
-        'port': os.getenv('DB_PORT', '5432')
-    }
-else:
-    import sqlite3
 
 
 def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
-        return psycopg2.connect(**DB_CONFIG)
+        database_url = os.getenv('DATABASE_URL')
+        try:
+            if database_url:
+                return psycopg2.connect(database_url)
+            else:
+                db_config_local = {
+                    'host': os.getenv('DB_HOST', 'localhost'),
+                    'database': os.getenv('DB_NAME', 'ponto_esa'),
+                    'user': os.getenv('DB_USER', 'postgres'),
+                    'password': os.getenv('DB_PASSWORD', 'postgres'),
+                    'port': os.getenv('DB_PORT', '5432')
+                }
+                return psycopg2.connect(**db_config_local)
+        except psycopg2.OperationalError as e:
+            print(f"❌ Erro ao conectar no PostgreSQL: {e}")
+            raise
     else:
         os.makedirs('database', exist_ok=True)
-        if db_path:
-            conn = sqlite3.connect(db_path)
-        else:
-            conn = sqlite3.connect('database/ponto_esa.db')
-
-        class AdaptCursor:
-            def __init__(self, cursor):
-                self._cursor = cursor
-
-            def execute(self, sql, params=None):
-                if isinstance(sql, str):
-                    sql = sql.replace('%s', SQL_PLACEHOLDER)
-                if params is None:
-                    return self._cursor.execute(sql)
-                return self._cursor.execute(sql, params)
-
-            def executemany(self, sql, seq_of_params):
-                if isinstance(sql, str):
-                    sql = sql.replace('%s', SQL_PLACEHOLDER)
-                return self._cursor.executemany(sql, seq_of_params)
-
-            def __getattr__(self, name):
-                return getattr(self._cursor, name)
-
-        class ConnectionWrapper:
-            def __init__(self, conn):
-                self._conn = conn
-
-            def cursor(self):
-                return AdaptCursor(self._conn.cursor())
-
-            def commit(self):
-                return self._conn.commit()
-
-            def close(self):
-                return self._conn.close()
-
-            def __getattr__(self, name):
-                return getattr(self._conn, name)
-
-        return ConnectionWrapper(conn)
+        return sqlite3.connect(db_path or 'database/ponto_esa.db')
 
 
 def adapt_sql_for_postgresql(sql):
@@ -103,25 +78,34 @@ def init_db():
     conn = get_connection()
     c = conn.cursor()
 
-    # Tabela usuarios com novos campos para jornada prevista
+    # Tabela usuarios com novos campos para jornada prevista, CPF e data nascimento
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT UNIQUE NOT NULL,
             senha TEXT NOT NULL,
             tipo TEXT NOT NULL,
             nome_completo TEXT,
+            cpf TEXT,
+            data_nascimento DATE,
             ativo INTEGER DEFAULT 1,
-            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_criacao TIMESTAMP DEFAULT NOW(),
             jornada_inicio_previsto TIME DEFAULT '08:00',
             jornada_fim_previsto TIME DEFAULT '17:00'
         )
     '''))
+    
+    # Adicionar colunas CPF e data_nascimento se não existirem (migração)
+    try:
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cpf TEXT")
+        c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_nascimento DATE")
+    except:
+        pass
 
     # Tabela registros_ponto com campos de GPS
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS registros_ponto (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
             data_hora TIMESTAMP NOT NULL,
             tipo TEXT NOT NULL,
@@ -131,14 +115,14 @@ def init_db():
             localizacao TEXT,
             latitude REAL,
             longitude REAL,
-            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data_registro TIMESTAMP DEFAULT NOW()
         )
     '''))
 
     # Tabela de ausências com campo para "não possui comprovante"
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS ausencias (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
             data_inicio DATE NOT NULL,
             data_fim DATE NOT NULL,
@@ -146,7 +130,7 @@ def init_db():
             motivo TEXT,
             arquivo_comprovante TEXT,
             status TEXT DEFAULT 'pendente',
-            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_registro TIMESTAMP DEFAULT NOW(),
             nao_possui_comprovante INTEGER DEFAULT 0
         )
     '''))
@@ -154,76 +138,43 @@ def init_db():
     # Tabela de projetos
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS projetos (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             nome TEXT UNIQUE NOT NULL,
             descricao TEXT,
             ativo INTEGER DEFAULT 1,
-            data_criacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data_criacao TIMESTAMP DEFAULT NOW()
         )
     '''))
 
     # Nova tabela para solicitações de horas extras
-    c.execute('''
+    c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS solicitacoes_horas_extras (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
             data DATE NOT NULL,
             hora_inicio TIME NOT NULL,
             hora_fim TIME NOT NULL,
+            total_horas REAL,
             justificativa TEXT NOT NULL,
             aprovador_solicitado TEXT NOT NULL,
             status TEXT DEFAULT 'pendente',
-            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
             aprovado_por TEXT,
             data_aprovacao TIMESTAMP,
             observacoes TEXT
         )
-    ''')
+    '''))
+    
+    # Migração: adicionar coluna total_horas se não existir
+    try:
+        c.execute("ALTER TABLE solicitacoes_horas_extras ADD COLUMN IF NOT EXISTS total_horas REAL")
+    except:
+        pass
 
-    # Tabela para atestado de horas (schema antigo - manter para compatibilidade)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS atestado_horas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT NOT NULL,
-            data DATE NOT NULL,
-            hora_inicio TIME NOT NULL,
-            hora_fim TIME NOT NULL,
-            total_horas REAL NOT NULL,
-            motivo TEXT,
-            arquivo_comprovante TEXT,
-            status TEXT DEFAULT 'pendente',
-            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            aprovado_por TEXT,
-            data_aprovacao TIMESTAMP,
-            observacoes TEXT
-        )
-    ''')
-
-    # Tabela para aprovação de atestados de horas (novo schema para interface de aprovação)
-    c.execute('''
-        CREATE TABLE IF NOT EXISTS atestados_horas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT NOT NULL,
-            data DATE NOT NULL,
-            horas_trabalhadas REAL NOT NULL,
-            justificativa TEXT NOT NULL,
-            arquivo_id INTEGER,
-            status TEXT DEFAULT 'pendente',
-            data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            aprovado_por TEXT,
-            data_aprovacao TIMESTAMP,
-            rejeitado_por TEXT,
-            data_rejeicao TIMESTAMP,
-            motivo_rejeicao TEXT,
-            observacoes TEXT,
-            FOREIGN KEY (arquivo_id) REFERENCES uploads(id)
-        )
-    ''')
-
-    # Tabela para uploads de arquivos
-    c.execute('''
+    # Tabela para uploads de arquivos (DEVE vir antes de atestados_horas por causa da FK)
+    c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS uploads (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
             nome_original TEXT NOT NULL,
             nome_arquivo TEXT NOT NULL,
@@ -233,14 +184,56 @@ def init_db():
             hash_arquivo TEXT,
             relacionado_a TEXT,
             relacionado_id INTEGER,
-            data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            data_upload TIMESTAMP DEFAULT NOW(),
+            conteudo BYTEA,
+            status TEXT DEFAULT 'ativo'
         )
-    ''')
+    '''))
+
+    # Tabela para atestado de horas (schema antigo - manter para compatibilidade)
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS atestado_horas (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            data DATE NOT NULL,
+            hora_inicio TIME NOT NULL,
+            hora_fim TIME NOT NULL,
+            total_horas REAL NOT NULL,
+            motivo TEXT,
+            arquivo_comprovante TEXT,
+            status TEXT DEFAULT 'pendente',
+            data_registro TIMESTAMP DEFAULT NOW(),
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    '''))
+
+    # Tabela para aprovação de atestados de horas (novo schema para interface de aprovação)
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS atestados_horas (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            data DATE NOT NULL,
+            horas_trabalhadas REAL NOT NULL,
+            justificativa TEXT NOT NULL,
+            arquivo_id INTEGER,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            rejeitado_por TEXT,
+            data_rejeicao TIMESTAMP,
+            motivo_rejeicao TEXT,
+            observacoes TEXT,
+            FOREIGN KEY (arquivo_id) REFERENCES uploads(id)
+        )
+    '''))
 
     # Tabela para banco de horas
-    c.execute('''
+    c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS banco_horas (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
             data DATE NOT NULL,
             tipo TEXT NOT NULL,
@@ -249,22 +242,102 @@ def init_db():
             debito REAL DEFAULT 0,
             saldo_anterior REAL DEFAULT 0,
             saldo_atual REAL DEFAULT 0,
-            data_registro TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_registro TIMESTAMP DEFAULT NOW(),
             relacionado_id INTEGER,
             relacionado_tabela TEXT
         )
-    ''')
+    '''))
 
     # Tabela para feriados
-    c.execute('''
+    c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS feriados (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             data DATE UNIQUE NOT NULL,
             nome TEXT NOT NULL,
             tipo TEXT DEFAULT 'nacional',
             ativo INTEGER DEFAULT 1
         )
-    ''')
+    '''))
+
+    # Tabela que armazena jornadas semanais personalizadas por usuário
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS jornada_semanal (
+            usuario TEXT NOT NULL,
+            dia TEXT NOT NULL,
+            trabalha INTEGER DEFAULT 1,
+            inicio TIME DEFAULT '08:00',
+            fim TIME DEFAULT '17:00',
+            intervalo INTEGER DEFAULT 60,
+            PRIMARY KEY (usuario, dia)
+        )
+    '''))
+
+    # Tabela de Notificacoes
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS Notificacoes (
+            id SERIAL PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            title TEXT,
+            message TEXT,
+            type TEXT,
+            read INTEGER DEFAULT 0,
+            extra_data TEXT,
+            timestamp TIMESTAMP DEFAULT NOW()
+        )
+    '''))
+
+    # Tabela de Solicitações de Ajuste de Ponto (inclui campos usados pelos testes)
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_ajuste_ponto (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            aprovador_solicitado TEXT,
+            registro_id INTEGER,
+            data_hora_original TIMESTAMP,
+            data_hora_nova TIMESTAMP,
+            tipo_original TEXT,
+            tipo_novo TEXT,
+            modalidade_original TEXT,
+            modalidade_nova TEXT,
+            projeto_original TEXT,
+            projeto_novo TEXT,
+            justificativa TEXT,
+            dados_solicitados TEXT,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            data_resposta TIMESTAMP,
+            aprovado_por TEXT,
+            respondido_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    '''))
+
+    # Tabela para solicitações de correção de registro
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS solicitacoes_correcao_registro (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            registro_id INTEGER NOT NULL,
+            data_hora_original TIMESTAMP NOT NULL,
+            data_hora_corrigida TIMESTAMP NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    '''))
+
+    # Tabela configuracoes para armazenar parâmetros globais
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS configuracoes (
+            chave TEXT PRIMARY KEY,
+            valor TEXT NOT NULL,
+            data_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    '''))
 
     # Inserir usuários padrão se não existirem
     c.execute("SELECT COUNT(*) FROM usuarios")
@@ -275,8 +348,9 @@ def init_db():
             ("gestor", hash_password("senha_gestor_123"),
              "gestor", "Gestor Principal")
         ]
-        c.executemany(
-            "INSERT INTO usuarios (usuario, senha, tipo, nome_completo) VALUES (?, ?, ?, ?)", usuarios_padrao)
+        for u in usuarios_padrao:
+            c.execute(
+                f"INSERT INTO usuarios (usuario, senha, tipo, nome_completo) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})", u)
 
     # Inserir projetos padrão se não existirem
     c.execute("SELECT COUNT(*) FROM projetos")
@@ -294,8 +368,9 @@ def init_db():
             ("MVV - 4096-SERROTE", "Projeto MVV - 4096-SERROTE"),
             ("Trabalho em Campo", "Atividades de campo e visitas técnicas")
         ]
-        c.executemany(
-            "INSERT INTO projetos (nome, descricao) VALUES (?, ?)", projetos_padrao)
+        for p in projetos_padrao:
+            c.execute(
+                f"INSERT INTO projetos (nome, descricao) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})", p)
 
     # Inserir feriados de Belo Horizonte para 2025
     c.execute("SELECT COUNT(*) FROM feriados")
@@ -316,59 +391,169 @@ def init_db():
             ("2025-08-15", "Assunção de Nossa Senhora", "bh"),
             ("2025-12-08", "Imaculada Conceição", "bh")
         ]
-        c.executemany(
-            "INSERT INTO feriados (data, nome, tipo) VALUES (?, ?, ?)", feriados_2025)
+        for f in feriados_2025:
+            c.execute(
+                f"INSERT INTO feriados (data, nome, tipo) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})", f)
 
     # Adicionar colunas se não existirem (para compatibilidade com versões anteriores)
+    # PostgreSQL usa ADD COLUMN IF NOT EXISTS
     try:
         c.execute(
-            "ALTER TABLE usuarios ADD COLUMN jornada_inicio_previsto TIME DEFAULT '08:00'")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute(
-            "ALTER TABLE usuarios ADD COLUMN jornada_fim_previsto TIME DEFAULT '17:00'")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute("ALTER TABLE registros_ponto ADD COLUMN latitude REAL")
-    except sqlite3.OperationalError:
-        pass
-
-    try:
-        c.execute("ALTER TABLE registros_ponto ADD COLUMN longitude REAL")
-    except sqlite3.OperationalError:
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jornada_inicio_previsto TIME DEFAULT '08:00'")
+    except Exception:
         pass
 
     try:
         c.execute(
-            "ALTER TABLE ausencias ADD COLUMN nao_possui_comprovante INTEGER DEFAULT 0")
-    except sqlite3.OperationalError:
+            "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jornada_fim_previsto TIME DEFAULT '17:00'")
+    except Exception:
+        pass
+
+    try:
+        c.execute("ALTER TABLE registros_ponto ADD COLUMN IF NOT EXISTS latitude REAL")
+    except Exception:
+        pass
+
+    try:
+        c.execute("ALTER TABLE registros_ponto ADD COLUMN IF NOT EXISTS longitude REAL")
+    except Exception:
+        pass
+
+    try:
+        c.execute(
+            "ALTER TABLE ausencias ADD COLUMN IF NOT EXISTS nao_possui_comprovante INTEGER DEFAULT 0")
+    except Exception:
         pass
 
     # Compatibilidade: adicionar coluna hash_arquivo em uploads se ausente
     try:
-        c.execute("ALTER TABLE uploads ADD COLUMN hash_arquivo TEXT")
-    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash_arquivo TEXT")
+    except Exception:
         pass
     try:
-        c.execute("ALTER TABLE uploads ADD COLUMN status TEXT DEFAULT 'ativo'")
-    except sqlite3.OperationalError:
+        c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ativo'")
+    except Exception:
+        pass
+    
+    # 🔧 CORREÇÃO: Adicionar coluna conteudo para armazenar arquivos no banco de dados
+    # Isso resolve o problema de arquivos perdidos em sistemas de arquivos efêmeros (Render, Heroku, etc)
+    try:
+        c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS conteudo BYTEA")
+    except Exception:
+        pass
+
+    # Compatibilidade: adicionar coluna nao_possui_comprovante em atestado_horas se ausente
+    try:
+        c.execute("ALTER TABLE atestado_horas ADD COLUMN IF NOT EXISTS nao_possui_comprovante INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    # Compatibilidade: adicionar colunas ausentes em solicitacoes_ajuste_ponto
+    try:
+        c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN IF NOT EXISTS aprovador_solicitado TEXT")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN IF NOT EXISTS data_resposta TIMESTAMP")
+    except Exception:
         pass
 
     # Tabela para auditoria de correções de registros
-    c.execute('''
+    c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS auditoria_correcoes (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id SERIAL PRIMARY KEY,
             registro_id INTEGER NOT NULL,
             gestor TEXT NOT NULL,
             justificativa TEXT NOT NULL,
-            data_correcao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            data_correcao TIMESTAMP DEFAULT NOW(),
             FOREIGN KEY (registro_id) REFERENCES registros_ponto (id)
         )
-    ''')
+    '''))
+
+    # Tabela horas_extras_ativas para gerenciar solicitações de horas extras
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS horas_extras_ativas (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            data DATE NOT NULL,
+            hora_inicio TIME NOT NULL,
+            hora_fim TIME NOT NULL,
+            justificativa TEXT NOT NULL,
+            status TEXT DEFAULT 'pendente',
+            data_solicitacao TIMESTAMP DEFAULT NOW(),
+            aprovado_por TEXT,
+            data_aprovacao TIMESTAMP,
+            observacoes TEXT
+        )
+    '''))
+
+    # Adicionar coluna data_hora_nova em solicitacoes_correcao_registro
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP")
+    except Exception:
+        pass
+
+    # ============================================
+    # TABELA PARA PUSH NOTIFICATIONS (Web Push)
+    # ============================================
+    # Armazena as subscriptions dos usuários para enviar notificações push
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            device_info TEXT,
+            ativo INTEGER DEFAULT 1,
+            data_criacao TIMESTAMP DEFAULT NOW(),
+            ultima_notificacao TIMESTAMP,
+            falhas_consecutivas INTEGER DEFAULT 0
+        )
+    '''))
+    
+    # Índice para busca rápida por usuário
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_usuario ON push_subscriptions(usuario)")
+    except Exception:
+        pass
+
+    # ============================================
+    # TABELA PARA HISTÓRICO DE NOTIFICAÇÕES PUSH
+    # ============================================
+    # Registra todas as notificações enviadas para auditoria
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS push_notifications_log (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            titulo TEXT NOT NULL,
+            mensagem TEXT NOT NULL,
+            tipo TEXT,
+            dados_extras TEXT,
+            status TEXT DEFAULT 'enviado',
+            erro TEXT,
+            data_envio TIMESTAMP DEFAULT NOW()
+        )
+    '''))
+
+    # ============================================
+    # TABELA PARA CONFIGURAÇÃO DE LEMBRETES
+    # ============================================
+    # Permite personalizar lembretes por usuário
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS config_lembretes_push (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL UNIQUE,
+            lembrete_entrada INTEGER DEFAULT 1,
+            lembrete_saida INTEGER DEFAULT 1,
+            lembrete_hora_extra INTEGER DEFAULT 1,
+            horario_lembrete_entrada TIME DEFAULT '08:15',
+            horario_lembrete_saida TIME DEFAULT '17:15',
+            dias_semana TEXT DEFAULT '1,2,3,4,5',
+            data_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    '''))
 
     conn.commit()
     conn.close()
