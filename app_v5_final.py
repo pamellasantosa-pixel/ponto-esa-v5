@@ -1990,6 +1990,7 @@ def tela_funcionario():
             f"⏰ Atestado de Horas{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
             "🏦 Meu Banco de Horas",
+            "📊 Minhas Horas por Projeto",
             "📁 Meus Arquivos",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
@@ -2053,6 +2054,8 @@ def tela_funcionario():
         horas_extras_interface(horas_extras_system)
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
+    elif opcao == "📊 Minhas Horas por Projeto":
+        minhas_horas_projeto_interface()
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
     elif opcao.startswith("🔔 Notificações"):
@@ -3229,6 +3232,192 @@ def horas_extras_interface(horas_extras_system):
                             f"**Observações:** {solicitacao['observacoes']}")
         else:
             st.info("📋 Nenhuma solicitação de horas extras encontrada")
+
+
+def minhas_horas_projeto_interface():
+    """
+    Interface para funcionário visualizar suas horas por projeto.
+    Mostra distribuição percentual do tempo dedicado a cada projeto.
+    """
+    from horas_projeto_system import (
+        HorasProjetoSystem,
+        format_horas_projeto,
+        format_percentual,
+        get_cor_projeto
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📊 Minhas Horas por Projeto</h3>
+        <p>Veja quanto tempo você dedicou a cada projeto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    horas_projeto_system = HorasProjetoSystem()
+    usuario = st.session_state.usuario
+    
+    # Filtros de período
+    st.markdown("### 📅 Selecione o Período")
+    
+    tipo_periodo = st.radio(
+        "Tipo de período:",
+        ["Mês atual", "Mês específico", "Período personalizado"],
+        horizontal=True,
+        key="mhp_tipo_periodo"
+    )
+    
+    if tipo_periodo == "Mês atual":
+        data_inicio = date.today().replace(day=1)
+        data_fim = date.today()
+    elif tipo_periodo == "Mês específico":
+        col1, col2 = st.columns(2)
+        with col1:
+            anos = list(range(date.today().year, date.today().year - 2, -1))
+            ano = st.selectbox("Ano:", anos, key="mhp_ano")
+        with col2:
+            meses = [
+                (1, "Janeiro"), (2, "Fevereiro"), (3, "Março"),
+                (4, "Abril"), (5, "Maio"), (6, "Junho"),
+                (7, "Julho"), (8, "Agosto"), (9, "Setembro"),
+                (10, "Outubro"), (11, "Novembro"), (12, "Dezembro")
+            ]
+            mes = st.selectbox(
+                "Mês:",
+                meses,
+                format_func=lambda x: x[1],
+                index=date.today().month - 1,
+                key="mhp_mes"
+            )[0]
+        
+        data_inicio = date(ano, mes, 1)
+        if mes == 12:
+            data_fim = date(ano + 1, 1, 1) - timedelta(days=1)
+        else:
+            data_fim = date(ano, mes + 1, 1) - timedelta(days=1)
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio = st.date_input(
+                "Data início:",
+                value=date.today().replace(day=1),
+                key="mhp_data_inicio"
+            )
+        with col2:
+            data_fim = st.date_input(
+                "Data fim:",
+                value=date.today(),
+                key="mhp_data_fim"
+            )
+    
+    st.markdown("---")
+    
+    # Buscar dados
+    resultado = horas_projeto_system.calcular_horas_por_projeto_periodo(
+        usuario=usuario,
+        data_inicio=data_inicio.strftime('%Y-%m-%d'),
+        data_fim=data_fim.strftime('%Y-%m-%d')
+    )
+    
+    if resultado.get('success') and resultado.get('projetos'):
+        projetos = resultado['projetos']
+        total_horas = resultado.get('total_horas', 0)
+        
+        # Métricas principais
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("⏱️ Total de Horas", format_horas_projeto(total_horas))
+        with col2:
+            st.metric("📁 Projetos", len(projetos))
+        with col3:
+            dias_periodo = (data_fim - data_inicio).days + 1
+            media_dia = total_horas / dias_periodo if dias_periodo > 0 else 0
+            st.metric("📊 Média/Dia", format_horas_projeto(media_dia))
+        
+        st.markdown("---")
+        st.markdown("### 🥧 Distribuição por Projeto")
+        
+        # Visualização com barras de progresso e percentuais
+        for i, proj in enumerate(projetos):
+            cor = get_cor_projeto(i)
+            percentual = proj['percentual']
+            horas = proj['horas']
+            nome = proj['projeto']
+            
+            st.markdown(f"""
+            <div style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: bold; font-size: 16px;">
+                        <span style="color: {cor};">●</span> {nome}
+                    </span>
+                    <span style="font-size: 18px; font-weight: bold; color: {cor};">
+                        {format_horas_projeto(horas)}
+                    </span>
+                </div>
+                <div style="background-color: #e0e0e0; border-radius: 10px; height: 30px; overflow: hidden; position: relative;">
+                    <div style="
+                        background: linear-gradient(90deg, {cor}, {cor}cc);
+                        width: {percentual}%;
+                        height: 100%;
+                        border-radius: 10px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: white;
+                        font-weight: bold;
+                        font-size: 14px;
+                        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                    ">
+                        {format_percentual(percentual)}
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Resumo em cards
+        st.markdown("### 📋 Resumo")
+        
+        num_cols = min(len(projetos), 4)
+        cols = st.columns(num_cols)
+        
+        for i, proj in enumerate(projetos[:num_cols]):
+            with cols[i]:
+                cor = get_cor_projeto(i)
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, {cor}15, {cor}30);
+                    border: 2px solid {cor};
+                    border-radius: 12px;
+                    padding: 15px;
+                    text-align: center;
+                ">
+                    <h4 style="color: {cor}; margin: 0 0 10px 0; font-size: 14px;">{proj['projeto']}</h4>
+                    <p style="font-size: 24px; font-weight: bold; margin: 0; color: #333;">{format_horas_projeto(proj['horas'])}</p>
+                    <p style="font-size: 16px; color: {cor}; margin: 5px 0 0 0;">{format_percentual(proj['percentual'])}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Tabela detalhada
+        st.markdown("---")
+        with st.expander("📊 Ver tabela detalhada"):
+            df = pd.DataFrame(projetos)
+            df['Horas'] = df['horas'].apply(format_horas_projeto)
+            df['Percentual'] = df['percentual'].apply(lambda x: f"{x:.1f}%")
+            df = df.rename(columns={'projeto': 'Projeto'})
+            
+            st.dataframe(
+                df[['Projeto', 'Horas', 'Percentual']],
+                use_container_width=True,
+                hide_index=True
+            )
+    else:
+        st.info("📭 Nenhum registro de horas encontrado para o período selecionado.")
+        st.markdown("""
+        **Dicas:**
+        - Verifique se você selecionou projetos ao registrar seu ponto
+        - Tente selecionar um período diferente
+        """)
 
 
 def banco_horas_funcionario_interface(banco_horas_system):
@@ -4698,6 +4887,7 @@ def tela_gestor():
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
             "📈 Relatórios",
+            "📊 Horas por Projeto",
             "🏦 Banco de Horas Geral",
             "📁 Gerenciar Arquivos",
             "🏢 Gerenciar Projetos",
@@ -4746,6 +4936,8 @@ def tela_gestor():
         aprovar_horas_extras_interface(horas_extras_system)
     elif opcao.startswith("📈 Relatórios"):
         relatorios_horas_extras_interface()
+    elif opcao.startswith("📊 Horas por Projeto"):
+        horas_por_projeto_interface()
     elif opcao.startswith("🏦 Banco de Horas Geral"):
         banco_horas_gestor_interface(banco_horas_system)
     elif opcao.startswith("📅 Configurar Jornada"):
@@ -7669,6 +7861,274 @@ def gerenciar_usuarios_interface():
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Erro ao cadastrar usuário: {e}")
+
+
+def horas_por_projeto_interface():
+    """
+    Interface para visualizar distribuição de horas por projeto.
+    Mostra percentuais do tempo dedicado a cada projeto.
+    """
+    from horas_projeto_system import (
+        HorasProjetoSystem, 
+        format_horas_projeto, 
+        format_percentual,
+        get_cor_projeto,
+        CORES_PROJETOS
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📊 Distribuição de Horas por Projeto</h3>
+        <p>Visualize quanto tempo (em horas e percentual) foi dedicado a cada projeto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    horas_projeto_system = HorasProjetoSystem()
+    
+    # Abas
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Visão Mensal",
+        "👤 Por Funcionário",
+        "📈 Evolução"
+    ])
+    
+    with tab1:
+        st.markdown("### 📅 Distribuição Mensal de Horas por Projeto")
+        
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            anos = list(range(date.today().year, date.today().year - 3, -1))
+            ano_selecionado = st.selectbox("Ano:", anos, key="hp_ano")
+        with col2:
+            meses = [
+                (1, "Janeiro"), (2, "Fevereiro"), (3, "Março"),
+                (4, "Abril"), (5, "Maio"), (6, "Junho"),
+                (7, "Julho"), (8, "Agosto"), (9, "Setembro"),
+                (10, "Outubro"), (11, "Novembro"), (12, "Dezembro")
+            ]
+            mes_selecionado = st.selectbox(
+                "Mês:",
+                meses,
+                format_func=lambda x: x[1],
+                index=date.today().month - 1,
+                key="hp_mes"
+            )[0]
+        
+        # Buscar dados
+        resultado = horas_projeto_system.obter_relatorio_mensal_todos_funcionarios(
+            ano=ano_selecionado,
+            mes=mes_selecionado
+        )
+        
+        if resultado.get('success') and resultado.get('projetos_consolidados'):
+            projetos = resultado['projetos_consolidados']
+            total_geral = resultado.get('total_geral', 0)
+            
+            # Métricas principais
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("⏱️ Total de Horas", format_horas_projeto(total_geral))
+            with col2:
+                st.metric("📁 Projetos Ativos", len(projetos))
+            with col3:
+                st.metric("👥 Funcionários", len(resultado.get('funcionarios', [])))
+            
+            st.markdown("---")
+            
+            # Gráfico de pizza com percentuais
+            st.markdown("### 🥧 Distribuição por Projeto")
+            
+            if projetos:
+                # Criar dados para visualização
+                df_projetos = pd.DataFrame(projetos)
+                
+                # Visualização com barras horizontais + percentuais
+                for i, proj in enumerate(projetos):
+                    cor = get_cor_projeto(i)
+                    percentual = proj['percentual']
+                    horas = proj['horas']
+                    nome = proj['projeto']
+                    
+                    # Barra de progresso visual
+                    st.markdown(f"""
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="font-weight: bold; color: {cor};">📁 {nome}</span>
+                            <span style="font-weight: bold;">{format_horas_projeto(horas)} ({format_percentual(percentual)})</span>
+                        </div>
+                        <div style="background-color: #e0e0e0; border-radius: 10px; height: 25px; overflow: hidden;">
+                            <div style="background-color: {cor}; width: {percentual}%; height: 100%; border-radius: 10px;
+                                        display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
+                                {format_percentual(percentual) if percentual > 10 else ''}
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # Tabela detalhada
+                st.markdown("### 📋 Tabela Detalhada")
+                df_display = df_projetos.copy()
+                df_display['Horas'] = df_display['horas'].apply(format_horas_projeto)
+                df_display['Percentual'] = df_display['percentual'].apply(lambda x: f"{x:.1f}%")
+                df_display = df_display.rename(columns={'projeto': 'Projeto'})
+                
+                st.dataframe(
+                    df_display[['Projeto', 'Horas', 'Percentual']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Exportar CSV
+                csv_data = df_projetos.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    data=csv_data,
+                    file_name=f"horas_projeto_{ano_selecionado}_{mes_selecionado:02d}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("📭 Nenhum registro de horas encontrado para este período.")
+        else:
+            st.warning("⚠️ Não foi possível carregar os dados. Verifique se há registros no período selecionado.")
+    
+    with tab2:
+        st.markdown("### 👤 Horas por Projeto - Por Funcionário")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT usuario, nome_completo 
+            FROM usuarios 
+            WHERE tipo = 'funcionario' AND ativo = 1
+            ORDER BY nome_completo
+        """)
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        if funcionarios:
+            # Seleção de funcionário
+            func_opcoes = {f[1] or f[0]: f[0] for f in funcionarios}
+            func_nome = st.selectbox(
+                "Selecione o funcionário:",
+                list(func_opcoes.keys()),
+                key="hp_func"
+            )
+            func_usuario = func_opcoes[func_nome]
+            
+            # Período
+            col1, col2 = st.columns(2)
+            with col1:
+                data_inicio = st.date_input(
+                    "Data início:",
+                    value=date.today().replace(day=1),
+                    key="hp_data_inicio"
+                )
+            with col2:
+                data_fim = st.date_input(
+                    "Data fim:",
+                    value=date.today(),
+                    key="hp_data_fim"
+                )
+            
+            # Buscar dados do funcionário
+            resultado_func = horas_projeto_system.calcular_horas_por_projeto_periodo(
+                usuario=func_usuario,
+                data_inicio=data_inicio.strftime('%Y-%m-%d'),
+                data_fim=data_fim.strftime('%Y-%m-%d')
+            )
+            
+            if resultado_func.get('success') and resultado_func.get('projetos'):
+                projetos = resultado_func['projetos']
+                total_horas = resultado_func.get('total_horas', 0)
+                
+                st.markdown(f"**Total de horas no período:** {format_horas_projeto(total_horas)}")
+                st.markdown("---")
+                
+                # Cards por projeto
+                cols = st.columns(min(len(projetos), 3))
+                for i, proj in enumerate(projetos):
+                    with cols[i % 3]:
+                        cor = get_cor_projeto(i)
+                        st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(135deg, {cor}20, {cor}40);
+                            border-left: 4px solid {cor};
+                            padding: 15px;
+                            border-radius: 8px;
+                            margin-bottom: 10px;
+                        ">
+                            <h4 style="margin: 0; color: {cor};">📁 {proj['projeto']}</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0;">{format_horas_projeto(proj['horas'])}</p>
+                            <p style="font-size: 18px; color: #666;">{format_percentual(proj['percentual'])} do total</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # Gráfico de barras
+                st.markdown("### 📊 Visualização")
+                df_func = pd.DataFrame(projetos)
+                st.bar_chart(df_func.set_index('projeto')['horas'])
+                
+            else:
+                st.info("📭 Nenhum registro encontrado para este funcionário no período selecionado.")
+        else:
+            st.warning("⚠️ Nenhum funcionário cadastrado.")
+    
+    with tab3:
+        st.markdown("### 📈 Evolução de Horas por Projeto")
+        
+        # Buscar projetos
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
+        projetos_lista = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        if projetos_lista:
+            projeto_selecionado = st.selectbox(
+                "Selecione o projeto:",
+                projetos_lista,
+                key="hp_evolucao_projeto"
+            )
+            
+            meses_evolucao = st.slider(
+                "Período (meses):",
+                min_value=3,
+                max_value=12,
+                value=6,
+                key="hp_evolucao_meses"
+            )
+            
+            resultado_evolucao = horas_projeto_system.obter_evolucao_projeto(
+                projeto_nome=projeto_selecionado,
+                meses=meses_evolucao
+            )
+            
+            if resultado_evolucao.get('success') and resultado_evolucao.get('evolucao'):
+                evolucao = resultado_evolucao['evolucao']
+                
+                df_evolucao = pd.DataFrame(evolucao)
+                df_evolucao['Mês'] = df_evolucao['mes']
+                df_evolucao['Horas'] = df_evolucao['horas']
+                
+                st.line_chart(df_evolucao.set_index('Mês')['Horas'])
+                
+                # Tabela de evolução
+                st.markdown("#### 📋 Dados da Evolução")
+                df_display = df_evolucao.copy()
+                df_display['Horas Formatadas'] = df_display['horas'].apply(format_horas_projeto)
+                st.dataframe(
+                    df_display[['Mês', 'Horas Formatadas']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("📭 Nenhum dado de evolução encontrado para este projeto.")
+        else:
+            st.warning("⚠️ Nenhum projeto cadastrado.")
 
 
 def relatorios_horas_extras_interface():
