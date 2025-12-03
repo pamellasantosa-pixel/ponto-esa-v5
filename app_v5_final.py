@@ -4697,6 +4697,7 @@ def tela_gestor():
             "👥 Todos os Registros",
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
+            "📈 Relatórios",
             "🏦 Banco de Horas Geral",
             "📁 Gerenciar Arquivos",
             "🏢 Gerenciar Projetos",
@@ -4743,6 +4744,8 @@ def tela_gestor():
         aprovar_atestados_interface(atestado_system)
     elif opcao.startswith("🕐 Aprovar Horas Extras"):
         aprovar_horas_extras_interface(horas_extras_system)
+    elif opcao.startswith("📈 Relatórios"):
+        relatorios_horas_extras_interface()
     elif opcao.startswith("🏦 Banco de Horas Geral"):
         banco_horas_gestor_interface(banco_horas_system)
     elif opcao.startswith("📅 Configurar Jornada"):
@@ -7666,6 +7669,284 @@ def gerenciar_usuarios_interface():
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Erro ao cadastrar usuário: {e}")
+
+
+def relatorios_horas_extras_interface():
+    """Interface de relatórios de horas extras"""
+    from relatorios_horas_extras import (
+        gerar_relatorio_horas_extras,
+        gerar_relatorio_por_usuario,
+        gerar_relatorio_mensal,
+        obter_estatisticas_gerais
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📈 Relatórios de Horas Extras</h3>
+        <p>Visualize e exporte relatórios de horas extras</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Abas de relatórios
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Visão Geral",
+        "👤 Por Funcionário",
+        "📅 Mensal",
+        "🔍 Detalhado"
+    ])
+    
+    with tab1:
+        st.markdown("### 📊 Estatísticas Gerais")
+        
+        stats = obter_estatisticas_gerais()
+        
+        if stats.get('success'):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total de Solicitações", stats.get('total_solicitacoes', 0))
+            
+            with col2:
+                st.metric("Total Horas Aprovadas", f"{stats.get('total_horas_aprovadas', 0):.1f}h")
+            
+            with col3:
+                st.metric("Média por Solicitação", f"{stats.get('media_horas_aprovadas', 0):.1f}h")
+            
+            with col4:
+                pendentes = stats.get('por_status', {}).get('pendente', 0)
+                st.metric("Pendentes", pendentes)
+            
+            # Status breakdown
+            st.markdown("---")
+            st.markdown("### Status das Solicitações")
+            
+            por_status = stats.get('por_status', {})
+            if por_status:
+                status_df_data = []
+                for status, count in por_status.items():
+                    emoji = {'pendente': '⏳', 'aprovado': '✅', 'rejeitado': '❌'}.get(status, '❓')
+                    status_df_data.append({
+                        'Status': f"{emoji} {status.title()}",
+                        'Quantidade': count
+                    })
+                
+                if status_df_data:
+                    import pandas as pd
+                    df_status = pd.DataFrame(status_df_data)
+                    st.dataframe(df_status, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Não foi possível carregar as estatísticas.")
+    
+    with tab2:
+        st.markdown("### 👤 Horas Extras por Funcionário")
+        
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio_usr = st.date_input(
+                "Data Inicial",
+                value=date.today().replace(day=1),
+                key="rel_usr_inicio"
+            )
+        with col2:
+            data_fim_usr = st.date_input(
+                "Data Final",
+                value=date.today(),
+                key="rel_usr_fim"
+            )
+        
+        if st.button("🔄 Gerar Relatório por Usuário", key="btn_rel_usr"):
+            relatorio = gerar_relatorio_por_usuario(
+                inicio=data_inicio_usr.strftime('%Y-%m-%d'),
+                fim=data_fim_usr.strftime('%Y-%m-%d')
+            )
+            
+            if relatorio.get('success') and relatorio.get('usuarios'):
+                import pandas as pd
+                
+                df_data = []
+                for usr in relatorio['usuarios']:
+                    df_data.append({
+                        'Funcionário': usr['nome_completo'],
+                        'Solicitações': usr['total_solicitacoes'],
+                        'Horas Aprovadas': f"{usr['horas_aprovadas']:.1f}h",
+                        'Pendentes': usr['pendentes'],
+                        'Aprovadas': usr['aprovadas'],
+                        'Rejeitadas': usr['rejeitadas']
+                    })
+                
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Exportar CSV
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    csv,
+                    f"horas_extras_por_usuario_{data_inicio_usr}_{data_fim_usr}.csv",
+                    "text/csv",
+                    key="download_csv_usr"
+                )
+            else:
+                st.info("Nenhum registro encontrado para o período selecionado.")
+    
+    with tab3:
+        st.markdown("### 📅 Relatório Mensal")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            ano = st.selectbox(
+                "Ano",
+                options=list(range(date.today().year, date.today().year - 3, -1)),
+                key="rel_ano"
+            )
+        with col2:
+            meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+            mes_idx = st.selectbox(
+                "Mês",
+                options=range(1, 13),
+                format_func=lambda x: meses[x-1],
+                index=date.today().month - 1,
+                key="rel_mes"
+            )
+        
+        if st.button("🔄 Gerar Relatório Mensal", key="btn_rel_mes"):
+            relatorio = gerar_relatorio_mensal(ano=ano, mes=mes_idx)
+            
+            if relatorio.get('success'):
+                st.markdown(f"**Período:** {meses[mes_idx-1]}/{ano}")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total de Registros", relatorio.get('total_registros', 0))
+                with col2:
+                    st.metric("Total de Horas", f"{relatorio.get('total_horas', 0):.1f}h")
+                with col3:
+                    st.metric("Aprovadas", relatorio.get('total_aprovadas', 0))
+                
+                # Lista de horas extras
+                if relatorio.get('horas_extras'):
+                    st.markdown("---")
+                    st.markdown("### Detalhamento")
+                    
+                    import pandas as pd
+                    df_data = []
+                    for he in relatorio['horas_extras']:
+                        df_data.append({
+                            'Funcionário': he['nome_completo'],
+                            'Data': he['data'],
+                            'Horário': f"{he['hora_inicio']} - {he['hora_fim']}",
+                            'Horas': f"{he['horas']:.1f}h",
+                            'Status': he['status'].title()
+                        })
+                    
+                    df = pd.DataFrame(df_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum registro encontrado para o período selecionado.")
+    
+    with tab4:
+        st.markdown("### 🔍 Relatório Detalhado")
+        
+        # Filtros
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            data_inicio = st.date_input(
+                "Data Inicial",
+                value=date.today() - timedelta(days=30),
+                key="rel_det_inicio"
+            )
+        
+        with col2:
+            data_fim = st.date_input(
+                "Data Final",
+                value=date.today(),
+                key="rel_det_fim"
+            )
+        
+        with col3:
+            status_filtro = st.selectbox(
+                "Status",
+                options=["Todos", "pendente", "aprovado", "rejeitado"],
+                key="rel_det_status"
+            )
+        
+        # Buscar usuários para filtro
+        usuarios_options = ["Todos"]
+        if REFACTORING_ENABLED:
+            try:
+                result = execute_query("SELECT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
+                if result:
+                    usuarios_options.extend([f"{r[1]} ({r[0]})" for r in result])
+            except:
+                pass
+        
+        usuario_filtro = st.selectbox("Funcionário", options=usuarios_options, key="rel_det_usr")
+        
+        if st.button("🔄 Gerar Relatório Detalhado", key="btn_rel_det"):
+            # Extrair username se selecionado
+            usr_param = None
+            if usuario_filtro != "Todos":
+                # Extrair do formato "Nome (username)"
+                import re
+                match = re.search(r'\(([^)]+)\)$', usuario_filtro)
+                if match:
+                    usr_param = match.group(1)
+            
+            status_param = None if status_filtro == "Todos" else status_filtro
+            
+            relatorio = gerar_relatorio_horas_extras(
+                usuario=usr_param,
+                inicio=data_inicio.strftime('%Y-%m-%d'),
+                fim=data_fim.strftime('%Y-%m-%d'),
+                status=status_param
+            )
+            
+            if relatorio.get('success') and relatorio.get('horas_extras'):
+                st.success(f"✅ {relatorio.get('total_registros', 0)} registros encontrados")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Horas", f"{relatorio.get('total_horas', 0):.1f}h")
+                with col2:
+                    st.metric("Pendentes", relatorio.get('total_pendentes', 0))
+                with col3:
+                    st.metric("Aprovadas", relatorio.get('total_aprovadas', 0))
+                with col4:
+                    st.metric("Rejeitadas", relatorio.get('total_rejeitadas', 0))
+                
+                st.markdown("---")
+                
+                import pandas as pd
+                df_data = []
+                for he in relatorio['horas_extras']:
+                    df_data.append({
+                        'ID': he['id'],
+                        'Funcionário': he['nome_completo'],
+                        'Data': he['data'],
+                        'Início': he['hora_inicio'],
+                        'Fim': he['hora_fim'],
+                        'Horas': f"{he['horas']:.1f}h",
+                        'Status': he['status'].title(),
+                        'Aprovado Por': he.get('aprovado_por', '-')
+                    })
+                
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Exportar
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    csv,
+                    f"relatorio_horas_extras_{data_inicio}_{data_fim}.csv",
+                    "text/csv",
+                    key="download_csv_det"
+                )
+            else:
+                st.info("Nenhum registro encontrado com os filtros selecionados.")
 
 
 def sistema_interface():
