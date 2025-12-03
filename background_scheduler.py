@@ -7,8 +7,10 @@ Integrado ao app principal (sem custo adicional no Render).
 Esta solução usa APScheduler com BackgroundScheduler que roda
 em uma thread separada, sem bloquear o app principal.
 
+Configurações são lidas do banco de dados (tabela configuracoes).
+
 @author: Pâmella SAR - Expressão Socioambiental
-@version: 1.0.0
+@version: 1.1.0
 """
 
 import os
@@ -16,7 +18,7 @@ import sys
 import logging
 import threading
 import atexit
-from typing import Optional
+from typing import Optional, Dict, List
 
 # Configurar logging
 logging.basicConfig(
@@ -43,10 +45,79 @@ def is_scheduler_running() -> bool:
     return _scheduler is not None and _scheduler_started
 
 
+def carregar_configuracoes_notificacao() -> Dict:
+    """
+    Carrega configurações de notificação do banco de dados.
+    
+    Returns:
+        Dict com as configurações
+    """
+    # Valores padrão
+    config = {
+        'notif_entrada_ativo': True,
+        'notif_entrada_horarios': ['08:15', '08:30', '09:00'],
+        'notif_saida_ativo': True,
+        'notif_saida_horarios': ['17:15', '17:30', '18:00'],
+        'notif_hora_extra_ativo': True,
+        'notif_hora_extra_inicio': '18:00',
+        'notif_hora_extra_fim': '22:00',
+        'notif_aprovadores_ativo': True,
+        'notif_aprovadores_horarios': ['09:00', '14:00', '17:00']
+    }
+    
+    try:
+        from database import get_connection, SQL_PLACEHOLDER
+        
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Buscar configurações do banco
+        cursor.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'notif_%'")
+        rows = cursor.fetchall()
+        conn.close()
+        
+        for chave, valor in rows:
+            if chave == 'notif_entrada_ativo':
+                config['notif_entrada_ativo'] = valor == '1'
+            elif chave == 'notif_entrada_horarios':
+                config['notif_entrada_horarios'] = [h.strip() for h in valor.split(',') if h.strip()]
+            elif chave == 'notif_saida_ativo':
+                config['notif_saida_ativo'] = valor == '1'
+            elif chave == 'notif_saida_horarios':
+                config['notif_saida_horarios'] = [h.strip() for h in valor.split(',') if h.strip()]
+            elif chave == 'notif_hora_extra_ativo':
+                config['notif_hora_extra_ativo'] = valor == '1'
+            elif chave == 'notif_hora_extra_inicio':
+                config['notif_hora_extra_inicio'] = valor
+            elif chave == 'notif_hora_extra_fim':
+                config['notif_hora_extra_fim'] = valor
+            elif chave == 'notif_aprovadores_ativo':
+                config['notif_aprovadores_ativo'] = valor == '1'
+            elif chave == 'notif_aprovadores_horarios':
+                config['notif_aprovadores_horarios'] = [h.strip() for h in valor.split(',') if h.strip()]
+        
+        logger.info("Configurações de notificação carregadas do banco")
+        
+    except Exception as e:
+        logger.warning(f"Usando configurações padrão (erro ao carregar do banco: {e})")
+    
+    return config
+
+
+def parse_horario(horario_str: str) -> tuple:
+    """Converte string HH:MM para tupla (hora, minuto)."""
+    try:
+        parts = horario_str.strip().split(':')
+        return int(parts[0]), int(parts[1])
+    except:
+        return None, None
+
+
 def iniciar_scheduler_background() -> bool:
     """
     Inicia o scheduler de notificações em background.
     Usa BackgroundScheduler do APScheduler que roda em thread separada.
+    Carrega configurações do banco de dados.
     
     Returns:
         True se iniciou com sucesso, False caso contrário
@@ -82,6 +153,9 @@ def iniciar_scheduler_background() -> bool:
             return False
         
         try:
+            # Carregar configurações do banco
+            config = carregar_configuracoes_notificacao()
+            
             # Criar scheduler com timezone de Brasília
             _scheduler = BackgroundScheduler(
                 timezone='America/Sao_Paulo',
@@ -99,109 +173,89 @@ def iniciar_scheduler_background() -> bool:
             logger.info("Configurando jobs de notificação automática...")
             
             # ============================================
-            # JOB 1: Lembrete de Entrada
-            # Horários: 8:15, 8:30, 9:00 (dias úteis)
-            # Notifica funcionários que esqueceram de bater entrada
+            # JOB 1: Lembrete de Entrada (configurável)
             # ============================================
-            _scheduler.add_job(
-                job_lembrete_entrada,
-                CronTrigger(hour=8, minute=15, day_of_week='mon-fri'),
-                id='entrada_8h15',
-                name='Lembrete Entrada 8:15',
-                replace_existing=True
-            )
-            _scheduler.add_job(
-                job_lembrete_entrada,
-                CronTrigger(hour=8, minute=30, day_of_week='mon-fri'),
-                id='entrada_8h30',
-                name='Lembrete Entrada 8:30',
-                replace_existing=True
-            )
-            _scheduler.add_job(
-                job_lembrete_entrada,
-                CronTrigger(hour=9, minute=0, day_of_week='mon-fri'),
-                id='entrada_9h00',
-                name='Lembrete Entrada 9:00',
-                replace_existing=True
-            )
-            logger.info("  ✅ Lembrete de Entrada: 8:15, 8:30, 9:00 (Seg-Sex)")
+            if config['notif_entrada_ativo']:
+                for i, horario in enumerate(config['notif_entrada_horarios']):
+                    hora, minuto = parse_horario(horario)
+                    if hora is not None:
+                        _scheduler.add_job(
+                            job_lembrete_entrada,
+                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                            id=f'entrada_{hora}h{minuto:02d}',
+                            name=f'Lembrete Entrada {hora}:{minuto:02d}',
+                            replace_existing=True
+                        )
+                horarios_str = ', '.join(config['notif_entrada_horarios'])
+                logger.info(f"  ✅ Lembrete de Entrada: {horarios_str} (Seg-Sex)")
+            else:
+                logger.info("  ⏸️ Lembrete de Entrada: DESATIVADO")
             
             # ============================================
-            # JOB 2: Lembrete de Saída
-            # Horários: 17:15, 17:30, 18:00 (dias úteis)
-            # Notifica funcionários que esqueceram de bater saída
+            # JOB 2: Lembrete de Saída (configurável)
             # ============================================
-            _scheduler.add_job(
-                job_lembrete_saida,
-                CronTrigger(hour=17, minute=15, day_of_week='mon-fri'),
-                id='saida_17h15',
-                name='Lembrete Saída 17:15',
-                replace_existing=True
-            )
-            _scheduler.add_job(
-                job_lembrete_saida,
-                CronTrigger(hour=17, minute=30, day_of_week='mon-fri'),
-                id='saida_17h30',
-                name='Lembrete Saída 17:30',
-                replace_existing=True
-            )
-            _scheduler.add_job(
-                job_lembrete_saida,
-                CronTrigger(hour=18, minute=0, day_of_week='mon-fri'),
-                id='saida_18h00',
-                name='Lembrete Saída 18:00',
-                replace_existing=True
-            )
-            logger.info("  ✅ Lembrete de Saída: 17:15, 17:30, 18:00 (Seg-Sex)")
+            if config['notif_saida_ativo']:
+                for i, horario in enumerate(config['notif_saida_horarios']):
+                    hora, minuto = parse_horario(horario)
+                    if hora is not None:
+                        _scheduler.add_job(
+                            job_lembrete_saida,
+                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                            id=f'saida_{hora}h{minuto:02d}',
+                            name=f'Lembrete Saída {hora}:{minuto:02d}',
+                            replace_existing=True
+                        )
+                horarios_str = ', '.join(config['notif_saida_horarios'])
+                logger.info(f"  ✅ Lembrete de Saída: {horarios_str} (Seg-Sex)")
+            else:
+                logger.info("  ⏸️ Lembrete de Saída: DESATIVADO")
             
             # ============================================
-            # JOB 3: Alerta de Hora Extra
-            # Horários: cada 30min entre 18h e 22h (dias úteis)
-            # Notifica funcionários em hora extra prolongada
+            # JOB 3: Alerta de Hora Extra (configurável)
             # ============================================
-            _scheduler.add_job(
-                job_alerta_hora_extra,
-                CronTrigger(hour='18-22', minute='0,30', day_of_week='mon-fri'),
-                id='hora_extra',
-                name='Alerta Hora Extra',
-                replace_existing=True
-            )
-            logger.info("  ✅ Alerta Hora Extra: cada 30min das 18h às 22h (Seg-Sex)")
+            if config['notif_hora_extra_ativo']:
+                hora_inicio, _ = parse_horario(config['notif_hora_extra_inicio'])
+                hora_fim, _ = parse_horario(config['notif_hora_extra_fim'])
+                if hora_inicio and hora_fim:
+                    _scheduler.add_job(
+                        job_alerta_hora_extra,
+                        CronTrigger(hour=f'{hora_inicio}-{hora_fim}', minute='0,30', day_of_week='mon-fri'),
+                        id='hora_extra',
+                        name='Alerta Hora Extra',
+                        replace_existing=True
+                    )
+                    logger.info(f"  ✅ Alerta Hora Extra: cada 30min das {hora_inicio}h às {hora_fim}h (Seg-Sex)")
+            else:
+                logger.info("  ⏸️ Alerta Hora Extra: DESATIVADO")
             
             # ============================================
-            # JOB 4: Lembrete para Aprovadores
-            # Horários: 9:00, 14:00 (dias úteis)
-            # Notifica gestores sobre solicitações pendentes
+            # JOB 4: Lembrete para Aprovadores (configurável)
             # ============================================
-            _scheduler.add_job(
-                job_lembrete_aprovadores,
-                CronTrigger(hour=9, minute=0, day_of_week='mon-fri'),
-                id='aprovadores_9h',
-                name='Lembrete Aprovadores 9:00',
-                replace_existing=True
-            )
-            _scheduler.add_job(
-                job_lembrete_aprovadores,
-                CronTrigger(hour=14, minute=0, day_of_week='mon-fri'),
-                id='aprovadores_14h',
-                name='Lembrete Aprovadores 14:00',
-                replace_existing=True
-            )
-            logger.info("  ✅ Lembrete Aprovadores: 9:00, 14:00 (Seg-Sex)")
-            
-            # ============================================
-            # JOB 5: Lembrete Urgente Aprovadores
-            # Horário: 17:00 (dias úteis)
-            # Notifica gestores sobre solicitações urgentes
-            # ============================================
-            _scheduler.add_job(
-                job_lembrete_fim_dia_aprovadores,
-                CronTrigger(hour=17, minute=0, day_of_week='mon-fri'),
-                id='aprovadores_urgente',
-                name='Lembrete Urgente Aprovadores 17:00',
-                replace_existing=True
-            )
-            logger.info("  ✅ Lembrete Urgente Aprovadores: 17:00 (Seg-Sex)")
+            if config['notif_aprovadores_ativo']:
+                for i, horario in enumerate(config['notif_aprovadores_horarios']):
+                    hora, minuto = parse_horario(horario)
+                    if hora is not None:
+                        # Último horário é urgente
+                        if i == len(config['notif_aprovadores_horarios']) - 1:
+                            _scheduler.add_job(
+                                job_lembrete_fim_dia_aprovadores,
+                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                                id=f'aprovadores_urgente_{hora}h{minuto:02d}',
+                                name=f'Lembrete Urgente Aprovadores {hora}:{minuto:02d}',
+                                replace_existing=True
+                            )
+                        else:
+                            _scheduler.add_job(
+                                job_lembrete_aprovadores,
+                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                                id=f'aprovadores_{hora}h{minuto:02d}',
+                                name=f'Lembrete Aprovadores {hora}:{minuto:02d}',
+                                replace_existing=True
+                            )
+                horarios_str = ', '.join(config['notif_aprovadores_horarios'])
+                logger.info(f"  ✅ Lembrete Aprovadores: {horarios_str} (Seg-Sex)")
+            else:
+                logger.info("  ⏸️ Lembrete Aprovadores: DESATIVADO")
             
             # Iniciar scheduler
             _scheduler.start()

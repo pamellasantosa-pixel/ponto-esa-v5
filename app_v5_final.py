@@ -8269,23 +8269,162 @@ def sistema_interface():
     except Exception as e:
         st.error(f"❌ Erro ao verificar scheduler: {e}")
     
-    # Informações sobre os horários
-    with st.expander("ℹ️ Horários das notificações automáticas"):
-        st.markdown("""
-        **Lembretes de Entrada** (seg-sex):
-        - 8:15, 8:30, 9:00
+    # ============================================
+    # Configuração dos horários de notificação
+    # ============================================
+    st.markdown("#### ⏰ Configurar Horários")
+    
+    # Buscar configurações salvas
+    config_notif = {
+        'notif_entrada_ativo': '1',
+        'notif_entrada_horarios': '08:15,08:30,09:00',
+        'notif_saida_ativo': '1',
+        'notif_saida_horarios': '17:15,17:30,18:00',
+        'notif_hora_extra_ativo': '1',
+        'notif_hora_extra_inicio': '18:00',
+        'notif_hora_extra_fim': '22:00',
+        'notif_aprovadores_ativo': '1',
+        'notif_aprovadores_horarios': '09:00,14:00,17:00'
+    }
+    
+    # Buscar valores do banco
+    if REFACTORING_ENABLED:
+        try:
+            for chave in config_notif.keys():
+                result = execute_query(
+                    f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}",
+                    (chave,),
+                    fetch_one=True
+                )
+                if result:
+                    config_notif[chave] = result[0]
+        except Exception:
+            pass
+    else:
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            for chave in config_notif.keys():
+                cursor.execute(f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}", (chave,))
+                result = cursor.fetchone()
+                if result:
+                    config_notif[chave] = result[0]
+            conn.close()
+        except Exception:
+            pass
+    
+    with st.form("config_notificacoes"):
+        # Lembretes de Entrada
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            entrada_ativo = st.checkbox(
+                "Lembrete Entrada",
+                value=config_notif['notif_entrada_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de entrada"
+            )
+        with col2:
+            entrada_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_entrada_horarios'],
+                placeholder="08:15,08:30,09:00",
+                key="entrada_horarios"
+            )
         
-        **Lembretes de Saída** (seg-sex):
-        - 17:15, 17:30, 18:00
+        # Lembretes de Saída
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            saida_ativo = st.checkbox(
+                "Lembrete Saída",
+                value=config_notif['notif_saida_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de saída"
+            )
+        with col2:
+            saida_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_saida_horarios'],
+                placeholder="17:15,17:30,18:00",
+                key="saida_horarios"
+            )
         
-        **Alertas de Hora Extra** (seg-sex):
-        - Cada 30 minutos das 18h às 22h
+        # Alertas de Hora Extra
+        col1, col2, col3 = st.columns([1, 1.5, 1.5])
+        with col1:
+            hora_extra_ativo = st.checkbox(
+                "Alerta Hora Extra",
+                value=config_notif['notif_hora_extra_ativo'] == '1',
+                help="Notifica funcionários em hora extra prolongada"
+            )
+        with col2:
+            he_inicio = st.time_input(
+                "Início monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_inicio'], "%H:%M").time(),
+                key="he_inicio"
+            )
+        with col3:
+            he_fim = st.time_input(
+                "Fim monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_fim'], "%H:%M").time(),
+                key="he_fim"
+            )
         
-        **Lembretes para Aprovadores** (seg-sex):
-        - 9:00 (resumo matinal)
-        - 14:00 (lembrete tarde)
-        - 17:00 (urgentes)
-        """)
+        # Lembretes para Aprovadores
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            aprovadores_ativo = st.checkbox(
+                "Lembrete Aprovadores",
+                value=config_notif['notif_aprovadores_ativo'] == '1',
+                help="Notifica gestores sobre solicitações pendentes"
+            )
+        with col2:
+            aprovadores_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_aprovadores_horarios'],
+                placeholder="09:00,14:00,17:00",
+                key="aprovadores_horarios"
+            )
+        
+        if st.form_submit_button("💾 Salvar Configurações de Notificação", use_container_width=True):
+            novas_configs = [
+                ('notif_entrada_ativo', '1' if entrada_ativo else '0'),
+                ('notif_entrada_horarios', entrada_horarios),
+                ('notif_saida_ativo', '1' if saida_ativo else '0'),
+                ('notif_saida_horarios', saida_horarios),
+                ('notif_hora_extra_ativo', '1' if hora_extra_ativo else '0'),
+                ('notif_hora_extra_inicio', he_inicio.strftime("%H:%M")),
+                ('notif_hora_extra_fim', he_fim.strftime("%H:%M")),
+                ('notif_aprovadores_ativo', '1' if aprovadores_ativo else '0'),
+                ('notif_aprovadores_horarios', aprovadores_horarios),
+            ]
+            
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in novas_configs:
+                        # Insert or update
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, f'Config notificação: {chave}', valor))
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    for chave, valor in novas_configs:
+                        cursor.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, f'Config notificação: {chave}', valor))
+                    conn.commit()
+                    conn.close()
+                
+                st.success("✅ Configurações de notificação salvas!")
+                st.info("⚠️ As alterações serão aplicadas na próxima reinicialização do app.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erro ao salvar: {e}")
+    
+    st.markdown("---")
+    st.caption("💡 **Dica:** Os horários devem estar no formato HH:MM, separados por vírgula. Ex: 08:15,08:30,09:00")
 
 
 # Rodapé unificado
