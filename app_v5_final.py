@@ -8232,6 +8232,61 @@ def sistema_interface():
             st.success("✅ Configurações salvas!")
             st.rerun()
 
+    # ============================================
+    # SEÇÃO: Notificações Automáticas (Scheduler)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 🔔 Notificações Automáticas")
+    st.markdown("""
+    O sistema envia notificações automáticas para:
+    - **Funcionários** que esqueceram de bater ponto (entrada/saída)
+    - **Funcionários** em hora extra prolongada
+    - **Gestores** sobre solicitações pendentes de aprovação
+    """)
+    
+    try:
+        from background_scheduler import obter_status_scheduler, is_scheduler_running
+        
+        status = obter_status_scheduler()
+        
+        if status['ativo']:
+            st.success("✅ **Scheduler ativo** - Notificações automáticas funcionando!")
+            
+            with st.expander("📋 Ver jobs agendados", expanded=False):
+                if status['jobs']:
+                    for job in status['jobs']:
+                        st.markdown(f"- **{job['nome']}**: próxima execução em `{job['proximo_execucao']}`")
+                else:
+                    st.info("Nenhum job agendado no momento.")
+            
+            st.markdown(f"🕐 **Horário do servidor:** {status['data_hora_atual']}")
+        else:
+            st.warning("⚠️ **Scheduler inativo** - Notificações automáticas desabilitadas")
+            st.info("O scheduler será iniciado automaticamente ao reiniciar o app.")
+            
+    except ImportError:
+        st.info("ℹ️ Módulo de notificações automáticas não disponível.")
+    except Exception as e:
+        st.error(f"❌ Erro ao verificar scheduler: {e}")
+    
+    # Informações sobre os horários
+    with st.expander("ℹ️ Horários das notificações automáticas"):
+        st.markdown("""
+        **Lembretes de Entrada** (seg-sex):
+        - 8:15, 8:30, 9:00
+        
+        **Lembretes de Saída** (seg-sex):
+        - 17:15, 17:30, 18:00
+        
+        **Alertas de Hora Extra** (seg-sex):
+        - Cada 30 minutos das 18h às 22h
+        
+        **Lembretes para Aprovadores** (seg-sex):
+        - 9:00 (resumo matinal)
+        - 14:00 (lembrete tarde)
+        - 17:00 (urgentes)
+        """)
+
 
 # Rodapé unificado
 st.markdown("""
@@ -8791,6 +8846,18 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
+    
+    # ============================================
+    # INICIAR SCHEDULER DE NOTIFICAÇÕES AUTOMÁTICAS
+    # Roda em background thread (sem custo adicional)
+    # ============================================
+    try:
+        from background_scheduler import iniciar_scheduler_background, is_scheduler_running
+        if not is_scheduler_running():
+            iniciar_scheduler_background()
+            logger.info("✅ Scheduler de notificações automáticas iniciado")
+    except Exception as e:
+        logger.warning(f"Scheduler de notificações não iniciado: {e}")
     
     # Garantir que o UploadSystem tenha a estrutura correta da tabela
     try:
