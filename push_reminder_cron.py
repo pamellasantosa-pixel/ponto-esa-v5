@@ -46,7 +46,10 @@ try:
         notificar_esqueceu_entrada,
         notificar_esqueceu_saida,
         notificar_fim_hora_extra,
-        enviar_notificacao_para_usuario
+        enviar_notificacao_para_usuario,
+        notificar_solicitacoes_pendentes_aprovador,
+        notificar_lembrete_aprovacao_urgente,
+        notificar_resumo_diario_aprovador
     )
 except ImportError as e:
     logger.error(f"Erro ao importar módulos: {e}")
@@ -513,6 +516,327 @@ def job_alerta_hora_extra() -> Dict:
     return resultados
 
 
+# ============================================
+# JOBS DE LEMBRETE PARA APROVADORES
+# ============================================
+
+def obter_gestores_ativos() -> List[str]:
+    """
+    Obtém lista de usuários do tipo 'gestor' ativos.
+    
+    Returns:
+        Lista de usernames dos gestores
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("""
+            SELECT usuario FROM usuarios
+            WHERE tipo = 'gestor' AND ativo = 1
+        """)
+        
+        return [row[0] for row in cursor.fetchall()]
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter gestores: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
+    """
+    Conta solicitações pendentes por tipo.
+    
+    Returns:
+        Dict com contagem por tipo: horas_extras, correcoes, atestados, ajustes
+    """
+    conn = None
+    pendentes = {
+        'horas_extras': 0,
+        'correcoes': 0,
+        'atestados': 0,
+        'ajustes': 0
+    }
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Horas extras pendentes
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM horas_extras_ativas
+                WHERE status = 'pendente'
+            """)
+            pendentes['horas_extras'] = cursor.fetchone()[0] or 0
+        except Exception:
+            pass
+        
+        # Correções de registro pendentes
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_correcao_registro
+                WHERE status = 'pendente'
+            """)
+            pendentes['correcoes'] = cursor.fetchone()[0] or 0
+        except Exception:
+            pass
+        
+        # Atestados pendentes
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM atestados
+                WHERE status = 'pendente'
+            """)
+            pendentes['atestados'] = cursor.fetchone()[0] or 0
+        except Exception:
+            pass
+        
+        # Ajustes de ponto pendentes
+        try:
+            cursor.execute("""
+                SELECT COUNT(*) FROM solicitacoes_ajuste_ponto
+                WHERE status = 'pendente'
+            """)
+            pendentes['ajustes'] = cursor.fetchone()[0] or 0
+        except Exception:
+            pass
+        
+        return pendentes
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter pendências: {e}")
+        return pendentes
+    finally:
+        if conn:
+            conn.close()
+
+
+def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
+    """
+    Obtém solicitações pendentes há mais de X dias.
+    
+    Args:
+        dias_limite: Número de dias para considerar urgente
+    
+    Returns:
+        Lista de dicts com usuario (solicitante), tipo, dias_pendente
+    """
+    conn = None
+    urgentes = []
+    data_limite = get_date_br() - timedelta(days=dias_limite)
+    
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        # Horas extras urgentes
+        try:
+            cursor.execute(f"""
+                SELECT usuario, data_solicitacao
+                FROM horas_extras_ativas
+                WHERE status = 'pendente'
+                AND DATE(data_solicitacao) <= {SQL_PLACEHOLDER}
+            """, (data_limite,))
+            
+            for row in cursor.fetchall():
+                dias = (get_date_br() - row[1].date()).days if row[1] else dias_limite
+                urgentes.append({
+                    'funcionario': row[0],
+                    'tipo': 'hora_extra',
+                    'dias_pendente': dias
+                })
+        except Exception:
+            pass
+        
+        # Correções urgentes
+        try:
+            cursor.execute(f"""
+                SELECT usuario, data_solicitacao
+                FROM solicitacoes_correcao_registro
+                WHERE status = 'pendente'
+                AND DATE(data_solicitacao) <= {SQL_PLACEHOLDER}
+            """, (data_limite,))
+            
+            for row in cursor.fetchall():
+                dias = (get_date_br() - row[1].date()).days if row[1] else dias_limite
+                urgentes.append({
+                    'funcionario': row[0],
+                    'tipo': 'correcao',
+                    'dias_pendente': dias
+                })
+        except Exception:
+            pass
+        
+        # Atestados urgentes
+        try:
+            cursor.execute(f"""
+                SELECT usuario, data_envio
+                FROM atestados
+                WHERE status = 'pendente'
+                AND DATE(data_envio) <= {SQL_PLACEHOLDER}
+            """, (data_limite,))
+            
+            for row in cursor.fetchall():
+                dias = (get_date_br() - row[1].date()).days if row[1] else dias_limite
+                urgentes.append({
+                    'funcionario': row[0],
+                    'tipo': 'atestado',
+                    'dias_pendente': dias
+                })
+        except Exception:
+            pass
+        
+        return urgentes
+        
+    except Exception as e:
+        logger.error(f"Erro ao obter solicitações urgentes: {e}")
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def job_lembrete_aprovadores() -> Dict:
+    """
+    Envia lembretes para gestores sobre solicitações pendentes.
+    Deve ser executado periodicamente (ex: 9h, 14h, 17h).
+    
+    Returns:
+        Dict com estatísticas do job
+    """
+    logger.info("Iniciando job de lembrete para aprovadores...")
+    
+    if not eh_dia_util() or eh_feriado():
+        logger.info("Hoje não é dia útil ou é feriado. Pulando lembretes para aprovadores.")
+        return {'status': 'skipped', 'reason': 'not_workday'}
+    
+    resultados = {
+        'gestores_verificados': 0,
+        'notificacoes_enviadas': 0,
+        'solicitacoes_pendentes': 0,
+        'urgentes': 0,
+        'erros': 0
+    }
+    
+    # Obter pendências
+    pendentes = obter_solicitacoes_pendentes_por_tipo()
+    total_pendentes = sum(pendentes.values())
+    resultados['solicitacoes_pendentes'] = total_pendentes
+    
+    if total_pendentes == 0:
+        logger.info("Não há solicitações pendentes. Pulando lembretes.")
+        return resultados
+    
+    # Obter solicitações urgentes
+    urgentes = obter_solicitacoes_urgentes(dias_limite=3)
+    resultados['urgentes'] = len(urgentes)
+    
+    # Obter gestores
+    gestores = obter_gestores_ativos()
+    resultados['gestores_verificados'] = len(gestores)
+    
+    for gestor in gestores:
+        try:
+            # Enviar resumo de pendências
+            enviados, total = notificar_resumo_diario_aprovador(gestor, pendentes)
+            if enviados > 0:
+                resultados['notificacoes_enviadas'] += 1
+                logger.info(f"Resumo de pendências enviado para: {gestor}")
+            
+            # Enviar alertas urgentes (solicitações antigas)
+            for urgente in urgentes[:3]:  # Limitar a 3 urgentes por vez
+                enviados, total = notificar_lembrete_aprovacao_urgente(
+                    gestor,
+                    urgente['dias_pendente'],
+                    urgente['funcionario']
+                )
+                if enviados > 0:
+                    resultados['notificacoes_enviadas'] += 1
+                    logger.info(f"Alerta urgente enviado para {gestor}: {urgente['funcionario']} ({urgente['dias_pendente']} dias)")
+            
+        except Exception as e:
+            resultados['erros'] += 1
+            logger.error(f"Erro ao notificar gestor {gestor}: {e}")
+    
+    logger.info(f"Job de aprovadores concluído: {resultados['notificacoes_enviadas']} notificações enviadas")
+    return resultados
+
+
+def job_resumo_matinal_aprovadores() -> Dict:
+    """
+    Envia resumo matinal para aprovadores às 9h.
+    
+    Returns:
+        Dict com estatísticas
+    """
+    logger.info("Enviando resumo matinal para aprovadores...")
+    return job_lembrete_aprovadores()
+
+
+def job_lembrete_tarde_aprovadores() -> Dict:
+    """
+    Envia lembrete à tarde para aprovadores às 14h.
+    
+    Returns:
+        Dict com estatísticas
+    """
+    logger.info("Enviando lembrete da tarde para aprovadores...")
+    return job_lembrete_aprovadores()
+
+
+def job_lembrete_fim_dia_aprovadores() -> Dict:
+    """
+    Envia lembrete no fim do dia para aprovadores às 17h.
+    Foca em solicitações urgentes.
+    
+    Returns:
+        Dict com estatísticas
+    """
+    logger.info("Enviando lembrete de fim de dia para aprovadores...")
+    
+    if not eh_dia_util() or eh_feriado():
+        return {'status': 'skipped', 'reason': 'not_workday'}
+    
+    resultados = {
+        'gestores_notificados': 0,
+        'urgentes_alertados': 0,
+        'erros': 0
+    }
+    
+    urgentes = obter_solicitacoes_urgentes(dias_limite=2)  # Mais rigoroso no fim do dia
+    
+    if not urgentes:
+        logger.info("Não há solicitações urgentes. Pulando lembrete de fim de dia.")
+        return resultados
+    
+    gestores = obter_gestores_ativos()
+    
+    for gestor in gestores:
+        try:
+            for urgente in urgentes:
+                enviados, total = notificar_lembrete_aprovacao_urgente(
+                    gestor,
+                    urgente['dias_pendente'],
+                    urgente['funcionario']
+                )
+                if enviados > 0:
+                    resultados['urgentes_alertados'] += 1
+            
+            resultados['gestores_notificados'] += 1
+            
+        except Exception as e:
+            resultados['erros'] += 1
+            logger.error(f"Erro ao notificar gestor {gestor}: {e}")
+    
+    logger.info(f"Lembrete de fim de dia concluído: {resultados['urgentes_alertados']} alertas urgentes")
+    return resultados
+
+
 def executar_todos_jobs() -> Dict:
     """
     Executa todos os jobs de lembrete.
@@ -549,6 +873,16 @@ def executar_todos_jobs() -> Dict:
         resultados['jobs']['hora_extra'] = job_alerta_hora_extra()
     else:
         resultados['jobs']['hora_extra'] = {'status': 'skipped', 'reason': 'outside_window'}
+    
+    # Job de lembrete para aprovadores (executar às 9h, 14h, 17h)
+    if time(8, 45) <= agora <= time(9, 30):
+        resultados['jobs']['aprovadores_manha'] = job_resumo_matinal_aprovadores()
+    elif time(13, 45) <= agora <= time(14, 30):
+        resultados['jobs']['aprovadores_tarde'] = job_lembrete_tarde_aprovadores()
+    elif time(16, 45) <= agora <= time(17, 30):
+        resultados['jobs']['aprovadores_fim_dia'] = job_lembrete_fim_dia_aprovadores()
+    else:
+        resultados['jobs']['aprovadores'] = {'status': 'skipped', 'reason': 'outside_window'}
     
     logger.info("=" * 60)
     logger.info("Jobs concluídos")
@@ -611,6 +945,30 @@ def iniciar_scheduler():
         name='Alerta de Hora Extra'
     )
     
+    # Job de lembrete para aprovadores - 9h (resumo matinal)
+    scheduler.add_job(
+        job_resumo_matinal_aprovadores,
+        CronTrigger(hour='9', minute='0', day_of_week='mon-fri'),
+        id='aprovadores_manha',
+        name='Resumo Matinal para Aprovadores (9:00)'
+    )
+    
+    # Job de lembrete para aprovadores - 14h (lembrete da tarde)
+    scheduler.add_job(
+        job_lembrete_tarde_aprovadores,
+        CronTrigger(hour='14', minute='0', day_of_week='mon-fri'),
+        id='aprovadores_tarde',
+        name='Lembrete da Tarde para Aprovadores (14:00)'
+    )
+    
+    # Job de lembrete para aprovadores - 17h (fim do dia, urgentes)
+    scheduler.add_job(
+        job_lembrete_fim_dia_aprovadores,
+        CronTrigger(hour='17', minute='0', day_of_week='mon-fri'),
+        id='aprovadores_fim_dia',
+        name='Lembrete Fim do Dia para Aprovadores (17:00)'
+    )
+    
     scheduler.start()
     logger.info("Scheduler de lembretes iniciado")
     
@@ -625,7 +983,7 @@ if __name__ == '__main__':
     import argparse
     
     parser = argparse.ArgumentParser(description='Sistema de Lembretes Automáticos - Ponto ExSA')
-    parser.add_argument('--job', choices=['entrada', 'saida', 'hora_extra', 'todos'],
+    parser.add_argument('--job', choices=['entrada', 'saida', 'hora_extra', 'aprovadores', 'aprovadores_urgente', 'todos'],
                         help='Executar job específico')
     parser.add_argument('--scheduler', action='store_true',
                         help='Iniciar scheduler em background')
@@ -650,6 +1008,21 @@ if __name__ == '__main__':
         horas_extras = obter_horas_extras_ativas()
         print(f"Horas extras em andamento: {len(horas_extras)}")
         
+        # Mostrar pendências para aprovadores
+        pendentes = obter_solicitacoes_pendentes_por_tipo()
+        print(f"\nSolicitações pendentes:")
+        print(f"  - Horas extras: {pendentes.get('horas_extras', 0)}")
+        print(f"  - Correções: {pendentes.get('correcoes', 0)}")
+        print(f"  - Atestados: {pendentes.get('atestados', 0)}")
+        print(f"  - Ajustes: {pendentes.get('ajustes', 0)}")
+        print(f"  - Total: {sum(pendentes.values())}")
+        
+        urgentes = obter_solicitacoes_urgentes(dias_limite=3)
+        print(f"\nSolicitações urgentes (>3 dias): {len(urgentes)}")
+        
+        gestores = obter_gestores_ativos()
+        print(f"Gestores ativos: {len(gestores)}")
+        
     elif args.scheduler:
         print("Iniciando scheduler de lembretes...")
         scheduler = iniciar_scheduler()
@@ -670,6 +1043,10 @@ if __name__ == '__main__':
             resultado = job_lembrete_saida()
         elif args.job == 'hora_extra':
             resultado = job_alerta_hora_extra()
+        elif args.job == 'aprovadores':
+            resultado = job_lembrete_aprovadores()
+        elif args.job == 'aprovadores_urgente':
+            resultado = job_lembrete_fim_dia_aprovadores()
         elif args.job == 'todos':
             resultado = executar_todos_jobs()
         

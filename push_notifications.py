@@ -605,6 +605,106 @@ def notificar_teste(usuario: str) -> Tuple[int, int]:
     )
 
 
+def notificar_solicitacoes_pendentes_aprovador(gestor: str, quantidade: int, tipo_solicitacao: str = "gerais") -> Tuple[int, int]:
+    """
+    Notifica o aprovador sobre solicitações pendentes.
+    
+    Args:
+        gestor: Username do gestor/aprovador
+        quantidade: Número de solicitações pendentes
+        tipo_solicitacao: Tipo (horas_extras, correcoes, atestados, gerais)
+    
+    Returns:
+        Tuple[int, int]: (enviados, total_subscriptions)
+    """
+    tipos_msg = {
+        'horas_extras': 'de hora extra',
+        'correcoes': 'de correção de registro',
+        'atestados': 'de atestado',
+        'ajustes': 'de ajuste de ponto',
+        'gerais': ''
+    }
+    
+    tipo_texto = tipos_msg.get(tipo_solicitacao, '')
+    plural = 'ões' if quantidade > 1 else 'ão'
+    
+    return enviar_notificacao_para_usuario(
+        usuario=gestor,
+        titulo=f"📋 {quantidade} Solicitaç{plural} Pendente{'s' if quantidade > 1 else ''}",
+        mensagem=f"Você tem {quantidade} solicitaç{plural} {tipo_texto} aguardando sua aprovação.",
+        tipo="warning",
+        url="/",
+        dados_extras={
+            'tipo': 'solicitacoes_pendentes',
+            'quantidade': quantidade,
+            'tipo_solicitacao': tipo_solicitacao
+        }
+    )
+
+
+def notificar_lembrete_aprovacao_urgente(gestor: str, dias_pendente: int, funcionario: str) -> Tuple[int, int]:
+    """
+    Notifica o aprovador sobre solicitação pendente há vários dias.
+    
+    Args:
+        gestor: Username do gestor/aprovador
+        dias_pendente: Quantos dias a solicitação está pendente
+        funcionario: Nome do funcionário que fez a solicitação
+    
+    Returns:
+        Tuple[int, int]: (enviados, total_subscriptions)
+    """
+    return enviar_notificacao_para_usuario(
+        usuario=gestor,
+        titulo=f"⚠️ Solicitação Urgente - {dias_pendente} dias",
+        mensagem=f"A solicitação de {funcionario} está pendente há {dias_pendente} dias!",
+        tipo="error",
+        url="/",
+        dados_extras={
+            'tipo': 'aprovacao_urgente',
+            'dias_pendente': dias_pendente,
+            'funcionario': funcionario
+        }
+    )
+
+
+def notificar_resumo_diario_aprovador(gestor: str, resumo: Dict) -> Tuple[int, int]:
+    """
+    Envia resumo diário de pendências para o aprovador.
+    
+    Args:
+        gestor: Username do gestor/aprovador
+        resumo: Dict com contagem por tipo de solicitação
+    
+    Returns:
+        Tuple[int, int]: (enviados, total_subscriptions)
+    """
+    total = sum(resumo.values())
+    if total == 0:
+        return (0, 0)
+    
+    partes = []
+    if resumo.get('horas_extras', 0) > 0:
+        partes.append(f"{resumo['horas_extras']} HE")
+    if resumo.get('correcoes', 0) > 0:
+        partes.append(f"{resumo['correcoes']} correções")
+    if resumo.get('atestados', 0) > 0:
+        partes.append(f"{resumo['atestados']} atestados")
+    if resumo.get('ajustes', 0) > 0:
+        partes.append(f"{resumo['ajustes']} ajustes")
+    
+    mensagem = f"Pendências: {', '.join(partes)}" if partes else f"{total} solicitações aguardando"
+    
+    return enviar_notificacao_para_usuario(
+        usuario=gestor,
+        titulo=f"📊 Resumo: {total} Pendência{'s' if total > 1 else ''}",
+        mensagem=mensagem,
+        tipo="info",
+        url="/",
+        dados_extras={'tipo': 'resumo_diario', 'resumo': resumo}
+    )
+
+
 # ============================================
 # CLASSE PRINCIPAL DO SISTEMA
 # ============================================
@@ -679,6 +779,15 @@ class PushNotificationSystem:
     
     def nova_solicitacao(self, gestor: str, funcionario: str) -> Tuple[int, int]:
         return notificar_nova_solicitacao_he(gestor, funcionario)
+    
+    def solicitacoes_pendentes(self, gestor: str, quantidade: int, tipo: str = "gerais") -> Tuple[int, int]:
+        return notificar_solicitacoes_pendentes_aprovador(gestor, quantidade, tipo)
+    
+    def lembrete_aprovacao_urgente(self, gestor: str, dias: int, funcionario: str) -> Tuple[int, int]:
+        return notificar_lembrete_aprovacao_urgente(gestor, dias, funcionario)
+    
+    def resumo_diario_aprovador(self, gestor: str, resumo: Dict) -> Tuple[int, int]:
+        return notificar_resumo_diario_aprovador(gestor, resumo)
 
 
 # Instância global para uso em todo o app
