@@ -2417,6 +2417,94 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     st.markdown("---")
     
     st.subheader("➕ Novo Registro")
+    
+    # GPS: Injetar JavaScript para captura de coordenadas
+    gps_js = """
+    <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
+        <div style="padding: 8px; background: #f0f2f6; border-radius: 8px; text-align: center;">
+            📍 Obtendo localização GPS...
+        </div>
+    </div>
+    <script>
+    (function() {
+        // Função para enviar coordenadas para o Streamlit
+        function sendToStreamlit(lat, lng, accuracy) {
+            // Usar postMessage para comunicar com Streamlit
+            const data = {
+                isStreamlitMessage: true,
+                type: 'streamlit:setComponentValue',
+                data: {latitude: lat, longitude: lng, accuracy: accuracy}
+            };
+            
+            // Armazenar no sessionStorage para persistência
+            sessionStorage.setItem('gps_latitude', lat);
+            sessionStorage.setItem('gps_longitude', lng);
+            sessionStorage.setItem('gps_accuracy', accuracy);
+            sessionStorage.setItem('gps_timestamp', Date.now());
+            
+            // Atualizar campos ocultos se existirem
+            setTimeout(function() {
+                const inputs = document.querySelectorAll('input[type="text"]');
+                inputs.forEach(function(input) {
+                    const container = input.closest('.stTextInput');
+                    if (container) {
+                        const label = container.querySelector('label');
+                        if (label) {
+                            if (label.textContent.includes('GPS_LAT')) {
+                                input.value = lat.toString();
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            if (label.textContent.includes('GPS_LNG')) {
+                                input.value = lng.toString();
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }
+                    }
+                });
+            }, 500);
+        }
+        
+        function updateGpsStatus(success, message) {
+            const gpsDiv = document.getElementById('gps-status');
+            if (gpsDiv) {
+                if (success) {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #d4edda; border-radius: 8px; color: #155724; text-align: center;">✅ ' + message + '</div>';
+                } else {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #fff3cd; border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
+                }
+            }
+        }
+        
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const acc = position.coords.accuracy;
+                    
+                    sendToStreamlit(lat, lng, acc);
+                    updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
+                },
+                function(error) {
+                    console.log('GPS Error:', error.message);
+                    sessionStorage.setItem('gps_error', error.message);
+                    updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 60000
+                }
+            );
+        } else {
+            updateGpsStatus(false, 'Navegador não suporta GPS');
+        }
+    })();
+    </script>
+    """
+    st.components.v1.html(gps_js, height=60)
 
     with st.form("registro_ponto"):
         col1, col2 = st.columns(2)
@@ -2481,6 +2569,14 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             st.warning(
                 f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
+        # Campos ocultos para capturar GPS via JavaScript
+        # Esses campos são preenchidos automaticamente pelo JavaScript
+        col_gps1, col_gps2 = st.columns(2)
+        with col_gps1:
+            gps_lat_input = st.text_input("GPS_LAT", value="", key="gps_lat_field", label_visibility="collapsed")
+        with col_gps2:
+            gps_lng_input = st.text_input("GPS_LNG", value="", key="gps_lng_field", label_visibility="collapsed")
+
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
 
@@ -2490,9 +2586,18 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
                 st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
-                # GPS: Coordenadas (funcionalidade desabilitada temporariamente)
+                # GPS: Obter coordenadas dos campos preenchidos via JavaScript
                 latitude = None
                 longitude = None
+                try:
+                    if gps_lat_input and gps_lat_input.strip():
+                        latitude = float(gps_lat_input.strip())
+                    if gps_lng_input and gps_lng_input.strip():
+                        longitude = float(gps_lng_input.strip())
+                except (ValueError, TypeError):
+                    # Se não conseguir converter, registra sem GPS
+                    latitude = None
+                    longitude = None
 
                 # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
@@ -2507,7 +2612,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     longitude
                 )
 
-                st.success(f"✅ Ponto registrado com sucesso!")
+                # Mostrar info de GPS se disponível
+                if latitude and longitude:
+                    st.success(f"✅ Ponto registrado com sucesso! 📍 GPS: {latitude:.6f}, {longitude:.6f}")
+                else:
+                    st.success(f"✅ Ponto registrado com sucesso!")
                 st.info(
                     f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
 

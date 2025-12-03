@@ -341,7 +341,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
             valor TEXT NOT NULL,
-            data_atualizacao TIMESTAMP DEFAULT NOW()
+            data_atualizacao TIMESTAMP DEFAULT NOW(),
+            descricao TEXT
         )
     '''))
 
