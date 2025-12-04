@@ -378,6 +378,9 @@ setInterval(updateClock, 60000);
 // Atualizar imediatamente
 updateClock();
 </script>
+
+<!-- Push Notifications Script -->
+<script src="/static/push-notifications.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -1987,6 +1990,7 @@ def tela_funcionario():
             f"⏰ Atestado de Horas{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
             "🏦 Meu Banco de Horas",
+            "📊 Minhas Horas por Projeto",
             "📁 Meus Arquivos",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
@@ -2050,6 +2054,8 @@ def tela_funcionario():
         horas_extras_interface(horas_extras_system)
     elif opcao == "🏦 Meu Banco de Horas":
         banco_horas_funcionario_interface(banco_horas_system)
+    elif opcao == "📊 Minhas Horas por Projeto":
+        minhas_horas_projeto_interface()
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
     elif opcao.startswith("🔔 Notificações"):
@@ -2414,6 +2420,94 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     st.markdown("---")
     
     st.subheader("➕ Novo Registro")
+    
+    # GPS: Injetar JavaScript para captura de coordenadas
+    gps_js = """
+    <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
+        <div style="padding: 8px; background: #f0f2f6; border-radius: 8px; text-align: center;">
+            📍 Obtendo localização GPS...
+        </div>
+    </div>
+    <script>
+    (function() {
+        // Função para enviar coordenadas para o Streamlit
+        function sendToStreamlit(lat, lng, accuracy) {
+            // Usar postMessage para comunicar com Streamlit
+            const data = {
+                isStreamlitMessage: true,
+                type: 'streamlit:setComponentValue',
+                data: {latitude: lat, longitude: lng, accuracy: accuracy}
+            };
+            
+            // Armazenar no sessionStorage para persistência
+            sessionStorage.setItem('gps_latitude', lat);
+            sessionStorage.setItem('gps_longitude', lng);
+            sessionStorage.setItem('gps_accuracy', accuracy);
+            sessionStorage.setItem('gps_timestamp', Date.now());
+            
+            // Atualizar campos ocultos se existirem
+            setTimeout(function() {
+                const inputs = document.querySelectorAll('input[type="text"]');
+                inputs.forEach(function(input) {
+                    const container = input.closest('.stTextInput');
+                    if (container) {
+                        const label = container.querySelector('label');
+                        if (label) {
+                            if (label.textContent.includes('GPS_LAT')) {
+                                input.value = lat.toString();
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            if (label.textContent.includes('GPS_LNG')) {
+                                input.value = lng.toString();
+                                input.dispatchEvent(new Event('input', { bubbles: true }));
+                                input.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                        }
+                    }
+                });
+            }, 500);
+        }
+        
+        function updateGpsStatus(success, message) {
+            const gpsDiv = document.getElementById('gps-status');
+            if (gpsDiv) {
+                if (success) {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #d4edda; border-radius: 8px; color: #155724; text-align: center;">✅ ' + message + '</div>';
+                } else {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #fff3cd; border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
+                }
+            }
+        }
+        
+        if (navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const acc = position.coords.accuracy;
+                    
+                    sendToStreamlit(lat, lng, acc);
+                    updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
+                },
+                function(error) {
+                    console.log('GPS Error:', error.message);
+                    sessionStorage.setItem('gps_error', error.message);
+                    updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                },
+                {
+                    enableHighAccuracy: true,
+                    timeout: 15000,
+                    maximumAge: 60000
+                }
+            );
+        } else {
+            updateGpsStatus(false, 'Navegador não suporta GPS');
+        }
+    })();
+    </script>
+    """
+    st.components.v1.html(gps_js, height=60)
 
     with st.form("registro_ponto"):
         col1, col2 = st.columns(2)
@@ -2478,6 +2572,14 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             st.warning(
                 f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
+        # Campos ocultos para capturar GPS via JavaScript
+        # Esses campos são preenchidos automaticamente pelo JavaScript
+        col_gps1, col_gps2 = st.columns(2)
+        with col_gps1:
+            gps_lat_input = st.text_input("GPS_LAT", value="", key="gps_lat_field", label_visibility="collapsed")
+        with col_gps2:
+            gps_lng_input = st.text_input("GPS_LNG", value="", key="gps_lng_field", label_visibility="collapsed")
+
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
 
@@ -2487,9 +2589,18 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
                 st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
             else:
-                # GPS: Coordenadas (funcionalidade desabilitada temporariamente)
+                # GPS: Obter coordenadas dos campos preenchidos via JavaScript
                 latitude = None
                 longitude = None
+                try:
+                    if gps_lat_input and gps_lat_input.strip():
+                        latitude = float(gps_lat_input.strip())
+                    if gps_lng_input and gps_lng_input.strip():
+                        longitude = float(gps_lng_input.strip())
+                except (ValueError, TypeError):
+                    # Se não conseguir converter, registra sem GPS
+                    latitude = None
+                    longitude = None
 
                 # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
@@ -2504,7 +2615,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     longitude
                 )
 
-                st.success(f"✅ Ponto registrado com sucesso!")
+                # Mostrar info de GPS se disponível
+                if latitude and longitude:
+                    st.success(f"✅ Ponto registrado com sucesso! 📍 GPS: {latitude:.6f}, {longitude:.6f}")
+                else:
+                    st.success(f"✅ Ponto registrado com sucesso!")
                 st.info(
                     f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
 
@@ -3117,6 +3232,192 @@ def horas_extras_interface(horas_extras_system):
                             f"**Observações:** {solicitacao['observacoes']}")
         else:
             st.info("📋 Nenhuma solicitação de horas extras encontrada")
+
+
+def minhas_horas_projeto_interface():
+    """
+    Interface para funcionário visualizar suas horas por projeto.
+    Mostra distribuição percentual do tempo dedicado a cada projeto.
+    """
+    from horas_projeto_system import (
+        HorasProjetoSystem,
+        format_horas_projeto,
+        format_percentual,
+        get_cor_projeto
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📊 Minhas Horas por Projeto</h3>
+        <p>Veja quanto tempo você dedicou a cada projeto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    horas_projeto_system = HorasProjetoSystem()
+    usuario = st.session_state.usuario
+    
+    # Filtros de período
+    st.markdown("### 📅 Selecione o Período")
+    
+    tipo_periodo = st.radio(
+        "Tipo de período:",
+        ["Mês atual", "Mês específico", "Período personalizado"],
+        horizontal=True,
+        key="mhp_tipo_periodo"
+    )
+    
+    if tipo_periodo == "Mês atual":
+        data_inicio = date.today().replace(day=1)
+        data_fim = date.today()
+    elif tipo_periodo == "Mês específico":
+        col1, col2 = st.columns(2)
+        with col1:
+            anos = list(range(date.today().year, date.today().year - 2, -1))
+            ano = st.selectbox("Ano:", anos, key="mhp_ano")
+        with col2:
+            meses = [
+                (1, "Janeiro"), (2, "Fevereiro"), (3, "Março"),
+                (4, "Abril"), (5, "Maio"), (6, "Junho"),
+                (7, "Julho"), (8, "Agosto"), (9, "Setembro"),
+                (10, "Outubro"), (11, "Novembro"), (12, "Dezembro")
+            ]
+            mes = st.selectbox(
+                "Mês:",
+                meses,
+                format_func=lambda x: x[1],
+                index=date.today().month - 1,
+                key="mhp_mes"
+            )[0]
+        
+        data_inicio = date(ano, mes, 1)
+        if mes == 12:
+            data_fim = date(ano + 1, 1, 1) - timedelta(days=1)
+        else:
+            data_fim = date(ano, mes + 1, 1) - timedelta(days=1)
+    else:
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio = st.date_input(
+                "Data início:",
+                value=date.today().replace(day=1),
+                key="mhp_data_inicio"
+            )
+        with col2:
+            data_fim = st.date_input(
+                "Data fim:",
+                value=date.today(),
+                key="mhp_data_fim"
+            )
+    
+    st.markdown("---")
+    
+    # Buscar dados
+    resultado = horas_projeto_system.calcular_horas_por_projeto_periodo(
+        usuario=usuario,
+        data_inicio=data_inicio.strftime('%Y-%m-%d'),
+        data_fim=data_fim.strftime('%Y-%m-%d')
+    )
+    
+    if resultado.get('success') and resultado.get('projetos'):
+        projetos = resultado['projetos']
+        total_horas = resultado.get('total_horas', 0)
+        
+        # Métricas principais
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("⏱️ Total de Horas", format_horas_projeto(total_horas))
+        with col2:
+            st.metric("📁 Projetos", len(projetos))
+        with col3:
+            dias_periodo = (data_fim - data_inicio).days + 1
+            media_dia = total_horas / dias_periodo if dias_periodo > 0 else 0
+            st.metric("📊 Média/Dia", format_horas_projeto(media_dia))
+        
+        st.markdown("---")
+        st.markdown("### 🥧 Distribuição por Projeto")
+        
+        # Visualização com barras de progresso e percentuais
+        for i, proj in enumerate(projetos):
+            cor = get_cor_projeto(i)
+            percentual = proj['percentual']
+            horas = proj['horas']
+            nome = proj['projeto']
+            
+            st.markdown(f"""
+            <div style="margin-bottom: 20px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <span style="font-weight: bold; font-size: 16px;">
+                        <span style="color: {cor};">●</span> {nome}
+                    </span>
+                    <span style="font-size: 18px; font-weight: bold; color: {cor};">
+                        {format_horas_projeto(horas)}
+                    </span>
+                </div>
+                <div style="background-color: #e0e0e0; border-radius: 10px; height: 30px; overflow: hidden; position: relative;">
+                    <div style="
+                        background: linear-gradient(90deg, {cor}, {cor}cc);
+                        width: {percentual}%;
+                        height: 100%;
+                        border-radius: 10px;
+                        display: flex;
+                        align-items: center;
+                        justify-content: center;
+                        color: white;
+                        font-weight: bold;
+                        font-size: 14px;
+                        text-shadow: 1px 1px 2px rgba(0,0,0,0.3);
+                    ">
+                        {format_percentual(percentual)}
+                    </div>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+        
+        st.markdown("---")
+        
+        # Resumo em cards
+        st.markdown("### 📋 Resumo")
+        
+        num_cols = min(len(projetos), 4)
+        cols = st.columns(num_cols)
+        
+        for i, proj in enumerate(projetos[:num_cols]):
+            with cols[i]:
+                cor = get_cor_projeto(i)
+                st.markdown(f"""
+                <div style="
+                    background: linear-gradient(135deg, {cor}15, {cor}30);
+                    border: 2px solid {cor};
+                    border-radius: 12px;
+                    padding: 15px;
+                    text-align: center;
+                ">
+                    <h4 style="color: {cor}; margin: 0 0 10px 0; font-size: 14px;">{proj['projeto']}</h4>
+                    <p style="font-size: 24px; font-weight: bold; margin: 0; color: #333;">{format_horas_projeto(proj['horas'])}</p>
+                    <p style="font-size: 16px; color: {cor}; margin: 5px 0 0 0;">{format_percentual(proj['percentual'])}</p>
+                </div>
+                """, unsafe_allow_html=True)
+        
+        # Tabela detalhada
+        st.markdown("---")
+        with st.expander("📊 Ver tabela detalhada"):
+            df = pd.DataFrame(projetos)
+            df['Horas'] = df['horas'].apply(format_horas_projeto)
+            df['Percentual'] = df['percentual'].apply(lambda x: f"{x:.1f}%")
+            df = df.rename(columns={'projeto': 'Projeto'})
+            
+            st.dataframe(
+                df[['Projeto', 'Horas', 'Percentual']],
+                use_container_width=True,
+                hide_index=True
+            )
+    else:
+        st.info("📭 Nenhum registro de horas encontrado para o período selecionado.")
+        st.markdown("""
+        **Dicas:**
+        - Verifique se você selecionou projetos ao registrar seu ponto
+        - Tente selecionar um período diferente
+        """)
 
 
 def banco_horas_funcionario_interface(banco_horas_system):
@@ -4585,6 +4886,8 @@ def tela_gestor():
             "👥 Todos os Registros",
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
+            "📈 Relatórios",
+            "📊 Horas por Projeto",
             "🏦 Banco de Horas Geral",
             "📁 Gerenciar Arquivos",
             "🏢 Gerenciar Projetos",
@@ -4631,6 +4934,10 @@ def tela_gestor():
         aprovar_atestados_interface(atestado_system)
     elif opcao.startswith("🕐 Aprovar Horas Extras"):
         aprovar_horas_extras_interface(horas_extras_system)
+    elif opcao.startswith("📈 Relatórios"):
+        relatorios_horas_extras_interface()
+    elif opcao.startswith("📊 Horas por Projeto"):
+        horas_por_projeto_interface()
     elif opcao.startswith("🏦 Banco de Horas Geral"):
         banco_horas_gestor_interface(banco_horas_system)
     elif opcao.startswith("📅 Configurar Jornada"):
@@ -7427,6 +7734,9 @@ def gerenciar_usuarios_interface():
                 novo_cpf = st.text_input(
                     "CPF:*", placeholder="Ex: 123.456.789-00",
                     help="Digite o CPF com ou sem pontuação")
+                novo_email = st.text_input(
+                    "E-mail:*", placeholder="Ex: joao.silva@empresa.com",
+                    help="E-mail obrigatório para recuperação de senha e notificações")
                 nova_senha = st.text_input("Senha:*", type="password")
 
             with col2:
@@ -7458,21 +7768,93 @@ def gerenciar_usuarios_interface():
                 "➕ Cadastrar Usuário", use_container_width=True)
 
             if submitted:
-                # Função para validar e limpar CPF
-                def validar_cpf(cpf):
+                # ============================================
+                # FUNÇÃO DE VALIDAÇÃO COMPLETA DE CPF
+                # Implementa algoritmo oficial da Receita Federal
+                # ============================================
+                def validar_cpf(cpf: str) -> tuple:
+                    """
+                    Valida CPF usando o algoritmo oficial dos dígitos verificadores.
+                    
+                    Args:
+                        cpf: String do CPF (com ou sem formatação)
+                        
+                    Returns:
+                        Tuple (cpf_limpo, is_valid, mensagem_erro)
+                    """
                     # Remove caracteres não numéricos
                     cpf_limpo = ''.join(filter(str.isdigit, cpf))
+                    
+                    # Verifica se tem 11 dígitos
                     if len(cpf_limpo) != 11:
-                        return None
-                    return cpf_limpo
+                        return None, False, "CPF deve ter 11 dígitos"
+                    
+                    # Verifica se todos os dígitos são iguais (CPFs inválidos conhecidos)
+                    if cpf_limpo == cpf_limpo[0] * 11:
+                        return None, False, "CPF inválido (todos os dígitos iguais)"
+                    
+                    # Calcula o primeiro dígito verificador
+                    soma = 0
+                    for i in range(9):
+                        soma += int(cpf_limpo[i]) * (10 - i)
+                    resto = soma % 11
+                    digito1 = 0 if resto < 2 else 11 - resto
+                    
+                    # Verifica primeiro dígito
+                    if int(cpf_limpo[9]) != digito1:
+                        return None, False, "CPF inválido (dígito verificador incorreto)"
+                    
+                    # Calcula o segundo dígito verificador
+                    soma = 0
+                    for i in range(10):
+                        soma += int(cpf_limpo[i]) * (11 - i)
+                    resto = soma % 11
+                    digito2 = 0 if resto < 2 else 11 - resto
+                    
+                    # Verifica segundo dígito
+                    if int(cpf_limpo[10]) != digito2:
+                        return None, False, "CPF inválido (dígito verificador incorreto)"
+                    
+                    return cpf_limpo, True, None
+                
+                # ============================================
+                # FUNÇÃO DE VALIDAÇÃO DE E-MAIL
+                # ============================================
+                def validar_email(email: str) -> tuple:
+                    """
+                    Valida formato de e-mail.
+                    
+                    Args:
+                        email: String do e-mail
+                        
+                    Returns:
+                        Tuple (email_limpo, is_valid, mensagem_erro)
+                    """
+                    import re
+                    
+                    if not email or not email.strip():
+                        return None, False, "E-mail é obrigatório"
+                    
+                    email_limpo = email.strip().lower()
+                    
+                    # Regex para validação de e-mail
+                    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                    
+                    if not re.match(pattern, email_limpo):
+                        return None, False, "Formato de e-mail inválido"
+                    
+                    return email_limpo, True, None
                 
                 # Validações
-                cpf_validado = validar_cpf(novo_cpf) if novo_cpf else None
+                cpf_limpo, cpf_valido, cpf_erro = validar_cpf(novo_cpf) if novo_cpf else (None, False, "CPF é obrigatório")
+                email_limpo, email_valido, email_erro = validar_email(novo_email)
                 
                 if not novo_login or not novo_nome or not nova_senha:
                     st.error("❌ Preencha todos os campos obrigatórios!")
-                elif not novo_cpf or not cpf_validado:
-                    st.error("❌ CPF inválido! Digite um CPF com 11 dígitos.")
+                elif not cpf_valido:
+                    st.error(f"❌ {cpf_erro}")
+                elif not email_valido:
+                    st.error(f"❌ {email_erro}")
                 elif nova_data_nascimento is None:
                     st.error("❌ Data de Nascimento é obrigatória!")
                 elif nova_senha != confirmar_senha:
@@ -7485,16 +7867,17 @@ def gerenciar_usuarios_interface():
 
                             insert_query = f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, email, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """
                             novo_usuario_id = execute_update(insert_query, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
-                                cpf_validado,
+                                cpf_limpo,
+                                email_limpo,
                                 nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
@@ -7523,15 +7906,16 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute(f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, email, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
-                                cpf_validado,
+                                cpf_limpo,
+                                email_limpo,
                                 nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
@@ -7554,6 +7938,552 @@ def gerenciar_usuarios_interface():
                             st.rerun()
                         except Exception as e:
                             st.error(f"❌ Erro ao cadastrar usuário: {e}")
+
+
+def horas_por_projeto_interface():
+    """
+    Interface para visualizar distribuição de horas por projeto.
+    Mostra percentuais do tempo dedicado a cada projeto.
+    """
+    from horas_projeto_system import (
+        HorasProjetoSystem, 
+        format_horas_projeto, 
+        format_percentual,
+        get_cor_projeto,
+        CORES_PROJETOS
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📊 Distribuição de Horas por Projeto</h3>
+        <p>Visualize quanto tempo (em horas e percentual) foi dedicado a cada projeto</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    horas_projeto_system = HorasProjetoSystem()
+    
+    # Abas
+    tab1, tab2, tab3 = st.tabs([
+        "📊 Visão Mensal",
+        "👤 Por Funcionário",
+        "📈 Evolução"
+    ])
+    
+    with tab1:
+        st.markdown("### 📅 Distribuição Mensal de Horas por Projeto")
+        
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            anos = list(range(date.today().year, date.today().year - 3, -1))
+            ano_selecionado = st.selectbox("Ano:", anos, key="hp_ano")
+        with col2:
+            meses = [
+                (1, "Janeiro"), (2, "Fevereiro"), (3, "Março"),
+                (4, "Abril"), (5, "Maio"), (6, "Junho"),
+                (7, "Julho"), (8, "Agosto"), (9, "Setembro"),
+                (10, "Outubro"), (11, "Novembro"), (12, "Dezembro")
+            ]
+            mes_selecionado = st.selectbox(
+                "Mês:",
+                meses,
+                format_func=lambda x: x[1],
+                index=date.today().month - 1,
+                key="hp_mes"
+            )[0]
+        
+        # Buscar dados
+        resultado = horas_projeto_system.obter_relatorio_mensal_todos_funcionarios(
+            ano=ano_selecionado,
+            mes=mes_selecionado
+        )
+        
+        if resultado.get('success') and resultado.get('projetos_consolidados'):
+            projetos = resultado['projetos_consolidados']
+            total_geral = resultado.get('total_geral', 0)
+            
+            # Métricas principais
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("⏱️ Total de Horas", format_horas_projeto(total_geral))
+            with col2:
+                st.metric("📁 Projetos Ativos", len(projetos))
+            with col3:
+                st.metric("👥 Funcionários", len(resultado.get('funcionarios', [])))
+            
+            st.markdown("---")
+            
+            # Gráfico de pizza com percentuais
+            st.markdown("### 🥧 Distribuição por Projeto")
+            
+            if projetos:
+                # Criar dados para visualização
+                df_projetos = pd.DataFrame(projetos)
+                
+                # Visualização com barras horizontais + percentuais
+                for i, proj in enumerate(projetos):
+                    cor = get_cor_projeto(i)
+                    percentual = proj['percentual']
+                    horas = proj['horas']
+                    nome = proj['projeto']
+                    
+                    # Barra de progresso visual
+                    st.markdown(f"""
+                    <div style="margin-bottom: 15px;">
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 5px;">
+                            <span style="font-weight: bold; color: {cor};">📁 {nome}</span>
+                            <span style="font-weight: bold;">{format_horas_projeto(horas)} ({format_percentual(percentual)})</span>
+                        </div>
+                        <div style="background-color: #e0e0e0; border-radius: 10px; height: 25px; overflow: hidden;">
+                            <div style="background-color: {cor}; width: {percentual}%; height: 100%; border-radius: 10px;
+                                        display: flex; align-items: center; justify-content: center; color: white; font-weight: bold;">
+                                {format_percentual(percentual) if percentual > 10 else ''}
+                            </div>
+                        </div>
+                    </div>
+                    """, unsafe_allow_html=True)
+                
+                st.markdown("---")
+                
+                # Tabela detalhada
+                st.markdown("### 📋 Tabela Detalhada")
+                df_display = df_projetos.copy()
+                df_display['Horas'] = df_display['horas'].apply(format_horas_projeto)
+                df_display['Percentual'] = df_display['percentual'].apply(lambda x: f"{x:.1f}%")
+                df_display = df_display.rename(columns={'projeto': 'Projeto'})
+                
+                st.dataframe(
+                    df_display[['Projeto', 'Horas', 'Percentual']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+                
+                # Exportar CSV
+                csv_data = df_projetos.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    data=csv_data,
+                    file_name=f"horas_projeto_{ano_selecionado}_{mes_selecionado:02d}.csv",
+                    mime="text/csv"
+                )
+            else:
+                st.info("📭 Nenhum registro de horas encontrado para este período.")
+        else:
+            st.warning("⚠️ Não foi possível carregar os dados. Verifique se há registros no período selecionado.")
+    
+    with tab2:
+        st.markdown("### 👤 Horas por Projeto - Por Funcionário")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT usuario, nome_completo 
+            FROM usuarios 
+            WHERE tipo = 'funcionario' AND ativo = 1
+            ORDER BY nome_completo
+        """)
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        if funcionarios:
+            # Seleção de funcionário
+            func_opcoes = {f[1] or f[0]: f[0] for f in funcionarios}
+            func_nome = st.selectbox(
+                "Selecione o funcionário:",
+                list(func_opcoes.keys()),
+                key="hp_func"
+            )
+            func_usuario = func_opcoes[func_nome]
+            
+            # Período
+            col1, col2 = st.columns(2)
+            with col1:
+                data_inicio = st.date_input(
+                    "Data início:",
+                    value=date.today().replace(day=1),
+                    key="hp_data_inicio"
+                )
+            with col2:
+                data_fim = st.date_input(
+                    "Data fim:",
+                    value=date.today(),
+                    key="hp_data_fim"
+                )
+            
+            # Buscar dados do funcionário
+            resultado_func = horas_projeto_system.calcular_horas_por_projeto_periodo(
+                usuario=func_usuario,
+                data_inicio=data_inicio.strftime('%Y-%m-%d'),
+                data_fim=data_fim.strftime('%Y-%m-%d')
+            )
+            
+            if resultado_func.get('success') and resultado_func.get('projetos'):
+                projetos = resultado_func['projetos']
+                total_horas = resultado_func.get('total_horas', 0)
+                
+                st.markdown(f"**Total de horas no período:** {format_horas_projeto(total_horas)}")
+                st.markdown("---")
+                
+                # Cards por projeto
+                cols = st.columns(min(len(projetos), 3))
+                for i, proj in enumerate(projetos):
+                    with cols[i % 3]:
+                        cor = get_cor_projeto(i)
+                        st.markdown(f"""
+                        <div style="
+                            background: linear-gradient(135deg, {cor}20, {cor}40);
+                            border-left: 4px solid {cor};
+                            padding: 15px;
+                            border-radius: 8px;
+                            margin-bottom: 10px;
+                        ">
+                            <h4 style="margin: 0; color: {cor};">📁 {proj['projeto']}</h4>
+                            <p style="font-size: 24px; font-weight: bold; margin: 10px 0;">{format_horas_projeto(proj['horas'])}</p>
+                            <p style="font-size: 18px; color: #666;">{format_percentual(proj['percentual'])} do total</p>
+                        </div>
+                        """, unsafe_allow_html=True)
+                
+                # Gráfico de barras
+                st.markdown("### 📊 Visualização")
+                df_func = pd.DataFrame(projetos)
+                st.bar_chart(df_func.set_index('projeto')['horas'])
+                
+            else:
+                st.info("📭 Nenhum registro encontrado para este funcionário no período selecionado.")
+        else:
+            st.warning("⚠️ Nenhum funcionário cadastrado.")
+    
+    with tab3:
+        st.markdown("### 📈 Evolução de Horas por Projeto")
+        
+        # Buscar projetos
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT DISTINCT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
+        projetos_lista = [row[0] for row in cursor.fetchall()]
+        conn.close()
+        
+        if projetos_lista:
+            projeto_selecionado = st.selectbox(
+                "Selecione o projeto:",
+                projetos_lista,
+                key="hp_evolucao_projeto"
+            )
+            
+            meses_evolucao = st.slider(
+                "Período (meses):",
+                min_value=3,
+                max_value=12,
+                value=6,
+                key="hp_evolucao_meses"
+            )
+            
+            resultado_evolucao = horas_projeto_system.obter_evolucao_projeto(
+                projeto_nome=projeto_selecionado,
+                meses=meses_evolucao
+            )
+            
+            if resultado_evolucao.get('success') and resultado_evolucao.get('evolucao'):
+                evolucao = resultado_evolucao['evolucao']
+                
+                df_evolucao = pd.DataFrame(evolucao)
+                df_evolucao['Mês'] = df_evolucao['mes']
+                df_evolucao['Horas'] = df_evolucao['horas']
+                
+                st.line_chart(df_evolucao.set_index('Mês')['Horas'])
+                
+                # Tabela de evolução
+                st.markdown("#### 📋 Dados da Evolução")
+                df_display = df_evolucao.copy()
+                df_display['Horas Formatadas'] = df_display['horas'].apply(format_horas_projeto)
+                st.dataframe(
+                    df_display[['Mês', 'Horas Formatadas']],
+                    use_container_width=True,
+                    hide_index=True
+                )
+            else:
+                st.info("📭 Nenhum dado de evolução encontrado para este projeto.")
+        else:
+            st.warning("⚠️ Nenhum projeto cadastrado.")
+
+
+def relatorios_horas_extras_interface():
+    """Interface de relatórios de horas extras"""
+    from relatorios_horas_extras import (
+        gerar_relatorio_horas_extras,
+        gerar_relatorio_por_usuario,
+        gerar_relatorio_mensal,
+        obter_estatisticas_gerais
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📈 Relatórios de Horas Extras</h3>
+        <p>Visualize e exporte relatórios de horas extras</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Abas de relatórios
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Visão Geral",
+        "👤 Por Funcionário",
+        "📅 Mensal",
+        "🔍 Detalhado"
+    ])
+    
+    with tab1:
+        st.markdown("### 📊 Estatísticas Gerais")
+        
+        stats = obter_estatisticas_gerais()
+        
+        if stats.get('success'):
+            col1, col2, col3, col4 = st.columns(4)
+            
+            with col1:
+                st.metric("Total de Solicitações", stats.get('total_solicitacoes', 0))
+            
+            with col2:
+                st.metric("Total Horas Aprovadas", f"{stats.get('total_horas_aprovadas', 0):.1f}h")
+            
+            with col3:
+                st.metric("Média por Solicitação", f"{stats.get('media_horas_aprovadas', 0):.1f}h")
+            
+            with col4:
+                pendentes = stats.get('por_status', {}).get('pendente', 0)
+                st.metric("Pendentes", pendentes)
+            
+            # Status breakdown
+            st.markdown("---")
+            st.markdown("### Status das Solicitações")
+            
+            por_status = stats.get('por_status', {})
+            if por_status:
+                status_df_data = []
+                for status, count in por_status.items():
+                    emoji = {'pendente': '⏳', 'aprovado': '✅', 'rejeitado': '❌'}.get(status, '❓')
+                    status_df_data.append({
+                        'Status': f"{emoji} {status.title()}",
+                        'Quantidade': count
+                    })
+                
+                if status_df_data:
+                    import pandas as pd
+                    df_status = pd.DataFrame(status_df_data)
+                    st.dataframe(df_status, use_container_width=True, hide_index=True)
+        else:
+            st.warning("Não foi possível carregar as estatísticas.")
+    
+    with tab2:
+        st.markdown("### 👤 Horas Extras por Funcionário")
+        
+        # Filtros
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio_usr = st.date_input(
+                "Data Inicial",
+                value=date.today().replace(day=1),
+                key="rel_usr_inicio"
+            )
+        with col2:
+            data_fim_usr = st.date_input(
+                "Data Final",
+                value=date.today(),
+                key="rel_usr_fim"
+            )
+        
+        if st.button("🔄 Gerar Relatório por Usuário", key="btn_rel_usr"):
+            relatorio = gerar_relatorio_por_usuario(
+                inicio=data_inicio_usr.strftime('%Y-%m-%d'),
+                fim=data_fim_usr.strftime('%Y-%m-%d')
+            )
+            
+            if relatorio.get('success') and relatorio.get('usuarios'):
+                import pandas as pd
+                
+                df_data = []
+                for usr in relatorio['usuarios']:
+                    df_data.append({
+                        'Funcionário': usr['nome_completo'],
+                        'Solicitações': usr['total_solicitacoes'],
+                        'Horas Aprovadas': f"{usr['horas_aprovadas']:.1f}h",
+                        'Pendentes': usr['pendentes'],
+                        'Aprovadas': usr['aprovadas'],
+                        'Rejeitadas': usr['rejeitadas']
+                    })
+                
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Exportar CSV
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    csv,
+                    f"horas_extras_por_usuario_{data_inicio_usr}_{data_fim_usr}.csv",
+                    "text/csv",
+                    key="download_csv_usr"
+                )
+            else:
+                st.info("Nenhum registro encontrado para o período selecionado.")
+    
+    with tab3:
+        st.markdown("### 📅 Relatório Mensal")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            ano = st.selectbox(
+                "Ano",
+                options=list(range(date.today().year, date.today().year - 3, -1)),
+                key="rel_ano"
+            )
+        with col2:
+            meses = ["Janeiro", "Fevereiro", "Março", "Abril", "Maio", "Junho",
+                     "Julho", "Agosto", "Setembro", "Outubro", "Novembro", "Dezembro"]
+            mes_idx = st.selectbox(
+                "Mês",
+                options=range(1, 13),
+                format_func=lambda x: meses[x-1],
+                index=date.today().month - 1,
+                key="rel_mes"
+            )
+        
+        if st.button("🔄 Gerar Relatório Mensal", key="btn_rel_mes"):
+            relatorio = gerar_relatorio_mensal(ano=ano, mes=mes_idx)
+            
+            if relatorio.get('success'):
+                st.markdown(f"**Período:** {meses[mes_idx-1]}/{ano}")
+                
+                col1, col2, col3 = st.columns(3)
+                with col1:
+                    st.metric("Total de Registros", relatorio.get('total_registros', 0))
+                with col2:
+                    st.metric("Total de Horas", f"{relatorio.get('total_horas', 0):.1f}h")
+                with col3:
+                    st.metric("Aprovadas", relatorio.get('total_aprovadas', 0))
+                
+                # Lista de horas extras
+                if relatorio.get('horas_extras'):
+                    st.markdown("---")
+                    st.markdown("### Detalhamento")
+                    
+                    import pandas as pd
+                    df_data = []
+                    for he in relatorio['horas_extras']:
+                        df_data.append({
+                            'Funcionário': he['nome_completo'],
+                            'Data': he['data'],
+                            'Horário': f"{he['hora_inicio']} - {he['hora_fim']}",
+                            'Horas': f"{he['horas']:.1f}h",
+                            'Status': he['status'].title()
+                        })
+                    
+                    df = pd.DataFrame(df_data)
+                    st.dataframe(df, use_container_width=True, hide_index=True)
+            else:
+                st.info("Nenhum registro encontrado para o período selecionado.")
+    
+    with tab4:
+        st.markdown("### 🔍 Relatório Detalhado")
+        
+        # Filtros
+        col1, col2, col3 = st.columns(3)
+        
+        with col1:
+            data_inicio = st.date_input(
+                "Data Inicial",
+                value=date.today() - timedelta(days=30),
+                key="rel_det_inicio"
+            )
+        
+        with col2:
+            data_fim = st.date_input(
+                "Data Final",
+                value=date.today(),
+                key="rel_det_fim"
+            )
+        
+        with col3:
+            status_filtro = st.selectbox(
+                "Status",
+                options=["Todos", "pendente", "aprovado", "rejeitado"],
+                key="rel_det_status"
+            )
+        
+        # Buscar usuários para filtro
+        usuarios_options = ["Todos"]
+        if REFACTORING_ENABLED:
+            try:
+                result = execute_query("SELECT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
+                if result:
+                    usuarios_options.extend([f"{r[1]} ({r[0]})" for r in result])
+            except:
+                pass
+        
+        usuario_filtro = st.selectbox("Funcionário", options=usuarios_options, key="rel_det_usr")
+        
+        if st.button("🔄 Gerar Relatório Detalhado", key="btn_rel_det"):
+            # Extrair username se selecionado
+            usr_param = None
+            if usuario_filtro != "Todos":
+                # Extrair do formato "Nome (username)"
+                import re
+                match = re.search(r'\(([^)]+)\)$', usuario_filtro)
+                if match:
+                    usr_param = match.group(1)
+            
+            status_param = None if status_filtro == "Todos" else status_filtro
+            
+            relatorio = gerar_relatorio_horas_extras(
+                usuario=usr_param,
+                inicio=data_inicio.strftime('%Y-%m-%d'),
+                fim=data_fim.strftime('%Y-%m-%d'),
+                status=status_param
+            )
+            
+            if relatorio.get('success') and relatorio.get('horas_extras'):
+                st.success(f"✅ {relatorio.get('total_registros', 0)} registros encontrados")
+                
+                col1, col2, col3, col4 = st.columns(4)
+                with col1:
+                    st.metric("Total Horas", f"{relatorio.get('total_horas', 0):.1f}h")
+                with col2:
+                    st.metric("Pendentes", relatorio.get('total_pendentes', 0))
+                with col3:
+                    st.metric("Aprovadas", relatorio.get('total_aprovadas', 0))
+                with col4:
+                    st.metric("Rejeitadas", relatorio.get('total_rejeitadas', 0))
+                
+                st.markdown("---")
+                
+                import pandas as pd
+                df_data = []
+                for he in relatorio['horas_extras']:
+                    df_data.append({
+                        'ID': he['id'],
+                        'Funcionário': he['nome_completo'],
+                        'Data': he['data'],
+                        'Início': he['hora_inicio'],
+                        'Fim': he['hora_fim'],
+                        'Horas': f"{he['horas']:.1f}h",
+                        'Status': he['status'].title(),
+                        'Aprovado Por': he.get('aprovado_por', '-')
+                    })
+                
+                df = pd.DataFrame(df_data)
+                st.dataframe(df, use_container_width=True, hide_index=True)
+                
+                # Exportar
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    "📥 Exportar CSV",
+                    csv,
+                    f"relatorio_horas_extras_{data_inicio}_{data_fim}.csv",
+                    "text/csv",
+                    key="download_csv_det"
+                )
+            else:
+                st.info("Nenhum registro encontrado com os filtros selecionados.")
 
 
 def sistema_interface():
@@ -7838,6 +8768,200 @@ def sistema_interface():
             conn.close()
             st.success("✅ Configurações salvas!")
             st.rerun()
+
+    # ============================================
+    # SEÇÃO: Notificações Automáticas (Scheduler)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 🔔 Notificações Automáticas")
+    st.markdown("""
+    O sistema envia notificações automáticas para:
+    - **Funcionários** que esqueceram de bater ponto (entrada/saída)
+    - **Funcionários** em hora extra prolongada
+    - **Gestores** sobre solicitações pendentes de aprovação
+    """)
+    
+    try:
+        from background_scheduler import obter_status_scheduler, is_scheduler_running
+        
+        status = obter_status_scheduler()
+        
+        if status['ativo']:
+            st.success("✅ **Scheduler ativo** - Notificações automáticas funcionando!")
+            
+            with st.expander("📋 Ver jobs agendados", expanded=False):
+                if status['jobs']:
+                    for job in status['jobs']:
+                        st.markdown(f"- **{job['nome']}**: próxima execução em `{job['proximo_execucao']}`")
+                else:
+                    st.info("Nenhum job agendado no momento.")
+            
+            st.markdown(f"🕐 **Horário do servidor:** {status['data_hora_atual']}")
+        else:
+            st.warning("⚠️ **Scheduler inativo** - Notificações automáticas desabilitadas")
+            st.info("O scheduler será iniciado automaticamente ao reiniciar o app.")
+            
+    except ImportError:
+        st.info("ℹ️ Módulo de notificações automáticas não disponível.")
+    except Exception as e:
+        st.error(f"❌ Erro ao verificar scheduler: {e}")
+    
+    # ============================================
+    # Configuração dos horários de notificação
+    # ============================================
+    st.markdown("#### ⏰ Configurar Horários")
+    
+    # Buscar configurações salvas
+    config_notif = {
+        'notif_entrada_ativo': '1',
+        'notif_entrada_horarios': '08:15,08:30,09:00',
+        'notif_saida_ativo': '1',
+        'notif_saida_horarios': '17:15,17:30,18:00',
+        'notif_hora_extra_ativo': '1',
+        'notif_hora_extra_inicio': '18:00',
+        'notif_hora_extra_fim': '22:00',
+        'notif_aprovadores_ativo': '1',
+        'notif_aprovadores_horarios': '09:00,14:00,17:00'
+    }
+    
+    # Buscar valores do banco
+    if REFACTORING_ENABLED:
+        try:
+            for chave in config_notif.keys():
+                result = execute_query(
+                    f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}",
+                    (chave,),
+                    fetch_one=True
+                )
+                if result:
+                    config_notif[chave] = result[0]
+        except Exception:
+            pass
+    else:
+        try:
+            conn = get_connection()
+            cursor = conn.cursor()
+            for chave in config_notif.keys():
+                cursor.execute(f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}", (chave,))
+                result = cursor.fetchone()
+                if result:
+                    config_notif[chave] = result[0]
+            conn.close()
+        except Exception:
+            pass
+    
+    with st.form("config_notificacoes"):
+        # Lembretes de Entrada
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            entrada_ativo = st.checkbox(
+                "Lembrete Entrada",
+                value=config_notif['notif_entrada_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de entrada"
+            )
+        with col2:
+            entrada_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_entrada_horarios'],
+                placeholder="08:15,08:30,09:00",
+                key="entrada_horarios"
+            )
+        
+        # Lembretes de Saída
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            saida_ativo = st.checkbox(
+                "Lembrete Saída",
+                value=config_notif['notif_saida_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de saída"
+            )
+        with col2:
+            saida_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_saida_horarios'],
+                placeholder="17:15,17:30,18:00",
+                key="saida_horarios"
+            )
+        
+        # Alertas de Hora Extra
+        col1, col2, col3 = st.columns([1, 1.5, 1.5])
+        with col1:
+            hora_extra_ativo = st.checkbox(
+                "Alerta Hora Extra",
+                value=config_notif['notif_hora_extra_ativo'] == '1',
+                help="Notifica funcionários em hora extra prolongada"
+            )
+        with col2:
+            he_inicio = st.time_input(
+                "Início monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_inicio'], "%H:%M").time(),
+                key="he_inicio"
+            )
+        with col3:
+            he_fim = st.time_input(
+                "Fim monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_fim'], "%H:%M").time(),
+                key="he_fim"
+            )
+        
+        # Lembretes para Aprovadores
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            aprovadores_ativo = st.checkbox(
+                "Lembrete Aprovadores",
+                value=config_notif['notif_aprovadores_ativo'] == '1',
+                help="Notifica gestores sobre solicitações pendentes"
+            )
+        with col2:
+            aprovadores_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_aprovadores_horarios'],
+                placeholder="09:00,14:00,17:00",
+                key="aprovadores_horarios"
+            )
+        
+        if st.form_submit_button("💾 Salvar Configurações de Notificação", use_container_width=True):
+            novas_configs = [
+                ('notif_entrada_ativo', '1' if entrada_ativo else '0'),
+                ('notif_entrada_horarios', entrada_horarios),
+                ('notif_saida_ativo', '1' if saida_ativo else '0'),
+                ('notif_saida_horarios', saida_horarios),
+                ('notif_hora_extra_ativo', '1' if hora_extra_ativo else '0'),
+                ('notif_hora_extra_inicio', he_inicio.strftime("%H:%M")),
+                ('notif_hora_extra_fim', he_fim.strftime("%H:%M")),
+                ('notif_aprovadores_ativo', '1' if aprovadores_ativo else '0'),
+                ('notif_aprovadores_horarios', aprovadores_horarios),
+            ]
+            
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in novas_configs:
+                        # Insert or update
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, f'Config notificação: {chave}', valor))
+                else:
+                    conn = get_connection()
+                    cursor = conn.cursor()
+                    for chave, valor in novas_configs:
+                        cursor.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, f'Config notificação: {chave}', valor))
+                    conn.commit()
+                    conn.close()
+                
+                st.success("✅ Configurações de notificação salvas!")
+                st.info("⚠️ As alterações serão aplicadas na próxima reinicialização do app.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erro ao salvar: {e}")
+    
+    st.markdown("---")
+    st.caption("💡 **Dica:** Os horários devem estar no formato HH:MM, separados por vírgula. Ex: 08:15,08:30,09:00")
 
 
 # Rodapé unificado
@@ -8398,6 +9522,18 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 def main():
     """Função principal que gerencia o estado da aplicação"""
     init_db()
+    
+    # ============================================
+    # INICIAR SCHEDULER DE NOTIFICAÇÕES AUTOMÁTICAS
+    # Roda em background thread (sem custo adicional)
+    # ============================================
+    try:
+        from background_scheduler import iniciar_scheduler_background, is_scheduler_running
+        if not is_scheduler_running():
+            iniciar_scheduler_background()
+            logger.info("✅ Scheduler de notificações automáticas iniciado")
+    except Exception as e:
+        logger.warning(f"Scheduler de notificações não iniciado: {e}")
     
     # Garantir que o UploadSystem tenha a estrutura correta da tabela
     try:

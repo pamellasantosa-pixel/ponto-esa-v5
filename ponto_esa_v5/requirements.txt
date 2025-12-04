@@ -2,3 +2,19 @@ streamlit
 pandas
 openpyxl
 
+# Push Notifications
+pywebpush
+cryptography
+
+# Scheduler (opcional - para lembretes automáticos)
+apscheduler
+
+# API Server (opcional - para endpoints de push)
+flask
+flask-cors
+
+# PostgreSQL
+psycopg2-binary
+
+# Timezone
+pytz

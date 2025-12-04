@@ -320,7 +320,13 @@ def init_db():
             usuario TEXT NOT NULL,
             registro_id INTEGER NOT NULL,
             data_hora_original TIMESTAMP NOT NULL,
-            data_hora_corrigida TIMESTAMP NOT NULL,
+            data_hora_nova TIMESTAMP,
+            tipo_original TEXT,
+            tipo_novo TEXT,
+            modalidade_original TEXT,
+            modalidade_nova TEXT,
+            projeto_original TEXT,
+            projeto_novo TEXT,
             justificativa TEXT NOT NULL,
             status TEXT DEFAULT 'pendente',
             data_solicitacao TIMESTAMP DEFAULT NOW(),
@@ -335,7 +341,8 @@ def init_db():
         CREATE TABLE IF NOT EXISTS configuracoes (
             chave TEXT PRIMARY KEY,
             valor TEXT NOT NULL,
-            data_atualizacao TIMESTAMP DEFAULT NOW()
+            data_atualizacao TIMESTAMP DEFAULT NOW(),
+            descricao TEXT
         )
     '''))
 
@@ -492,6 +499,68 @@ def init_db():
         c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP")
     except Exception:
         pass
+
+    # ============================================
+    # TABELA PARA PUSH NOTIFICATIONS (Web Push)
+    # ============================================
+    # Armazena as subscriptions dos usuários para enviar notificações push
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS push_subscriptions (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            endpoint TEXT NOT NULL UNIQUE,
+            p256dh TEXT NOT NULL,
+            auth TEXT NOT NULL,
+            user_agent TEXT,
+            device_info TEXT,
+            ativo INTEGER DEFAULT 1,
+            data_criacao TIMESTAMP DEFAULT NOW(),
+            ultima_notificacao TIMESTAMP,
+            falhas_consecutivas INTEGER DEFAULT 0
+        )
+    '''))
+    
+    # Índice para busca rápida por usuário
+    try:
+        c.execute("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_usuario ON push_subscriptions(usuario)")
+    except Exception:
+        pass
+
+    # ============================================
+    # TABELA PARA HISTÓRICO DE NOTIFICAÇÕES PUSH
+    # ============================================
+    # Registra todas as notificações enviadas para auditoria
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS push_notifications_log (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            titulo TEXT NOT NULL,
+            mensagem TEXT NOT NULL,
+            tipo TEXT,
+            dados_extras TEXT,
+            status TEXT DEFAULT 'enviado',
+            erro TEXT,
+            data_envio TIMESTAMP DEFAULT NOW()
+        )
+    '''))
+
+    # ============================================
+    # TABELA PARA CONFIGURAÇÃO DE LEMBRETES
+    # ============================================
+    # Permite personalizar lembretes por usuário
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS config_lembretes_push (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL UNIQUE,
+            lembrete_entrada INTEGER DEFAULT 1,
+            lembrete_saida INTEGER DEFAULT 1,
+            lembrete_hora_extra INTEGER DEFAULT 1,
+            horario_lembrete_entrada TIME DEFAULT '08:15',
+            horario_lembrete_saida TIME DEFAULT '17:15',
+            dias_semana TEXT DEFAULT '1,2,3,4,5',
+            data_atualizacao TIMESTAMP DEFAULT NOW()
+        )
+    '''))
 
     conn.commit()
     conn.close()
