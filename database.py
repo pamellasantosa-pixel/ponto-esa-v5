@@ -1,5 +1,8 @@
 from ponto_esa_v5.database_postgresql import get_connection
 
+# Importar constantes e funções do módulo correto
+from ponto_esa_v5.database import SQL_PLACEHOLDER, adapt_sql_for_postgresql, init_db
+
 # Encapsular referências a `get_connection` dentro de funções
 def initialize_postgresql():
     conn = get_connection()

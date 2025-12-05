@@ -1642,74 +1642,81 @@ def aprovar_hora_extra_rapida_interface():
 
 
 def exibir_widget_notificacoes(horas_extras_system):
-    """Exibe widget fixo de notificações pendentes até serem respondidas - COM DETALHES DE HORAS EXTRAS"""
+    """Exibe widget fixo de notificações pendentes até serem respondidas - OTIMIZADO"""
     try:
-        # Buscar todas as notificações pendentes
-        he_pendentes = 0
-        correcoes_pendentes = 0
-        atestados_pendentes = 0
-        solicitacoes_he_detalhes = []
-        
-        if REFACTORING_ENABLED:
-            try:
-                # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
-                solicitacoes_he_detalhes = execute_query(
-                    """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
-                       FROM solicitacoes_horas_extras 
-                       WHERE aprovador_solicitado = %s AND status = 'pendente'
-                       ORDER BY data_solicitacao DESC""",
-                    (st.session_state.usuario,)
-                ) or []
+        # ⚡ OTIMIZAÇÃO: Usar cache para buscar notificações
+        try:
+            from db_optimized import get_notificacoes_funcionario, get_solicitacoes_he_pendentes
+            
+            notif = get_notificacoes_funcionario(st.session_state.usuario)
+            he_pendentes = notif["he_aprovar"]
+            correcoes_pendentes = notif["correcoes_pendentes"]
+            atestados_pendentes = notif["atestados_pendentes"]
+            
+            # Buscar detalhes apenas se houver HE pendentes
+            solicitacoes_he_detalhes = []
+            if he_pendentes > 0:
+                solicitacoes_he_detalhes = get_solicitacoes_he_pendentes(st.session_state.usuario)
+            
+        except ImportError:
+            # Fallback para queries sem cache
+            he_pendentes = 0
+            correcoes_pendentes = 0
+            atestados_pendentes = 0
+            solicitacoes_he_detalhes = []
+            
+            if REFACTORING_ENABLED:
+                try:
+                    solicitacoes_he_detalhes = execute_query(
+                        """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                           FROM solicitacoes_horas_extras 
+                           WHERE aprovador_solicitado = %s AND status = 'pendente'
+                           ORDER BY data_solicitacao DESC""",
+                        (st.session_state.usuario,)
+                    ) or []
+                    he_pendentes = len(solicitacoes_he_detalhes)
+                    
+                    result_corr = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    correcoes_pendentes = result_corr[0] if result_corr else 0
+                    
+                    result_at = execute_query(
+                        "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    atestados_pendentes = result_at[0] if result_at else 0
+                except Exception as e:
+                    log_error("Erro ao buscar notificações pendentes", e, {"usuario": st.session_state.usuario})
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                    FROM solicitacoes_horas_extras 
+                    WHERE aprovador_solicitado = %s AND status = 'pendente'
+                    ORDER BY data_solicitacao DESC
+                """, (st.session_state.usuario,))
+                solicitacoes_he_detalhes = cursor.fetchall()
                 he_pendentes = len(solicitacoes_he_detalhes)
                 
-                # Solicitações de correção de registro pendentes (enviadas pelo usuário)
-                result_corr = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                correcoes_pendentes = result_corr[0] if result_corr else 0
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                correcoes_pendentes = cursor.fetchone()[0]
                 
-                # Atestados de horas pendentes (enviados pelo usuário)
-                result_at = execute_query(
-                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                atestados_pendentes = result_at[0] if result_at else 0
-            except Exception as e:
-                log_error("Erro ao buscar notificações pendentes", e, {"usuario": st.session_state.usuario})
-                he_pendentes = correcoes_pendentes = atestados_pendentes = 0
-        else:
-            # Buscar todas as notificações pendentes
-            conn = get_connection()
-            cursor = conn.cursor()
-            
-            # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
-            cursor.execute("""
-                SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
-                FROM solicitacoes_horas_extras 
-                WHERE aprovador_solicitado = %s AND status = 'pendente'
-                ORDER BY data_solicitacao DESC
-            """, (st.session_state.usuario,))
-            solicitacoes_he_detalhes = cursor.fetchall()
-            he_pendentes = len(solicitacoes_he_detalhes)
-            
-            # Solicitações de correção de registro pendentes (enviadas pelo usuário)
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            correcoes_pendentes = cursor.fetchone()[0]
-            
-            # Atestados de horas pendentes (enviados pelo usuário)
-            cursor.execute("""
-                SELECT COUNT(*) FROM atestado_horas 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            atestados_pendentes = cursor.fetchone()[0]
-            
-            conn.close()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM atestado_horas 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                atestados_pendentes = cursor.fetchone()[0]
+                
+                conn.close()
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
@@ -1747,7 +1754,17 @@ def exibir_widget_notificacoes(horas_extras_system):
             
             # Mostrar detalhes de cada solicitação pendente
             for sol in solicitacoes_he_detalhes:
-                sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
+                # Suportar tanto dicionário (cache) quanto tuple (fallback)
+                if isinstance(sol, dict):
+                    sol_id = sol["id"]
+                    sol_usuario = sol["usuario"]
+                    sol_data = sol["data"]
+                    sol_h_inicio = sol["hora_inicio"]
+                    sol_h_fim = sol["hora_fim"]
+                    sol_total = sol["total_horas"]
+                    sol_just = sol["justificativa"]
+                else:
+                    sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
                 
                 # Buscar nome do solicitante
                 nome_solicitante = sol_usuario
@@ -1885,7 +1902,7 @@ def exibir_widget_notificacoes(horas_extras_system):
 
 # Interface principal do funcionário
 def tela_funcionario():
-    """Interface principal para funcionários"""
+    """Interface principal para funcionários - OTIMIZADO"""
     atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system = init_systems()
 
     # Header
@@ -1909,63 +1926,66 @@ def tela_funcionario():
     with st.sidebar:
         st.markdown("### 📋 Menu Principal")
 
-        # Contar todas as notificações pendentes
-        if REFACTORING_ENABLED:
-            try:
-                # Horas extras para aprovar
-                result_he = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                he_aprovar = result_he[0] if result_he else 0
+        # ⚡ OTIMIZAÇÃO: Usar cache para contagem de notificações
+        try:
+            from db_optimized import get_notificacoes_funcionario
+            notif = get_notificacoes_funcionario(st.session_state.usuario)
+            he_aprovar = notif["he_aprovar"]
+            correcoes_pendentes = notif["correcoes_pendentes"]
+            atestados_pendentes = notif["atestados_pendentes"]
+            total_notif = notif["total"]
+        except ImportError:
+            # Fallback para queries sem cache
+            if REFACTORING_ENABLED:
+                try:
+                    result_he = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    he_aprovar = result_he[0] if result_he else 0
+                    
+                    result_corr = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    correcoes_pendentes = result_corr[0] if result_corr else 0
+                    
+                    result_at = execute_query(
+                        "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    atestados_pendentes = result_at[0] if result_at else 0
+                except Exception as e:
+                    log_error("Erro ao contar notificações da sidebar", e, {"usuario": st.session_state.usuario})
+                    he_aprovar = correcoes_pendentes = atestados_pendentes = 0
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
                 
-                # Solicitações de correção do usuário
-                result_corr = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                correcoes_pendentes = result_corr[0] if result_corr else 0
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                    WHERE aprovador_solicitado = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                he_aprovar = cursor.fetchone()[0]
                 
-                # Atestados pendentes
-                result_at = execute_query(
-                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                atestados_pendentes = result_at[0] if result_at else 0
-            except Exception as e:
-                log_error("Erro ao contar notificações da sidebar", e, {"usuario": st.session_state.usuario})
-                he_aprovar = correcoes_pendentes = atestados_pendentes = 0
-        else:
-            conn = get_connection()
-            cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                correcoes_pendentes = cursor.fetchone()[0]
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM atestado_horas 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                atestados_pendentes = cursor.fetchone()[0]
+                
+                conn.close()
             
-            # Horas extras para aprovar
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                WHERE aprovador_solicitado = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            he_aprovar = cursor.fetchone()[0]
-            
-            # Solicitações de correção do usuário
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            correcoes_pendentes = cursor.fetchone()[0]
-            
-            # Atestados pendentes
-            cursor.execute("""
-                SELECT COUNT(*) FROM atestado_horas 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            atestados_pendentes = cursor.fetchone()[0]
-            
-            conn.close()
-        
-        total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
+            total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
 
         # CSS para badges
         st.markdown("""
@@ -4957,23 +4977,45 @@ def tela_gestor():
 
 
 def dashboard_gestor(banco_horas_system, calculo_horas_system):
-    """Dashboard principal do gestor com destaque para discrepâncias"""
-    st.markdown("""
-    <div class="feature-card">
-        <h3>📊 Dashboard Executivo</h3>
-        <p>Visão geral do sistema de ponto com alertas</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Métricas gerais com tratamento robusto de erros
-    total_usuarios = 0
-    registros_hoje = 0
-    ausencias_pendentes = 0
-    horas_extras_pendentes = 0
-    atestados_mes = 0
+    """Dashboard principal do gestor com gráficos avançados Plotly - OTIMIZADO"""
+    
+    # Importar módulo de dashboard com gráficos
+    try:
+        from dashboard_charts import (
+            render_dashboard_executivo, get_dashboard_data_from_db,
+            create_donut_chart, create_line_chart, create_bar_chart,
+            create_card_metric, create_gauge_chart, THEME_COLORS
+        )
+        CHARTS_ENABLED = True
+    except ImportError:
+        CHARTS_ENABLED = False
+    
+    # ⚡ OTIMIZAÇÃO: Usar módulo com cache e connection pooling
+    try:
+        from db_optimized import get_metricas_dashboard_otimizado, get_registros_semana, get_ausencias_por_tipo
+        USE_OPTIMIZED = True
+    except ImportError:
+        USE_OPTIMIZED = False
+    
+    # Métricas gerais - OTIMIZADO COM CACHE
     hoje = date.today().strftime("%Y-%m-%d")
     
-    if REFACTORING_ENABLED:
+    if USE_OPTIMIZED:
+        # 🚀 Busca todas as métricas de uma vez com cache
+        metricas = get_metricas_dashboard_otimizado()
+        total_usuarios = metricas["total_usuarios"]
+        registros_hoje = metricas["registros_hoje"]
+        ausencias_pendentes = metricas["ausencias_pendentes"]
+        horas_extras_pendentes = metricas["horas_extras_pendentes"]
+        atestados_mes = metricas["atestados_mes"]
+    elif REFACTORING_ENABLED:
+        # Fallback para queries individuais (mais lento)
+        total_usuarios = 0
+        registros_hoje = 0
+        ausencias_pendentes = 0
+        horas_extras_pendentes = 0
+        atestados_mes = 0
+        
         try:
             # Total de usuários ativos
             query_usuarios = "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'"
@@ -4982,7 +5024,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 total_usuarios = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar total de usuários", e, {"context": "dashboard_gestor"})
-            st.error(f"Erro ao buscar total de usuários: {e}")
 
         try:
             # Registros hoje
@@ -4992,7 +5033,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 registros_hoje = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar registros de hoje", e, {"data": hoje})
-            st.error(f"Erro ao buscar registros de hoje: {e}")
 
         try:
             # Ausências pendentes
@@ -5002,7 +5042,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 ausencias_pendentes = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar ausências pendentes", e, {"status": "pendente"})
-            st.error(f"Erro ao buscar ausências pendentes: {e}")
 
         try:
             # Horas extras pendentes
@@ -5012,7 +5051,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 horas_extras_pendentes = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar horas extras pendentes", e, {"status": "pendente"})
-            st.error(f"Erro ao buscar horas extras pendentes: {e}")
 
         try:
             # Atestados do mês
@@ -5082,17 +5120,218 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
 
         conn.close()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("👥 Funcionários", total_usuarios)
-    with col2:
-        st.metric("📊 Registros Hoje", registros_hoje)
-    with col3:
-        st.metric("⏳ Ausências Pendentes", ausencias_pendentes)
-    with col4:
-        st.metric("🕐 Horas Extras Pendentes", horas_extras_pendentes)
-    with col5:
-        st.metric("🏥 Atestados do Mês", atestados_mes)
+    # ===== DASHBOARD COM GRÁFICOS PLOTLY =====
+    if CHARTS_ENABLED:
+        # Header estilizado
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            border-radius: 15px;
+            color: white;
+            margin-bottom: 30px;
+            text-align: center;
+        ">
+            <h1 style="margin: 0; color: white;">📊 Dashboard Executivo</h1>
+            <p style="margin: 10px 0 0 0; opacity: 0.9;">Atualizado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # CSS para estilizar os metrics cards
+        st.markdown("""
+        <style>
+        [data-testid="stMetric"] {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+        [data-testid="stMetric"]:nth-child(1) { border-left-color: #667eea; }
+        [data-testid="stMetric"]:nth-child(2) { border-left-color: #28a745; }
+        [data-testid="stMetric"]:nth-child(3) { border-left-color: #ffc107; }
+        [data-testid="stMetric"]:nth-child(4) { border-left-color: #17a2b8; }
+        [data-testid="stMetricLabel"] { font-size: 14px !important; }
+        [data-testid="stMetricValue"] { font-size: 28px !important; font-weight: bold; }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Cards de métricas usando st.metric nativo (mais confiável)
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(label="👥 Funcionários Ativos", value=total_usuarios)
+        
+        with col2:
+            st.metric(label="📝 Registros Hoje", value=registros_hoje)
+        
+        with col3:
+            pendencias_total = ausencias_pendentes + horas_extras_pendentes
+            st.metric(label="⏳ Pendências", value=pendencias_total)
+        
+        with col4:
+            st.metric(label="🏥 Atestados (mês)", value=atestados_mes)
+        
+        st.markdown("---")
+        
+        # Gráficos lado a lado
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Gráfico de Rosca - Status de presença
+            # Calcular presentes hoje
+            presentes_hoje = 0
+            if REFACTORING_ENABLED:
+                try:
+                    query_presentes = """
+                        SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto 
+                        WHERE DATE(data_hora) = %s
+                    """
+                    resultado = execute_query(query_presentes, (hoje,), fetch_one=True)
+                    if resultado:
+                        presentes_hoje = resultado[0]
+                except Exception as e:
+                    pass
+            
+            ausentes = max(0, total_usuarios - presentes_hoje)
+            
+            if total_usuarios > 0:
+                fig = create_donut_chart(
+                    labels=['Presentes', 'Ausentes'],
+                    values=[presentes_hoje, ausentes],
+                    title="📍 Status de Presença Hoje",
+                    colors=[THEME_COLORS['success'], THEME_COLORS['danger']]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Gauge de taxa de registros
+            taxa_pontualidade = (presentes_hoje / total_usuarios * 100) if total_usuarios > 0 else 0
+            fig = create_gauge_chart(
+                value=taxa_pontualidade,
+                max_value=100,
+                title="⏱️ Taxa de Presença",
+                suffix="%",
+                color_ranges=[
+                    {'range': [0, 60], 'color': THEME_COLORS['danger']},
+                    {'range': [60, 80], 'color': THEME_COLORS['warning']},
+                    {'range': [80, 100], 'color': THEME_COLORS['success']}
+                ]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Gráfico de linha - Registros últimos 7 dias
+        datas_semana = []
+        valores_semana = []
+        for i in range(6, -1, -1):
+            data_check = (date.today() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count_dia = 0
+            if REFACTORING_ENABLED:
+                try:
+                    query_dia = "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s"
+                    resultado = execute_query(query_dia, (data_check,), fetch_one=True)
+                    if resultado:
+                        count_dia = resultado[0]
+                except Exception:
+                    pass
+            datas_semana.append((date.today() - timedelta(days=i)).strftime("%d/%m"))
+            valores_semana.append(count_dia)
+        
+        fig = create_line_chart(
+            x_data=datas_semana,
+            y_data=valores_semana,
+            title="📈 Registros de Ponto - Últimos 7 Dias",
+            x_label="Data",
+            y_label="Registros",
+            fill=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Gráficos de barras
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Tipos de ausências no mês
+            ausencias_por_tipo = {}
+            primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+            if REFACTORING_ENABLED:
+                try:
+                    query_tipos = """
+                        SELECT tipo, COUNT(*) as total FROM ausencias 
+                        WHERE data_inicio >= %s 
+                        GROUP BY tipo
+                    """
+                    resultados = execute_query(query_tipos, (primeiro_dia_mes,), fetch_all=True)
+                    if resultados:
+                        for row in resultados:
+                            ausencias_por_tipo[row[0][:20]] = row[1]  # Truncar nome
+                except Exception:
+                    pass
+            
+            if ausencias_por_tipo:
+                fig = create_bar_chart(
+                    x_data=list(ausencias_por_tipo.keys()),
+                    y_data=list(ausencias_por_tipo.values()),
+                    title="🏥 Ausências por Tipo (Mês)",
+                    x_label="Tipo",
+                    y_label="Quantidade",
+                    color_scale="Plasma"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Sem dados de ausências no mês")
+        
+        with col2:
+            # Status das solicitações
+            status_counts = {'Pendente': 0, 'Aprovado': 0, 'Rejeitado': 0}
+            if REFACTORING_ENABLED:
+                try:
+                    query_status = """
+                        SELECT status, COUNT(*) FROM ausencias 
+                        WHERE data_inicio >= %s 
+                        GROUP BY status
+                    """
+                    resultados = execute_query(query_status, (primeiro_dia_mes,), fetch_all=True)
+                    if resultados:
+                        for row in resultados:
+                            if row[0] in status_counts:
+                                status_counts[row[0].capitalize()] = row[1]
+                except Exception:
+                    pass
+            
+            if any(status_counts.values()):
+                fig = create_donut_chart(
+                    labels=list(status_counts.keys()),
+                    values=list(status_counts.values()),
+                    title="📋 Status de Solicitações (Mês)",
+                    colors=[THEME_COLORS['warning'], THEME_COLORS['success'], THEME_COLORS['danger']]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Sem solicitações no mês")
+        
+        st.markdown("---")
+    
+    else:
+        # Fallback para métricas simples se Plotly não disponível
+        st.markdown("""
+        <div class="feature-card">
+            <h3>📊 Dashboard Executivo</h3>
+            <p>Visão geral do sistema de ponto com alertas</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("👥 Funcionários", total_usuarios)
+        with col2:
+            st.metric("📊 Registros Hoje", registros_hoje)
+        with col3:
+            st.metric("⏳ Ausências Pendentes", ausencias_pendentes)
+        with col4:
+            st.metric("🕐 Horas Extras Pendentes", horas_extras_pendentes)
+        with col5:
+            st.metric("🏥 Atestados do Mês", atestados_mes)
 
     # Destaque para horários discrepantes
     st.subheader("⚠️ Alertas de Discrepâncias (>Tolerância configurada)")
@@ -6765,11 +7004,25 @@ def todos_registros_interface(calculo_horas_system):
 
                     with col3:
                         if reg['latitude'] and reg['longitude']:
-                            st.markdown(
-                                f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
-                            # Link para Google Maps
-                            maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
-                            st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
+                            # Importar módulo de geocodificação
+                            try:
+                                from geocoding import formatar_localizacao_gestor
+                                loc = formatar_localizacao_gestor(reg['latitude'], reg['longitude'], reg['localizacao'])
+                                
+                                if loc["endereco"]:
+                                    st.markdown(f"📍 **{loc['endereco']}**")
+                                else:
+                                    st.markdown(f"📍 GPS: {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                                
+                                # Link para Google Maps
+                                if loc["maps_url"]:
+                                    st.markdown(f"[🗺️ Ver no Mapa]({loc['maps_url']})")
+                            except ImportError:
+                                # Fallback se módulo não disponível
+                                st.markdown(
+                                    f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                                maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
+                                st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
                         else:
                             st.markdown("📍 **GPS:** Não disponível")
 
