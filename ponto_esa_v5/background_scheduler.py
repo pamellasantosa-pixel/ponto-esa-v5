@@ -113,6 +113,91 @@ def parse_horario(horario_str: str) -> tuple:
         return None, None
 
 
+def agendar_backup_email_automatico(scheduler_instance) -> bool:
+    """
+    Configura o job de backup automático por email baseado nas configurações do banco.
+    
+    Args:
+        scheduler_instance: Instância do APScheduler
+        
+    Returns:
+        True se agendou com sucesso
+    """
+    try:
+        from database import get_connection
+        from apscheduler.triggers.cron import CronTrigger
+        
+        # Buscar configurações
+        conn = get_connection()
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'backup_email_ativo'")
+        result = cursor.fetchone()
+        backup_ativo = result[0] == '1' if result else False
+        
+        if not backup_ativo:
+            logger.info("  ⏸️ Backup por Email: DESATIVADO")
+            conn.close()
+            return False
+        
+        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
+        result = cursor.fetchone()
+        email_destino = result[0] if result else ''
+        
+        cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'backup_email_frequencia'")
+        result = cursor.fetchone()
+        frequencia = result[0] if result else 'semanal'
+        
+        conn.close()
+        
+        if not email_destino:
+            logger.warning("  ⚠️ Backup por Email: Email não configurado")
+            return False
+        
+        # Importar função de envio
+        from backup_postgresql import enviar_backup_por_email
+        
+        # Função wrapper para o job
+        def job_backup_email():
+            logger.info(f"📧 Executando backup por email para {email_destino}...")
+            sucesso, msg = enviar_backup_por_email(email_destino, 'json')
+            if sucesso:
+                logger.info(f"✅ Backup enviado: {msg}")
+            else:
+                logger.error(f"❌ Erro no backup: {msg}")
+        
+        # Configurar trigger baseado na frequência
+        # Todos executam às 06:00 da manhã
+        if frequencia == 'semanal':
+            # Segunda-feira às 06:00
+            trigger = CronTrigger(day_of_week='mon', hour=6, minute=0)
+            freq_desc = "Segunda-feira às 06:00"
+        elif frequencia == 'quinzenal':
+            # Dia 1 e 15 de cada mês às 06:00
+            trigger = CronTrigger(day='1,15', hour=6, minute=0)
+            freq_desc = "Dias 1 e 15 às 06:00"
+        else:  # mensal
+            # Primeiro dia do mês às 06:00
+            trigger = CronTrigger(day=1, hour=6, minute=0)
+            freq_desc = "Dia 1 de cada mês às 06:00"
+        
+        # Adicionar job
+        scheduler_instance.add_job(
+            job_backup_email,
+            trigger=trigger,
+            id='backup_email_automatico',
+            name=f'Backup Email ({frequencia})',
+            replace_existing=True
+        )
+        
+        logger.info(f"  ✅ Backup por Email: {freq_desc} para {email_destino}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Erro ao agendar backup por email: {e}")
+        return False
+
+
 def iniciar_scheduler_background() -> bool:
     """
     Inicia o scheduler de notificações em background.
@@ -256,6 +341,14 @@ def iniciar_scheduler_background() -> bool:
                 logger.info(f"  ✅ Lembrete Aprovadores: {horarios_str} (Seg-Sex)")
             else:
                 logger.info("  ⏸️ Lembrete Aprovadores: DESATIVADO")
+            
+            # ============================================
+            # JOB 5: Backup Automático por Email
+            # ============================================
+            try:
+                agendar_backup_email_automatico(_scheduler)
+            except Exception as e:
+                logger.warning(f"  ⚠️ Backup por Email não configurado: {e}")
             
             # Iniciar scheduler
             _scheduler.start()

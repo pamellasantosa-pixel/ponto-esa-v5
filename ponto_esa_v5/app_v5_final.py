@@ -9219,6 +9219,144 @@ def sistema_interface():
             st.rerun()
 
     # ============================================
+    # SEÇÃO: Backup por Email (Conformidade Legal)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📧 Backup por Email (Conformidade Legal)")
+    
+    st.info("""
+    ⚖️ **Importante:** Por lei (Portaria 671/2021), os registros de ponto devem ser mantidos por **5 anos**.
+    Configure o envio automático de backups para seu email para garantir a conformidade legal.
+    """)
+    
+    # Verificar se email está configurado
+    from email_notifications import is_email_configured
+    
+    if not is_email_configured():
+        st.warning("""
+        ⚠️ **Sistema de email não configurado**
+        
+        Para ativar backup por email, adicione no Render:
+        - `SMTP_HOST` (ex: smtp.gmail.com)
+        - `SMTP_PORT` (ex: 587)
+        - `SMTP_USER` (seu email)
+        - `SMTP_PASSWORD` (senha de app do Gmail)
+        """)
+    else:
+        st.success("✅ Sistema de email configurado")
+        
+        # Buscar configuração atual de email de backup
+        email_backup_atual = ''
+        backup_email_ativo = '0'
+        backup_email_frequencia = 'semanal'
+        
+        try:
+            conn_bkp = get_connection()
+            cursor_bkp = conn_bkp.cursor()
+            
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
+            result = cursor_bkp.fetchone()
+            if result:
+                email_backup_atual = result[0] or ''
+            
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_ativo'")
+            result = cursor_bkp.fetchone()
+            if result:
+                backup_email_ativo = result[0] or '0'
+                
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_frequencia'")
+            result = cursor_bkp.fetchone()
+            if result:
+                backup_email_frequencia = result[0] or 'semanal'
+            
+            conn_bkp.close()
+        except Exception:
+            pass
+        
+        with st.form("config_backup_email"):
+            col_be1, col_be2 = st.columns([2, 1])
+            
+            with col_be1:
+                email_backup = st.text_input(
+                    "📬 Email para receber backups",
+                    value=email_backup_atual,
+                    placeholder="seu.email@empresa.com.br",
+                    help="O backup será enviado para este email automaticamente"
+                )
+            
+            with col_be2:
+                frequencia = st.selectbox(
+                    "📅 Frequência",
+                    options=['semanal', 'quinzenal', 'mensal'],
+                    index=['semanal', 'quinzenal', 'mensal'].index(backup_email_frequencia) if backup_email_frequencia in ['semanal', 'quinzenal', 'mensal'] else 0,
+                    help="Com que frequência o backup será enviado"
+                )
+            
+            ativar_backup_email = st.checkbox(
+                "✅ Ativar envio automático de backup por email",
+                value=backup_email_ativo == '1',
+                help="Quando ativado, você receberá o backup completo do sistema no email cadastrado"
+            )
+            
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                salvar_config = st.form_submit_button("💾 Salvar Configuração", use_container_width=True)
+            
+            with col_btn2:
+                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", use_container_width=True, type="secondary")
+        
+        if salvar_config:
+            if ativar_backup_email and not email_backup:
+                st.error("❌ Informe o email para receber os backups")
+            else:
+                try:
+                    conn_bkp = get_connection()
+                    cursor_bkp = conn_bkp.cursor()
+                    
+                    configs_backup = [
+                        ('backup_email_destino', email_backup, 'Email para envio de backups'),
+                        ('backup_email_ativo', '1' if ativar_backup_email else '0', 'Backup por email ativo'),
+                        ('backup_email_frequencia', frequencia, 'Frequência do backup por email'),
+                    ]
+                    
+                    for chave, valor, descricao in configs_backup:
+                        cursor_bkp.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, descricao, valor))
+                    
+                    conn_bkp.commit()
+                    conn_bkp.close()
+                    
+                    if ativar_backup_email:
+                        st.success(f"✅ Backup por email ativado! Você receberá backups {frequencia}mente em **{email_backup}**")
+                    else:
+                        st.warning("⚠️ Backup por email desativado")
+                    
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+        
+        if enviar_agora:
+            if not email_backup:
+                st.error("❌ Informe o email para enviar o backup")
+            else:
+                with st.spinner("📤 Gerando e enviando backup... Aguarde..."):
+                    try:
+                        from backup_postgresql import enviar_backup_por_email
+                        sucesso, mensagem = enviar_backup_por_email(email_backup, 'json')
+                        
+                        if sucesso:
+                            st.success(f"✅ {mensagem}")
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {mensagem}")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao enviar backup: {e}")
+
+    # ============================================
     # SEÇÃO: Push Notifications (Configurações Globais)
     # ============================================
     st.markdown("---")

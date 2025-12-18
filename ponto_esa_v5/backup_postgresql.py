@@ -543,6 +543,240 @@ def restore_backup(filepath: str, clear_existing: bool = False) -> Tuple[bool, s
     return backup_manager.restore_from_json(filepath, clear_existing)
 
 
+def enviar_backup_por_email(
+    email_destino: str,
+    backup_type: str = 'json',
+    assunto_personalizado: str = None
+) -> Tuple[bool, str]:
+    """
+    Cria um backup e envia por email.
+    
+    Args:
+        email_destino: Email para enviar o backup
+        backup_type: 'json' ou 'csv'
+        assunto_personalizado: Assunto personalizado (opcional)
+        
+    Returns:
+        Tuple (sucesso, mensagem)
+    """
+    try:
+        from email_notifications import enviar_email, is_email_configured, get_template_base
+        
+        if not is_email_configured():
+            return False, "Sistema de email não configurado. Configure SMTP_USER e SMTP_PASSWORD."
+        
+        # Criar backup
+        logger.info(f"Criando backup {backup_type} para envio por email...")
+        
+        if backup_type == 'csv':
+            # Para CSV, criar um ZIP com todos os arquivos
+            import zipfile
+            import tempfile
+            
+            csv_dir = backup_manager.export_to_csv()
+            if not csv_dir:
+                return False, "Erro ao criar backup CSV"
+            
+            # Criar ZIP
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            zip_filename = f"backup_ponto_esa_{timestamp}.zip"
+            zip_path = os.path.join(tempfile.gettempdir(), zip_filename)
+            
+            with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                for root, dirs, files in os.walk(csv_dir):
+                    for file in files:
+                        file_path = os.path.join(root, file)
+                        arcname = os.path.relpath(file_path, csv_dir)
+                        zipf.write(file_path, arcname)
+            
+            with open(zip_path, 'rb') as f:
+                backup_bytes = f.read()
+            
+            anexo_nome = zip_filename
+            os.remove(zip_path)  # Limpar arquivo temporário
+            
+        else:
+            # JSON comprimido
+            backup_path = backup_manager.export_to_json(compress=True)
+            if not backup_path:
+                return False, "Erro ao criar backup JSON"
+            
+            with open(backup_path, 'rb') as f:
+                backup_bytes = f.read()
+            
+            anexo_nome = os.path.basename(backup_path)
+        
+        # Obter estatísticas do backup
+        conn = None
+        stats = {}
+        try:
+            from database import get_connection
+            conn = get_connection()
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM registros_ponto")
+            stats['registros'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM usuarios WHERE ativo = 1")
+            stats['usuarios'] = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT MIN(data), MAX(data) FROM registros_ponto")
+            result = cursor.fetchone()
+            stats['periodo_inicio'] = result[0] if result[0] else 'N/A'
+            stats['periodo_fim'] = result[1] if result[1] else 'N/A'
+            
+        except Exception as e:
+            logger.warning(f"Erro ao obter estatísticas: {e}")
+            stats = {'registros': 'N/A', 'usuarios': 'N/A', 'periodo_inicio': 'N/A', 'periodo_fim': 'N/A'}
+        finally:
+            if conn:
+                conn.close()
+        
+        # Montar email
+        data_atual = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        tamanho_backup = len(backup_bytes) / 1024  # KB
+        
+        if tamanho_backup > 1024:
+            tamanho_str = f"{tamanho_backup/1024:.2f} MB"
+        else:
+            tamanho_str = f"{tamanho_backup:.2f} KB"
+        
+        assunto = assunto_personalizado or f"🔒 Backup Ponto ExSA - {datetime.now().strftime('%d/%m/%Y')}"
+        
+        conteudo = f"""
+        <h2 style="color: #1a1a2e; margin-bottom: 20px;">📦 Backup Automático</h2>
+        
+        <p style="color: #333; font-size: 16px;">
+            O backup do sistema <strong>Ponto ExSA</strong> foi gerado com sucesso.
+        </p>
+        
+        <div style="background-color: #e8f5e9; padding: 20px; border-radius: 10px; margin: 20px 0;">
+            <h3 style="color: #2e7d32; margin-top: 0;">✅ Informações do Backup</h3>
+            <table style="width: 100%; border-collapse: collapse;">
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>📅 Data/Hora:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{data_atual}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>📁 Arquivo:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{anexo_nome}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>💾 Tamanho:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{tamanho_str}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>📊 Total de Registros:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{stats['registros']}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>👥 Usuários Ativos:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{stats['usuarios']}</td>
+                </tr>
+                <tr>
+                    <td style="padding: 8px 0; color: #555;"><strong>📆 Período:</strong></td>
+                    <td style="padding: 8px 0; color: #333;">{stats['periodo_inicio']} a {stats['periodo_fim']}</td>
+                </tr>
+            </table>
+        </div>
+        
+        <div style="background-color: #fff3e0; padding: 15px; border-radius: 10px; margin: 20px 0;">
+            <h4 style="color: #e65100; margin-top: 0;">⚠️ Importante</h4>
+            <p style="color: #555; margin-bottom: 0;">
+                Por lei (Portaria 671/2021), os registros de ponto devem ser mantidos por <strong>5 anos</strong>.
+                Guarde este backup em local seguro (Google Drive, OneDrive, HD externo).
+            </p>
+        </div>
+        
+        <p style="color: #666; font-size: 14px;">
+            Para restaurar o backup, acesse o sistema e vá em <strong>Sistema → Backup → Restaurar</strong>.
+        </p>
+        """
+        
+        corpo_html = get_template_base(conteudo, "Backup Ponto ExSA")
+        
+        corpo_texto = f"""
+BACKUP PONTO ExSA - {data_atual}
+
+Informações:
+- Arquivo: {anexo_nome}
+- Tamanho: {tamanho_str}
+- Registros: {stats['registros']}
+- Período: {stats['periodo_inicio']} a {stats['periodo_fim']}
+
+IMPORTANTE: Por lei (Portaria 671/2021), os registros de ponto 
+devem ser mantidos por 5 anos. Guarde este backup em local seguro.
+        """
+        
+        # Enviar email com anexo
+        anexo = {
+            'nome': anexo_nome,
+            'dados': backup_bytes
+        }
+        
+        sucesso, msg = enviar_email(
+            destinatario=email_destino,
+            assunto=assunto,
+            corpo_html=corpo_html,
+            corpo_texto=corpo_texto,
+            anexos=[anexo]
+        )
+        
+        if sucesso:
+            logger.info(f"Backup enviado por email para {email_destino}")
+            return True, f"Backup enviado com sucesso para {email_destino}"
+        else:
+            logger.error(f"Erro ao enviar backup por email: {msg}")
+            return False, f"Erro ao enviar email: {msg}"
+            
+    except Exception as e:
+        logger.error(f"Erro ao enviar backup por email: {e}")
+        return False, f"Erro: {str(e)}"
+
+
+def agendar_backup_email_semanal(email_destino: str, dia_semana: int = 0) -> bool:
+    """
+    Agenda backup semanal por email.
+    
+    Args:
+        email_destino: Email para enviar o backup
+        dia_semana: 0=Segunda, 1=Terça, ..., 6=Domingo
+        
+    Returns:
+        True se agendado com sucesso
+    """
+    try:
+        from background_scheduler import scheduler, is_scheduler_running
+        from apscheduler.triggers.cron import CronTrigger
+        
+        if not is_scheduler_running():
+            logger.warning("Scheduler não está rodando")
+            return False
+        
+        # Remover job anterior se existir
+        job_id = 'backup_email_semanal'
+        try:
+            scheduler.remove_job(job_id)
+        except:
+            pass
+        
+        # Agendar novo job - Segunda às 06:00
+        scheduler.add_job(
+            func=lambda: enviar_backup_por_email(email_destino, 'json'),
+            trigger=CronTrigger(day_of_week=dia_semana, hour=6, minute=0),
+            id=job_id,
+            name='Backup Semanal por Email',
+            replace_existing=True
+        )
+        
+        logger.info(f"Backup semanal agendado para {email_destino}")
+        return True
+        
+    except Exception as e:
+        logger.error(f"Erro ao agendar backup semanal: {e}")
+        return False
+
+
 __all__ = [
     'PostgreSQLBackupManager',
     'backup_manager',
@@ -550,5 +784,7 @@ __all__ = [
     'stop_backup_system',
     'create_manual_backup',
     'get_available_backups',
-    'restore_backup'
+    'restore_backup',
+    'enviar_backup_por_email',
+    'agendar_backup_email_semanal'
 ]
