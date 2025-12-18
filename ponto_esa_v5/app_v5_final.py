@@ -511,8 +511,9 @@ def verificar_login(usuario, senha):
         return result
 
 
+@st.cache_data(ttl=300)  # Cache de 5 minutos para projetos
 def obter_projetos_ativos():
-    """Obtém lista de projetos ativos"""
+    """Obtém lista de projetos ativos (com cache)"""
     if REFACTORING_ENABLED:
         results = execute_query(
             "SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome"
@@ -618,6 +619,7 @@ def obter_usuarios_para_aprovacao():
         return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
 
 
+@st.cache_data(ttl=120)  # Cache de 2 minutos para usuários
 def obter_usuarios_ativos():
     """Obtém lista de usuários ativos (retorna dicionários com 'usuario' e 'nome_completo')."""
     if REFACTORING_ENABLED:
@@ -2441,88 +2443,117 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     st.subheader("➕ Novo Registro")
     
-    # GPS: Injetar JavaScript para captura de coordenadas
+    # GPS: Injetar JavaScript para captura de coordenadas - OTIMIZADO
     gps_js = """
     <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
-        <div style="padding: 8px; background: #f0f2f6; border-radius: 8px; text-align: center;">
+        <div style="padding: 8px; background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); border-radius: 8px; text-align: center;">
             📍 Obtendo localização GPS...
         </div>
     </div>
     <script>
     (function() {
-        // Função para enviar coordenadas para o Streamlit
-        function sendToStreamlit(lat, lng, accuracy) {
-            // Usar postMessage para comunicar com Streamlit
-            const data = {
-                isStreamlitMessage: true,
-                type: 'streamlit:setComponentValue',
-                data: {latitude: lat, longitude: lng, accuracy: accuracy}
-            };
-            
-            // Armazenar no sessionStorage para persistência
-            sessionStorage.setItem('gps_latitude', lat);
-            sessionStorage.setItem('gps_longitude', lng);
-            sessionStorage.setItem('gps_accuracy', accuracy);
-            sessionStorage.setItem('gps_timestamp', Date.now());
-            
-            // Atualizar campos ocultos se existirem
-            setTimeout(function() {
-                const inputs = document.querySelectorAll('input[type="text"]');
-                inputs.forEach(function(input) {
-                    const container = input.closest('.stTextInput');
-                    if (container) {
-                        const label = container.querySelector('label');
-                        if (label) {
-                            if (label.textContent.includes('GPS_LAT')) {
-                                input.value = lat.toString();
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                            if (label.textContent.includes('GPS_LNG')) {
-                                input.value = lng.toString();
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
+        // Verificar cache primeiro para resposta instantânea
+        const cachedLat = sessionStorage.getItem('gps_latitude');
+        const cachedLng = sessionStorage.getItem('gps_longitude');
+        const cachedAcc = sessionStorage.getItem('gps_accuracy');
+        const cachedTime = sessionStorage.getItem('gps_timestamp');
+        
+        // Usar cache se menos de 2 minutos (120000ms)
+        const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
+        
+        function fillInputs(lat, lng) {
+            const inputs = document.querySelectorAll('input[type="text"]');
+            inputs.forEach(function(input) {
+                const container = input.closest('.stTextInput');
+                if (container) {
+                    const label = container.querySelector('label');
+                    if (label) {
+                        if (label.textContent.includes('GPS_LAT')) {
+                            input.value = lat.toString();
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
+                        }
+                        if (label.textContent.includes('GPS_LNG')) {
+                            input.value = lng.toString();
+                            input.dispatchEvent(new Event('input', { bubbles: true }));
+                            input.dispatchEvent(new Event('change', { bubbles: true }));
                         }
                     }
-                });
-            }, 500);
+                }
+            });
         }
         
         function updateGpsStatus(success, message) {
             const gpsDiv = document.getElementById('gps-status');
             if (gpsDiv) {
                 if (success) {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #d4edda; border-radius: 8px; color: #155724; text-align: center;">✅ ' + message + '</div>';
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%); border-radius: 8px; color: #1b5e20; text-align: center; font-weight: 500;">✅ ' + message + '</div>';
                 } else {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #fff3cd; border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #fff3cd 0%, #ffe082 100%); border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
                 }
             }
         }
         
+        // Se cache válido, usar imediatamente enquanto atualiza em background
+        if (cacheValid && cachedLat && cachedLng) {
+            updateGpsStatus(true, 'GPS: ' + parseFloat(cachedLat).toFixed(6) + ', ' + parseFloat(cachedLng).toFixed(6) + ' (±' + Math.round(cachedAcc || 0) + 'm)');
+            setTimeout(() => fillInputs(cachedLat, cachedLng), 300);
+        }
+        
         if (navigator.geolocation) {
+            // Opções otimizadas: timeout menor, aceita cache recente
+            const options = {
+                enableHighAccuracy: false,  // Primeiro, posição rápida
+                timeout: 5000,              // 5 segundos max
+                maximumAge: 120000          // Aceita cache de 2 min
+            };
+            
             navigator.geolocation.getCurrentPosition(
                 function(position) {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     const acc = position.coords.accuracy;
                     
-                    sendToStreamlit(lat, lng, acc);
+                    // Salvar no cache
+                    sessionStorage.setItem('gps_latitude', lat);
+                    sessionStorage.setItem('gps_longitude', lng);
+                    sessionStorage.setItem('gps_accuracy', acc);
+                    sessionStorage.setItem('gps_timestamp', Date.now());
+                    
                     updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
+                    setTimeout(() => fillInputs(lat, lng), 300);
+                    
+                    // Se precisão ruim, tentar alta precisão em background
+                    if (acc > 100) {
+                        navigator.geolocation.getCurrentPosition(
+                            function(p) {
+                                if (p.coords.accuracy < acc) {
+                                    sessionStorage.setItem('gps_latitude', p.coords.latitude);
+                                    sessionStorage.setItem('gps_longitude', p.coords.longitude);
+                                    sessionStorage.setItem('gps_accuracy', p.coords.accuracy);
+                                    sessionStorage.setItem('gps_timestamp', Date.now());
+                                    updateGpsStatus(true, 'GPS: ' + p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) + ' (±' + Math.round(p.coords.accuracy) + 'm)');
+                                    fillInputs(p.coords.latitude, p.coords.longitude);
+                                }
+                            },
+                            function() {},
+                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                        );
+                    }
                 },
                 function(error) {
                     console.log('GPS Error:', error.message);
                     sessionStorage.setItem('gps_error', error.message);
-                    updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                    if (!cacheValid) {
+                        updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                    }
                 },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 15000,
-                    maximumAge: 60000
-                }
+                options
             );
         } else {
-            updateGpsStatus(false, 'Navegador não suporta GPS');
+            if (!cacheValid) {
+                updateGpsStatus(false, 'Navegador não suporta GPS');
+            }
         }
     })();
     </script>
