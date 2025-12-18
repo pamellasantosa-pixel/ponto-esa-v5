@@ -5037,6 +5037,105 @@ def tela_gestor():
                     st.session_state.menu_gestor_index = i
                     break
 
+        st.markdown("---")
+        
+        # Botão para ativar notificações push (gestor também)
+        st.markdown("#### 🔔 Notificações Push")
+        
+        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+        if vapid_key:
+            st.components.v1.html(f"""
+            <div id="push-status-sidebar-gestor" style="margin: 10px 0; font-size: 13px;">
+                <button id="btn-push-enable-gestor" onclick="enablePushNotificationsGestor()" style="
+                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                    color: white;
+                    border: none;
+                    padding: 10px 16px;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    cursor: pointer;
+                    width: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                ">
+                    <span>🔔</span>
+                    <span>Ativar Lembretes</span>
+                </button>
+                <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
+            </div>
+            <script>
+            async function enablePushNotificationsGestor() {{
+                const btn = document.getElementById('btn-push-enable-gestor');
+                const msg = document.getElementById('push-msg-gestor');
+                
+                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
+                    setTimeout(enablePushNotificationsGestor, 1000);
+                    return;
+                }}
+                
+                const state = PontoESA.Push.getState();
+                
+                if (state.isSubscribed) {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    return;
+                }}
+                
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    
+                    if (result.success) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    }}
+                }} catch (e) {{
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
+                }}
+            }}
+            
+            // Verificar status inicial
+            setTimeout(function() {{
+                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
+                    const state = PontoESA.Push.getState();
+                    const btn = document.getElementById('btn-push-enable-gestor');
+                    const msg = document.getElementById('push-msg-gestor');
+                    
+                    if (state.isSubscribed) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    }} else if (!state.isSupported) {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    }} else if (Notification.permission === 'denied') {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                    }}
+                }}
+            }}, 1500);
+            </script>
+            """, height=90)
+        else:
+            st.caption("⚠️ Push não configurado")
+
+        st.markdown("---")
+
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
@@ -9120,6 +9219,92 @@ def sistema_interface():
             st.rerun()
 
     # ============================================
+    # SEÇÃO: Push Notifications (Configurações Globais)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📱 Push Notifications (Lembretes no Celular/Navegador)")
+    
+    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+    if vapid_key:
+        st.success("✅ **Push Notifications configurado** - Sistema pronto para enviar lembretes")
+        
+        # Buscar configuração atual
+        push_obrigatorio_atual = '1'  # Padrão: obrigatório
+        try:
+            if REFACTORING_ENABLED:
+                result = execute_query(
+                    "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
+                    fetch_one=True
+                )
+                if result:
+                    push_obrigatorio_atual = result[0]
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
+                result = cursor.fetchone()
+                if result:
+                    push_obrigatorio_atual = result[0]
+                conn.close()
+        except Exception:
+            pass
+        
+        with st.form("config_push_global"):
+            st.markdown("#### ⚙️ Configurações Globais de Push")
+            
+            push_obrigatorio = st.checkbox(
+                "🔒 **Notificações Obrigatórias para Todos**",
+                value=push_obrigatorio_atual == '1',
+                help="Quando ativado, todos os usuários verão um modal pedindo para ativar notificações ao fazer login. Recomendado para garantir que ninguém esqueça de bater o ponto."
+            )
+            
+            st.info("""
+            📋 **Como funciona:**
+            - Após login, um modal aparece pedindo para ativar notificações
+            - O usuário pode clicar "Lembrar mais tarde" (aparecerá novamente no próximo dia)
+            - Quando ativado, recebe lembretes de entrada, saída e hora extra
+            - Apenas você (gestor) pode desabilitar esta obrigatoriedade
+            """)
+            
+            if st.form_submit_button("💾 Salvar Configuração de Push", use_container_width=True):
+                try:
+                    valor = '1' if push_obrigatorio else '0'
+                    
+                    if REFACTORING_ENABLED:
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (valor, valor))
+                    else:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (valor, valor))
+                        conn.commit()
+                        conn.close()
+                    
+                    if push_obrigatorio:
+                        st.success("✅ Notificações obrigatórias ATIVADAS! Todos os usuários serão solicitados a ativar.")
+                    else:
+                        st.warning("⚠️ Notificações obrigatórias DESATIVADAS. Modal não aparecerá mais.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+    else:
+        st.warning("""
+        ⚠️ **Push Notifications não configurado**
+        
+        Para ativar, adicione as seguintes variáveis de ambiente no Render:
+        - `VAPID_PUBLIC_KEY`
+        - `VAPID_PRIVATE_KEY`
+        - `VAPID_CLAIM_EMAIL`
+        """)
+
+    # ============================================
     # SEÇÃO: Notificações Automáticas (Scheduler)
     # ============================================
     st.markdown("---")
@@ -9901,6 +10086,203 @@ def _initialize_app_once():
     return True
 
 
+def exibir_modal_push_obrigatorio():
+    """Exibe modal obrigatório para ativar notificações push após login"""
+    # Verificar se push está configurado
+    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+    if not vapid_key:
+        return  # Push não configurado, não exibir modal
+    
+    # Verificar se já mostrou o modal nesta sessão
+    if st.session_state.get('push_modal_shown', False):
+        return
+    
+    # Verificar se notificações globais estão habilitadas (configuração do gestor)
+    push_obrigatorio = True  # Padrão: obrigatório
+    try:
+        if REFACTORING_ENABLED:
+            result = execute_query(
+                "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
+                fetch_one=True
+            )
+            if result:
+                push_obrigatorio = result[0] == '1'
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
+            result = cursor.fetchone()
+            if result:
+                push_obrigatorio = result[0] == '1'
+            conn.close()
+    except Exception:
+        pass  # Se erro, manter padrão (obrigatório)
+    
+    if not push_obrigatorio:
+        return  # Gestor desabilitou notificações obrigatórias
+    
+    # JavaScript para exibir modal de ativação de push
+    usuario = st.session_state.usuario
+    st.components.v1.html(f"""
+    <script>
+    (function() {{
+        // Aguardar push system carregar
+        function checkAndShowModal() {{
+            if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                setTimeout(checkAndShowModal, 500);
+                return;
+            }}
+            
+            const state = PontoESA.Push.getState();
+            
+            // Se já está inscrito ou não suporta, não mostrar modal
+            if (state.isSubscribed || !state.isSupported) {{
+                return;
+            }}
+            
+            // Verificar se já dispensou o modal hoje
+            const dismissedDate = localStorage.getItem('push_modal_dismissed_date');
+            const today = new Date().toDateString();
+            if (dismissedDate === today) {{
+                return;
+            }}
+            
+            // Verificar permissão
+            if (Notification.permission === 'denied') {{
+                return;
+            }}
+            
+            // Mostrar modal após 2 segundos
+            setTimeout(function() {{
+                showPushModal();
+            }}, 2000);
+        }}
+        
+        function showPushModal() {{
+            // Verificar se modal já existe
+            if (document.getElementById('push-modal-obrigatorio')) return;
+            
+            const modal = document.createElement('div');
+            modal.id = 'push-modal-obrigatorio';
+            modal.innerHTML = `
+                <div style="
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(0,0,0,0.7);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 999999;
+                    animation: fadeIn 0.3s ease;
+                ">
+                    <div style="
+                        background: white;
+                        border-radius: 20px;
+                        padding: 35px;
+                        max-width: 420px;
+                        text-align: center;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+                        animation: slideUp 0.4s ease;
+                    ">
+                        <div style="font-size: 60px; margin-bottom: 15px;">🔔</div>
+                        <h2 style="margin: 0 0 10px; color: #333; font-size: 22px;">Ative as Notificações!</h2>
+                        <p style="color: #666; margin-bottom: 20px; font-size: 15px; line-height: 1.5;">
+                            Para garantir que você <strong>nunca esqueça</strong> de registrar seu ponto, 
+                            ative as notificações e receba lembretes automáticos.
+                        </p>
+                        <p style="color: #888; margin-bottom: 25px; font-size: 13px;">
+                            📱 Você receberá alertas de entrada, saída e hora extra.
+                        </p>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button id="push-modal-yes" style="
+                                background: linear-gradient(135deg, #4CAF50, #45a049);
+                                color: white;
+                                border: none;
+                                padding: 14px 28px;
+                                border-radius: 10px;
+                                font-size: 16px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                transition: transform 0.2s;
+                            " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                                ✅ Ativar Notificações
+                            </button>
+                            <button id="push-modal-later" style="
+                                background: transparent;
+                                color: #999;
+                                border: none;
+                                padding: 10px;
+                                font-size: 13px;
+                                cursor: pointer;
+                            ">
+                                Lembrar mais tarde
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <style>
+                    @keyframes fadeIn {{
+                        from {{ opacity: 0; }}
+                        to {{ opacity: 1; }}
+                    }}
+                    @keyframes slideUp {{
+                        from {{ opacity: 0; transform: translateY(30px) scale(0.95); }}
+                        to {{ opacity: 1; transform: translateY(0) scale(1); }}
+                    }}
+                </style>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Botão Ativar
+            document.getElementById('push-modal-yes').onclick = async function() {{
+                const btn = this;
+                btn.disabled = true;
+                btn.innerHTML = '⏳ Ativando...';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{usuario}');
+                    
+                    if (result.success) {{
+                        btn.innerHTML = '✅ Ativado!';
+                        btn.style.background = '#9E9E9E';
+                        setTimeout(function() {{
+                            modal.remove();
+                        }}, 1500);
+                    }} else {{
+                        btn.innerHTML = '❌ ' + (result.error || 'Erro');
+                        btn.disabled = false;
+                        setTimeout(function() {{
+                            btn.innerHTML = '✅ Ativar Notificações';
+                        }}, 3000);
+                    }}
+                }} catch (e) {{
+                    btn.innerHTML = '❌ ' + e.message;
+                    btn.disabled = false;
+                }}
+            }};
+            
+            // Botão Lembrar mais tarde
+            document.getElementById('push-modal-later').onclick = function() {{
+                // Salvar que dispensou hoje
+                localStorage.setItem('push_modal_dismissed_date', new Date().toDateString());
+                modal.remove();
+            }};
+        }}
+        
+        // Iniciar verificação
+        checkAndShowModal();
+    }})();
+    </script>
+    """, height=0)
+    
+    # Marcar que já mostrou nesta sessão
+    st.session_state.push_modal_shown = True
+
+
 def main():
     """Função principal que gerencia o estado da aplicação"""
     # Inicializar recursos pesados apenas uma vez
@@ -9910,6 +10292,9 @@ def main():
         st.session_state.logged_in = False
 
     if st.session_state.logged_in:
+        # Exibir modal de ativação de push notifications (obrigatório após login)
+        exibir_modal_push_obrigatorio()
+        
         if st.session_state.tipo_usuario == 'funcionario':
             tela_funcionario()
         elif st.session_state.tipo_usuario == 'gestor':
