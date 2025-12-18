@@ -2472,25 +2472,31 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
         
         function fillInputs(lat, lng) {
-            const inputs = document.querySelectorAll('input[type="text"]');
-            inputs.forEach(function(input) {
-                const container = input.closest('.stTextInput');
-                if (container) {
-                    const label = container.querySelector('label');
-                    if (label) {
-                        if (label.textContent.includes('GPS_LAT')) {
-                            input.value = lat.toString();
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                        if (label.textContent.includes('GPS_LNG')) {
-                            input.value = lng.toString();
-                            input.dispatchEvent(new Event('input', { bubbles: true }));
-                            input.dispatchEvent(new Event('change', { bubbles: true }));
-                        }
-                    }
-                }
-            });
+            // Buscar campos GPS pelo placeholder específico
+            const latField = document.querySelector('input[placeholder="GPS Lat"]');
+            const lngField = document.querySelector('input[placeholder="GPS Lng"]');
+            
+            if (latField && lngField) {
+                // Preencher latitude
+                latField.value = lat.toString();
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                latField.dispatchEvent(new Event('change', { bubbles: true }));
+                // Disparo adicional para Streamlit
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeInputValueSetter.call(latField, lat.toString());
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                // Preencher longitude
+                lngField.value = lng.toString();
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                lngField.dispatchEvent(new Event('change', { bubbles: true }));
+                nativeInputValueSetter.call(lngField, lng.toString());
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                console.log('GPS fields filled:', lat, lng);
+            } else {
+                console.log('GPS fields not found. Looking for:', 'input[placeholder="GPS Lat"]', 'input[placeholder="GPS Lng"]');
+            }
         }
         
         function updateGpsStatus(success, message) {
@@ -2635,11 +2641,17 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
         # Campos ocultos para capturar GPS via JavaScript
         # Esses campos são preenchidos automaticamente pelo JavaScript
+        # Usar session_state para persistir valores do GPS
+        if 'gps_lat_value' not in st.session_state:
+            st.session_state.gps_lat_value = ""
+        if 'gps_lng_value' not in st.session_state:
+            st.session_state.gps_lng_value = ""
+        
         col_gps1, col_gps2 = st.columns(2)
         with col_gps1:
-            gps_lat_input = st.text_input("GPS_LAT", value="", key="gps_lat_field", label_visibility="collapsed")
+            gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
         with col_gps2:
-            gps_lng_input = st.text_input("GPS_LNG", value="", key="gps_lng_field", label_visibility="collapsed")
+            gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
 
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
@@ -4533,7 +4545,7 @@ def corrigir_registros_interface():
 
 
 def meus_registros_interface(calculo_horas_system):
-    """Interface para visualizar registros com cálculos"""
+    """Interface para visualizar registros com cálculos - OTIMIZADA"""
     st.markdown("""
     <div class="feature-card">
         <h3>📋 Meus Registros</h3>
@@ -4545,14 +4557,14 @@ def meus_registros_interface(calculo_horas_system):
     col1, col2, col3 = st.columns(3)
     with col1:
         data_inicio = st.date_input(
-            "Data Início", value=date.today() - timedelta(days=30))
+            "Data Início", value=date.today() - timedelta(days=7))  # Reduzido para 7 dias por padrão
     with col2:
         data_fim = st.date_input("Data Fim", value=date.today())
     with col3:
         projeto_filtro = st.selectbox(
             "Projeto", ["Todos"] + obter_projetos_ativos())
 
-    # Calcular horas do período
+    # Calcular horas do período (usa cache)
     calculo_periodo = calculo_horas_system.calcular_horas_periodo(
         st.session_state.usuario,
         data_inicio.strftime("%Y-%m-%d"),
@@ -4592,79 +4604,14 @@ def meus_registros_interface(calculo_horas_system):
         # Formatar dados para exibição
         df['Data'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%d/%m/%Y')
         df['Hora'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%H:%M')
-        df['DataObj'] = pd.to_datetime(df['Data/Hora']).dt.date
         
-        # Adicionar informação de multiplicador para cada dia
-        from calculo_horas_system import eh_dia_com_multiplicador
-        
-        def get_badge_dia(data_obj):
-            info = eh_dia_com_multiplicador(data_obj)
-            if info['tem_multiplicador']:
-                if info['eh_domingo'] and info['eh_feriado']:
-                    return f"🎉📅 {info['nome_feriado']} (DOMINGO) - x2"
-                elif info['eh_domingo']:
-                    return "📅 DOMINGO - Horas em DOBRO (x2)"
-                elif info['eh_feriado']:
-                    return f"🎉 FERIADO: {info['nome_feriado']} - Horas em DOBRO (x2)"
-            return ""
-        
-        # Agrupar por data e exibir com destaque
-        st.markdown("### 📅 Registros Detalhados por Dia")
-        
-        for data_unica in df['DataObj'].unique():
-            registros_dia = df[df['DataObj'] == data_unica]
-            data_formatada = registros_dia.iloc[0]['Data']
-            
-            # Verificar se tem multiplicador
-            badge = get_badge_dia(data_unica)
-            
-            if badge:
-                # Exibir com destaque
-                st.markdown(f"#### {data_formatada}")
-                st.warning(f"**{badge}**")
-            else:
-                st.markdown(f"#### {data_formatada}")
-            
-            # Exibir registros do dia
-            st.dataframe(
-                registros_dia[['Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade']],
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Calcular horas do dia
-            calculo_dia = calculo_horas_system.calcular_horas_dia(
-                st.session_state.usuario,
-                data_unica.strftime("%Y-%m-%d")
-            )
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("⏱️ Horas Trabalhadas", 
-                         format_time_duration(calculo_dia.get("horas_trabalhadas", 0)))
-            with col2:
-                st.metric("💼 Horas Líquidas", 
-                         format_time_duration(calculo_dia.get("horas_liquidas", 0)))
-            with col3:
-                multiplicador = calculo_dia.get("multiplicador", 1)
-                horas_finais = calculo_dia.get("horas_finais", 0)
-                if multiplicador > 1:
-                    st.metric("✨ Total Contabilizado", 
-                             format_time_duration(horas_finais),
-                             delta=f"x{multiplicador}")
-                else:
-                    st.metric("📊 Total Contabilizado", 
-                             format_time_duration(horas_finais))
-            
-            st.markdown("---")
-
-        # Exibir tabela completa (versão antiga mantida para referência)
-        with st.expander("📊 Ver Tabela Completa (Todos os Registros)"):
-            st.dataframe(
-                df[['Data', 'Hora', 'Tipo', 'Modalidade',
-                    'Projeto', 'Atividade', 'Localização']],
-                use_container_width=True
-            )
+        # Exibir tabela simples e rápida
+        st.markdown("### 📅 Registros do Período")
+        st.dataframe(
+            df[['Data', 'Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização']],
+            use_container_width=True,
+            hide_index=True
+        )
 
         # Botão de exportação
         if st.button("📊 Exportar para Excel"):
