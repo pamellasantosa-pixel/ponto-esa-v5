@@ -13,8 +13,8 @@ const CACHE_VERSION = '2.0.0';
 const STATIC_CACHE = [
     '/',
     '/static/manifest.json',
-    '/static/icon-192.png',
-    '/static/icon-512.png',
+    '/static/icon-192.svg',
+    '/static/icon-512.svg',
     '/static/offline.html'
 ];
 
@@ -138,8 +138,8 @@ self.addEventListener('push', function(event) {
     let notificationData = {
         title: 'Ponto ExSA',
         body: 'Nova notificação',
-        icon: '/static/icon-192.png',
-        badge: '/static/icon-192.png',
+        icon: '/static/icon-192.svg',
+        badge: '/static/icon-192.svg',
         tag: 'ponto-exsa-notification',
         requireInteraction: false,
         data: {}
@@ -186,12 +186,12 @@ self.addEventListener('push', function(event) {
             {
                 action: 'open',
                 title: '📱 Abrir App',
-                icon: '/static/icon-192.png'
+                icon: '/static/icon-192.svg'
             },
             {
                 action: 'dismiss',
                 title: '❌ Dispensar',
-                icon: '/static/icon-192.png'
+                icon: '/static/icon-192.svg'
             }
         ]
     };

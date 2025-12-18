@@ -365,32 +365,41 @@ def get_custom_css():
 # Aplicar CSS
 st.markdown(get_custom_css(), unsafe_allow_html=True)
 
+# Obter chave VAPID do ambiente para injetar no JavaScript
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', '')
+
 # Scripts JS separados para não bloquear renderização
-st.markdown("""
+st.markdown(f"""
 
 <script>
-function updateClock() {
+// Configurar VAPID para Push Notifications
+window.VAPID_CONFIG = {{
+    publicKey: '{VAPID_PUBLIC_KEY}',
+    configured: {str(bool(VAPID_PUBLIC_KEY)).lower()}
+}};
+
+function updateClock() {{
     const now = new Date();
     const dateStr = now.toLocaleDateString('pt-BR');
-    const timeStr = now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+    const timeStr = now.toLocaleTimeString('pt-BR', {{hour: '2-digit', minute: '2-digit'}});
     const elements = document.querySelectorAll('.user-info');
-    elements.forEach(el => {
-        if (el.textContent.includes('•')) {
+    elements.forEach(el => {{
+        if (el.textContent.includes('•')) {{
             const parts = el.textContent.split(' • ');
-            if (parts.length === 2) {
+            if (parts.length === 2) {{
                 el.textContent = parts[0] + ' • ' + dateStr + ' ' + timeStr;
-            }
-        }
-    });
-}
+            }}
+        }}
+    }});
+}}
 // Atualizar a cada minuto
 setInterval(updateClock, 60000);
 // Atualizar imediatamente
 updateClock();
 </script>
 
-<!-- Push Notifications Script -->
-<script src="/static/push-notifications.js"></script>
+<!-- Push Notifications Script - Versão Simplificada para Streamlit -->
+<script src="/static/push-simple.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -2046,6 +2055,106 @@ def tela_funcionario():
                 if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
                     st.session_state.menu_func_index = i
                     break
+
+        st.markdown("---")
+        
+        # Botão para ativar notificações push
+        st.markdown("#### 🔔 Notificações Push")
+        
+        # Verificar se push está configurado
+        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+        if vapid_key:
+            st.components.v1.html(f"""
+            <div id="push-status-sidebar" style="margin: 10px 0; font-size: 13px;">
+                <button id="btn-push-enable" onclick="enablePushNotifications()" style="
+                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                    color: white;
+                    border: none;
+                    padding: 10px 16px;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    cursor: pointer;
+                    width: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                ">
+                    <span>🔔</span>
+                    <span>Ativar Lembretes</span>
+                </button>
+                <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
+            </div>
+            <script>
+            async function enablePushNotifications() {{
+                const btn = document.getElementById('btn-push-enable');
+                const msg = document.getElementById('push-msg');
+                
+                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
+                    setTimeout(enablePushNotifications, 1000);
+                    return;
+                }}
+                
+                const state = PontoESA.Push.getState();
+                
+                if (state.isSubscribed) {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    return;
+                }}
+                
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    
+                    if (result.success) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    }}
+                }} catch (e) {{
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
+                }}
+            }}
+            
+            // Verificar status inicial após carregar
+            setTimeout(function() {{
+                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
+                    const state = PontoESA.Push.getState();
+                    const btn = document.getElementById('btn-push-enable');
+                    const msg = document.getElementById('push-msg');
+                    
+                    if (state.isSubscribed) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    }} else if (!state.isSupported) {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    }} else if (Notification.permission === 'denied') {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                    }}
+                }}
+            }}, 1500);
+            </script>
+            """, height=90)
+        else:
+            st.caption("⚠️ Push não configurado")
+
+        st.markdown("---")
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
