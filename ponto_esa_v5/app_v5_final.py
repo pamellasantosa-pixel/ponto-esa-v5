@@ -9803,14 +9803,13 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 
 
 # Função principal
-def main():
-    """Função principal que gerencia o estado da aplicação"""
+@st.cache_resource
+def _initialize_app_once():
+    """Inicializa recursos pesados apenas uma vez (cacheado)"""
+    # Inicializar banco de dados
     init_db()
     
-    # ============================================
-    # INICIAR SCHEDULER DE NOTIFICAÇÕES AUTOMÁTICAS
-    # Roda em background thread (sem custo adicional)
-    # ============================================
+    # Iniciar scheduler de notificações
     try:
         from background_scheduler import iniciar_scheduler_background, is_scheduler_running
         if not is_scheduler_running():
@@ -9819,19 +9818,27 @@ def main():
     except Exception as e:
         logger.warning(f"Scheduler de notificações não iniciado: {e}")
     
-    # Garantir que o UploadSystem tenha a estrutura correta da tabela
+    # Inicializar sistema de uploads
     try:
         upload_system_init = UploadSystem()
         logger.info("✅ Sistema de uploads inicializado")
     except Exception as e:
         logger.error(f"Erro ao inicializar sistema de uploads: {e}")
     
-    # Aplicar migration da tabela uploads se necessário
+    # Aplicar migration da tabela uploads
     try:
         from apply_uploads_migration import apply_uploads_migration
         apply_uploads_migration()
     except Exception as e:
         logger.warning(f"Não foi possível aplicar migration de uploads: {e}")
+    
+    return True
+
+
+def main():
+    """Função principal que gerencia o estado da aplicação"""
+    # Inicializar recursos pesados apenas uma vez
+    _initialize_app_once()
 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False

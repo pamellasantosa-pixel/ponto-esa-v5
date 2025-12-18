@@ -180,7 +180,31 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+# Flag para evitar init_db() múltiplas vezes
+_db_initialized = False
+_db_init_lock = threading.Lock()
+
+
 def init_db():
+    """Inicializa o banco de dados (executa apenas uma vez por processo)"""
+    global _db_initialized
+    
+    # Fast path: já inicializado
+    if _db_initialized:
+        return
+    
+    with _db_init_lock:
+        # Double-check após lock
+        if _db_initialized:
+            return
+        
+        _init_db_internal()
+        _db_initialized = True
+        logger.info("✅ Banco de dados inicializado")
+
+
+def _init_db_internal():
+    """Implementação real do init_db (uso interno)"""
     conn = get_connection()
     c = conn.cursor()
 

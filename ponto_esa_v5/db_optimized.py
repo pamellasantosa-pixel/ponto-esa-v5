@@ -381,9 +381,11 @@ def testar_performance():
 
 # ============== CACHE PARA BADGES DO MENU FUNCIONÁRIO ==============
 
-@st.cache_data(ttl=30)  # Cache de 30 segundos
+@st.cache_data(ttl=60)  # Cache de 60 segundos (aumentado para reduzir queries)
 def get_notificacoes_funcionario(usuario: str) -> Dict[str, int]:
-    """Retorna contagens de notificações para badges do menu (com cache)"""
+    """Retorna contagens de notificações para badges do menu (com cache).
+    OTIMIZADO: Uma única query com UNION ALL ao invés de 3 queries separadas.
+    """
     notif = {
         "he_aprovar": 0,
         "correcoes_pendentes": 0,
@@ -392,32 +394,28 @@ def get_notificacoes_funcionario(usuario: str) -> Dict[str, int]:
     }
     
     try:
-        # Horas extras para aprovar
-        result = execute_query_optimized(
-            f"SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente'",
-            (usuario,),
-            fetch_one=True
-        )
-        if result:
-            notif["he_aprovar"] = result[0]
+        # Uma única query para todas as contagens
+        query = f"""
+            SELECT 'he' as tipo, COUNT(*) as cnt FROM solicitacoes_horas_extras 
+            WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente'
+            UNION ALL
+            SELECT 'corr' as tipo, COUNT(*) as cnt FROM solicitacoes_correcao_registro 
+            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'pendente'
+            UNION ALL
+            SELECT 'atest' as tipo, COUNT(*) as cnt FROM atestado_horas 
+            WHERE usuario = {SQL_PLACEHOLDER} AND status = 'pendente'
+        """
+        results = execute_query_optimized(query, (usuario, usuario, usuario))
         
-        # Correções pendentes do usuário
-        result = execute_query_optimized(
-            f"SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = {SQL_PLACEHOLDER} AND status = 'pendente'",
-            (usuario,),
-            fetch_one=True
-        )
-        if result:
-            notif["correcoes_pendentes"] = result[0]
-        
-        # Atestados pendentes do usuário
-        result = execute_query_optimized(
-            f"SELECT COUNT(*) FROM atestado_horas WHERE usuario = {SQL_PLACEHOLDER} AND status = 'pendente'",
-            (usuario,),
-            fetch_one=True
-        )
-        if result:
-            notif["atestados_pendentes"] = result[0]
+        if results:
+            for row in results:
+                tipo, cnt = row[0], row[1]
+                if tipo == 'he':
+                    notif["he_aprovar"] = cnt
+                elif tipo == 'corr':
+                    notif["correcoes_pendentes"] = cnt
+                elif tipo == 'atest':
+                    notif["atestados_pendentes"] = cnt
         
         notif["total"] = notif["he_aprovar"] + notif["correcoes_pendentes"] + notif["atestados_pendentes"]
         
