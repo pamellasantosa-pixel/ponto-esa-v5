@@ -38,6 +38,7 @@ if USE_POSTGRESQL:
 
 _connection_pool = None
 _pool_lock = threading.Lock()
+_pool_connections = set()  # Rastreia conexões que vieram do pool
 
 
 def _get_pool():
@@ -84,8 +85,8 @@ def get_connection(db_path: str | None = None):
         if pool:
             try:
                 conn = pool.getconn()
-                # Marcar conexão com atributo para identificar que veio do pool
-                conn._from_pool = True
+                # Rastrear conexão usando seu id
+                _pool_connections.add(id(conn))
                 return conn
             except Exception as e:
                 logger.warning(f"Pool falhou, criando conexão direta: {e}")
@@ -95,7 +96,6 @@ def get_connection(db_path: str | None = None):
         try:
             if database_url:
                 conn = psycopg2.connect(database_url, connect_timeout=10)
-                conn._from_pool = False
                 return conn
             else:
                 db_config_local = {
@@ -106,7 +106,6 @@ def get_connection(db_path: str | None = None):
                     'port': os.getenv('DB_PORT', '5432')
                 }
                 conn = psycopg2.connect(**db_config_local, connect_timeout=10)
-                conn._from_pool = False
                 return conn
         except psycopg2.OperationalError as e:
             print(f"❌ Erro ao conectar no PostgreSQL: {e}")
@@ -123,8 +122,10 @@ def return_connection(conn):
     
     if USE_POSTGRESQL:
         pool = _get_pool()
-        if pool and getattr(conn, '_from_pool', False):
+        conn_id = id(conn)
+        if pool and conn_id in _pool_connections:
             try:
+                _pool_connections.discard(conn_id)
                 pool.putconn(conn)
                 return
             except Exception as e:
