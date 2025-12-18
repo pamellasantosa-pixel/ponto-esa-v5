@@ -169,8 +169,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado com novo layout
-st.markdown("""
+# CSS personalizado com novo layout - cacheado como string para melhor performance
+@st.cache_data
+def get_custom_css():
+    """Retorna CSS customizado (cacheado para evitar re-processamento)"""
+    return """
 <style>
     /* Importar fonte */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -357,6 +360,13 @@ st.markdown("""
         color: #721c24;
     }
 </style>
+"""
+
+# Aplicar CSS
+st.markdown(get_custom_css(), unsafe_allow_html=True)
+
+# Scripts JS separados para não bloquear renderização
+st.markdown("""
 
 <script>
 function updateClock() {
