@@ -7,6 +7,7 @@ import os
 import hashlib
 import sqlite3
 from dotenv import load_dotenv
+from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -23,14 +24,72 @@ if USE_POSTGRESQL:
     import psycopg2.extras
 
 
+def clean_database_url_for_neon_pooler(database_url: str) -> str:
+    """
+    Remove parâmetros não suportados pelo Neon Pooler da DATABASE_URL.
+    
+    O Neon Pooler (endpoint com -pooler no nome) não suporta certos parâmetros
+    de startup como 'statement_timeout' nas options.
+    
+    Referência: https://neon.tech/docs/connect/connection-errors#unsupported-startup-parameter
+    """
+    if not database_url:
+        return database_url
+    
+    try:
+        parsed = urlparse(database_url)
+        query_params = parse_qs(parsed.query)
+        
+        # Remover parâmetro 'options' que pode conter statement_timeout
+        if 'options' in query_params:
+            options = query_params['options']
+            if isinstance(options, list):
+                # Filtrar options que contêm statement_timeout
+                cleaned_options = []
+                for opt in options:
+                    # Remover statement_timeout das options
+                    if 'statement_timeout' not in opt:
+                        cleaned_options.append(opt)
+                    else:
+                        # Limpar apenas o statement_timeout, manter outras options
+                        parts = opt.split()
+                        cleaned_parts = [p for p in parts if 'statement_timeout' not in p]
+                        if cleaned_parts:
+                            cleaned_options.append(' '.join(cleaned_parts))
+                
+                if cleaned_options:
+                    query_params['options'] = cleaned_options
+                else:
+                    del query_params['options']
+                    print("ℹ️ Removido parâmetro 'options' da URL (não suportado pelo Neon Pooler)")
+        
+        # Reconstruir a URL
+        new_query = urlencode(query_params, doseq=True)
+        cleaned_url = urlunparse((
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            parsed.params,
+            new_query,
+            parsed.fragment
+        ))
+        
+        return cleaned_url
+    except Exception as e:
+        print(f"⚠️ Erro ao limpar DATABASE_URL: {e}. Usando URL original.")
+        return database_url
+
+
 def get_connection(db_path: str | None = None):
     """Retorna uma conexão com o banco de dados configurado"""
     if USE_POSTGRESQL:
         database_url = os.getenv('DATABASE_URL')
         try:
             if database_url:
+                # Limpar URL para remover parâmetros não suportados pelo Neon Pooler
+                cleaned_url = clean_database_url_for_neon_pooler(database_url)
                 # No Render, a DATABASE_URL é fornecida e usada diretamente
-                return psycopg2.connect(database_url)
+                return psycopg2.connect(cleaned_url)
             else:
                 # Fallback para desenvolvimento local com variáveis separadas
                 db_config_local = {
