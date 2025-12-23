@@ -3,9 +3,14 @@ import hashlib
 import logging
 from dotenv import load_dotenv
 import sqlite3
+from contextlib import contextmanager
+import threading
 
 # Carregar variáveis de ambiente
 load_dotenv()
+
+# Logger para este módulo
+logger = logging.getLogger(__name__)
 
 # Lista de tabelas obrigatórias que devem existir no banco
 REQUIRED_TABLES = [
@@ -24,15 +29,74 @@ SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 if USE_POSTGRESQL:
     import psycopg2
     import psycopg2.extras
+    from psycopg2 import pool as pg_pool
+
+# =============================================
+# CONNECTION POOL SINGLETON - OTIMIZAÇÃO DE PERFORMANCE
+# =============================================
+# Evita abrir nova conexão TCP para cada operação (latência ~100-300ms por conexão)
+
+_connection_pool = None
+_pool_lock = threading.Lock()
+_pool_connections = set()  # Rastreia conexões que vieram do pool
+
+
+def _get_pool():
+    """Retorna o pool de conexões singleton (thread-safe)"""
+    global _connection_pool
+    
+    if _connection_pool is not None:
+        return _connection_pool
+    
+    with _pool_lock:
+        # Double-check após adquirir lock
+        if _connection_pool is not None:
+            return _connection_pool
+        
+        if USE_POSTGRESQL:
+            database_url = os.getenv('DATABASE_URL')
+            if database_url:
+                try:
+                    # Pool com min 2, max 15 conexões para melhor throughput
+                    _connection_pool = pg_pool.ThreadedConnectionPool(
+                        minconn=2,
+                        maxconn=15,
+                        dsn=database_url,
+                        # Configurações para conexões mais rápidas
+                        connect_timeout=10,
+                        options='-c statement_timeout=30000'  # 30s timeout para queries
+                    )
+                    logger.info("✅ Connection pool PostgreSQL criado (2-15 conexões)")
+                except Exception as e:
+                    logger.error(f"❌ Erro ao criar pool: {e}")
+                    _connection_pool = None
+    
+    return _connection_pool
 
 
 def get_connection(db_path: str | None = None):
-    """Retorna uma conexão com o banco de dados configurado"""
+    """Retorna uma conexão com o banco de dados configurado.
+    
+    OTIMIZADO: Usa connection pool para PostgreSQL (evita overhead de TCP handshake).
+    """
     if USE_POSTGRESQL:
+        # Tentar usar pool primeiro
+        pool = _get_pool()
+        if pool:
+            try:
+                conn = pool.getconn()
+                # Rastrear conexão usando seu id
+                _pool_connections.add(id(conn))
+                return conn
+            except Exception as e:
+                logger.warning(f"Pool falhou, criando conexão direta: {e}")
+        
+        # Fallback: conexão direta (caso pool falhe)
         database_url = os.getenv('DATABASE_URL')
         try:
             if database_url:
-                return psycopg2.connect(database_url)
+                conn = psycopg2.connect(database_url, connect_timeout=10)
+                return conn
             else:
                 db_config_local = {
                     'host': os.getenv('DB_HOST', 'localhost'),
@@ -41,13 +105,55 @@ def get_connection(db_path: str | None = None):
                     'password': os.getenv('DB_PASSWORD', 'postgres'),
                     'port': os.getenv('DB_PORT', '5432')
                 }
-                return psycopg2.connect(**db_config_local)
+                conn = psycopg2.connect(**db_config_local, connect_timeout=10)
+                return conn
         except psycopg2.OperationalError as e:
             print(f"❌ Erro ao conectar no PostgreSQL: {e}")
             raise
     else:
         os.makedirs('database', exist_ok=True)
         return sqlite3.connect(db_path or 'database/ponto_esa.db')
+
+
+def return_connection(conn):
+    """Devolve conexão ao pool (ou fecha se não for do pool)"""
+    if conn is None:
+        return
+    
+    if USE_POSTGRESQL:
+        pool = _get_pool()
+        conn_id = id(conn)
+        if pool and conn_id in _pool_connections:
+            try:
+                _pool_connections.discard(conn_id)
+                pool.putconn(conn)
+                return
+            except Exception as e:
+                logger.warning(f"Erro ao devolver conexão ao pool: {e}")
+    
+    # Fallback: fechar conexão
+    try:
+        conn.close()
+    except:
+        pass
+
+
+@contextmanager
+def get_db_context():
+    """Context manager para conexão com banco - gerencia abertura e fechamento automaticamente.
+    
+    Uso:
+        with get_db_context() as conn:
+            cursor = conn.cursor()
+            cursor.execute(...)
+            conn.commit()
+    """
+    conn = None
+    try:
+        conn = get_connection()
+        yield conn
+    finally:
+        return_connection(conn)
 
 
 def adapt_sql_for_postgresql(sql):
@@ -74,7 +180,31 @@ def hash_password(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
+# Flag para evitar init_db() múltiplas vezes
+_db_initialized = False
+_db_init_lock = threading.Lock()
+
+
 def init_db():
+    """Inicializa o banco de dados (executa apenas uma vez por processo)"""
+    global _db_initialized
+    
+    # Fast path: já inicializado
+    if _db_initialized:
+        return
+    
+    with _db_init_lock:
+        # Double-check após lock
+        if _db_initialized:
+            return
+        
+        _init_db_internal()
+        _db_initialized = True
+        logger.info("✅ Banco de dados inicializado")
+
+
+def _init_db_internal():
+    """Implementação real do init_db (uso interno)"""
     conn = get_connection()
     c = conn.cursor()
 
@@ -562,8 +692,48 @@ def init_db():
         )
     '''))
 
+    # ============================================
+    # ÍNDICES PARA OTIMIZAÇÃO DE PERFORMANCE
+    # ============================================
+    # Índices críticos para queries mais frequentes
+    indices = [
+        # Registros de ponto - consultas por usuário e data são muito frequentes
+        ("idx_registros_usuario", "registros_ponto", "usuario"),
+        ("idx_registros_data_hora", "registros_ponto", "data_hora"),
+        ("idx_registros_usuario_data", "registros_ponto", "usuario, DATE(data_hora)"),
+        
+        # Usuários - busca por tipo e status
+        ("idx_usuarios_tipo_ativo", "usuarios", "tipo, ativo"),
+        ("idx_usuarios_usuario", "usuarios", "usuario"),
+        
+        # Ausências - consultas por usuário, status e data
+        ("idx_ausencias_usuario", "ausencias", "usuario"),
+        ("idx_ausencias_status", "ausencias", "status"),
+        ("idx_ausencias_data", "ausencias", "data_inicio, data_fim"),
+        
+        # Horas extras - consultas frequentes
+        ("idx_he_usuario_status", "solicitacoes_horas_extras", "usuario, status"),
+        ("idx_he_aprovador", "solicitacoes_horas_extras", "aprovador_solicitado, status"),
+        
+        # Notificações - busca por usuário e lidas
+        ("idx_notif_usuario_lida", "Notificacoes", "usuario, lida"),
+        
+        # Banco de horas
+        ("idx_banco_horas_usuario", "banco_horas", "usuario"),
+        
+        # Jornada semanal
+        ("idx_jornada_usuario_data", "jornada_semanal", "usuario, data_referencia"),
+    ]
+    
+    for idx_name, table, columns in indices:
+        try:
+            c.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({columns})")
+        except Exception as e:
+            # Ignorar erros de índice já existente ou tabela não existe
+            logger.debug(f"Índice {idx_name}: {e}")
+
     conn.commit()
-    conn.close()
+    return_connection(conn)
 
 
 if __name__ == '__main__':

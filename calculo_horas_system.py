@@ -143,54 +143,127 @@ class CalculoHorasSystem:
                 pass
 
     def calcular_horas_periodo(self, usuario, data_inicio, data_fim):
-        """Calcula horas trabalhadas em um período"""
-        data_atual = datetime.strptime(data_inicio, "%Y-%m-%d").date()
-        data_final = datetime.strptime(data_fim, "%Y-%m-%d").date()
-
-        total_horas = 0
-        total_horas_normais = 0
-        total_horas_extras = 0
-        total_domingos_feriados = 0
-        dias_trabalhados = 0
-
-        detalhes_por_dia = []
-
-        while data_atual <= data_final:
-            calculo_dia = self.calcular_horas_dia(
-                usuario, data_atual.strftime("%Y-%m-%d"))
-
-            # Usar .get para evitar KeyError caso um cálculo retorne menos chaves
-            horas_finais = calculo_dia.get("horas_finais", 0)
-            horas_liquidas = calculo_dia.get("horas_liquidas", 0)
-            eh_domingo = calculo_dia.get("eh_domingo", False)
-            eh_feriado = calculo_dia.get("eh_feriado", False)
-
-            if horas_finais > 0:
-                dias_trabalhados += 1
-                total_horas += horas_finais
-
-                if eh_domingo or eh_feriado:
-                    total_domingos_feriados += horas_liquidas
+        """Calcula horas trabalhadas em um período - OTIMIZADO (uma única query)"""
+        conn = self._get_connection()
+        try:
+            cursor = conn.cursor()
+            
+            # Buscar todos os registros do período de uma vez
+            cursor.execute(f"""
+                SELECT DATE(data_hora) as dia, data_hora, tipo 
+                FROM registros_ponto 
+                WHERE usuario = {SQL_PLACEHOLDER} 
+                AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+                ORDER BY data_hora ASC
+            """, (usuario, data_inicio, data_fim))
+            
+            todos_registros = cursor.fetchall()
+            
+            # Agrupar registros por dia
+            registros_por_dia = {}
+            for row in todos_registros:
+                dia = row[0] if isinstance(row[0], str) else str(row[0])
+                if dia not in registros_por_dia:
+                    registros_por_dia[dia] = []
+                registros_por_dia[dia].append((row[1], row[2]))  # (data_hora, tipo)
+            
+            total_horas = 0
+            total_horas_normais = 0
+            total_domingos_feriados = 0
+            dias_trabalhados = 0
+            detalhes_por_dia = []
+            
+            # Processar cada dia
+            for dia_str, registros in registros_por_dia.items():
+                # Parse da data
+                if isinstance(dia_str, str) and '-' in dia_str:
+                    data_obj = datetime.strptime(dia_str, "%Y-%m-%d").date()
                 else:
-                    total_horas_normais += horas_liquidas
-
-                detalhes_por_dia.append({
-                    "data": data_atual.strftime("%Y-%m-%d"),
-                    "horas": horas_finais,
-                    "tipo": "domingo_feriado" if (eh_domingo or eh_feriado) else "normal",
-                    "detalhes": calculo_dia
-                })
-
-            data_atual += timedelta(days=1)
-
-        return {
-            "total_horas": total_horas,
-            "total_horas_normais": total_horas_normais,
-            "total_domingos_feriados": total_domingos_feriados,
-            "dias_trabalhados": dias_trabalhados,
-            "periodo": {"inicio": data_inicio, "fim": data_fim},
-            "detalhes_por_dia": detalhes_por_dia
-        }
+                    data_obj = date.fromisoformat(str(dia_str))
+                
+                # Verificar se é domingo ou feriado
+                info_dia = eh_dia_com_multiplicador(data_obj)
+                eh_domingo = info_dia.get("eh_domingo", False)
+                eh_feriado = info_dia.get("eh_feriado", False)
+                multiplicador = info_dia.get("multiplicador", 1)
+                
+                # Calcular horas do dia
+                horas_trabalhadas = 0
+                primeiro_inicio = None
+                ultimo_fim = None
+                intervalos = []
+                
+                for data_hora, tipo in registros:
+                    dt = safe_datetime_parse(data_hora)
+                    if dt is None:
+                        continue
+                        
+                    if tipo == "Início":
+                        if primeiro_inicio is None:
+                            primeiro_inicio = dt
+                    elif tipo == "Fim":
+                        ultimo_fim = dt
+                    elif tipo in ("Início Almoço", "Saída"):
+                        intervalos.append(("inicio_intervalo", dt))
+                    elif tipo in ("Fim Almoço", "Retorno"):
+                        intervalos.append(("fim_intervalo", dt))
+                
+                # Calcular tempo
+                if primeiro_inicio and ultimo_fim and ultimo_fim > primeiro_inicio:
+                    horas_trabalhadas = (ultimo_fim - primeiro_inicio).total_seconds() / 3600
+                    
+                    # Descontar intervalos
+                    tempo_intervalos = 0
+                    inicio_intervalo = None
+                    for tipo_int, dt_int in sorted(intervalos, key=lambda x: x[1]):
+                        if tipo_int == "inicio_intervalo":
+                            inicio_intervalo = dt_int
+                        elif tipo_int == "fim_intervalo" and inicio_intervalo:
+                            tempo_intervalos += (dt_int - inicio_intervalo).total_seconds() / 3600
+                            inicio_intervalo = None
+                    
+                    horas_liquidas = max(0, horas_trabalhadas - tempo_intervalos)
+                else:
+                    horas_liquidas = 0
+                
+                horas_finais = horas_liquidas * multiplicador
+                
+                if horas_finais > 0:
+                    dias_trabalhados += 1
+                    total_horas += horas_finais
+                    
+                    if eh_domingo or eh_feriado:
+                        total_domingos_feriados += horas_liquidas
+                    else:
+                        total_horas_normais += horas_liquidas
+                    
+                    detalhes_por_dia.append({
+                        "data": dia_str,
+                        "horas": horas_finais,
+                        "tipo": "domingo_feriado" if (eh_domingo or eh_feriado) else "normal",
+                        "detalhes": {
+                            "horas_trabalhadas": horas_trabalhadas,
+                            "horas_liquidas": horas_liquidas,
+                            "horas_finais": horas_finais,
+                            "multiplicador": multiplicador,
+                            "eh_domingo": eh_domingo,
+                            "eh_feriado": eh_feriado
+                        }
+                    })
+            
+            return {
+                "total_horas": total_horas,
+                "total_horas_normais": total_horas_normais,
+                "total_domingos_feriados": total_domingos_feriados,
+                "dias_trabalhados": dias_trabalhados,
+                "periodo": {"inicio": data_inicio, "fim": data_fim},
+                "detalhes_por_dia": detalhes_por_dia
+            }
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""

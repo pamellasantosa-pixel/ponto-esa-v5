@@ -169,8 +169,11 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# CSS personalizado com novo layout
-st.markdown("""
+# CSS personalizado com novo layout - cacheado como string para melhor performance
+@st.cache_data
+def get_custom_css():
+    """Retorna CSS customizado (cacheado para evitar re-processamento)"""
+    return """
 <style>
     /* Importar fonte */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -357,30 +360,46 @@ st.markdown("""
         color: #721c24;
     }
 </style>
+"""
+
+# Aplicar CSS
+st.markdown(get_custom_css(), unsafe_allow_html=True)
+
+# Obter chave VAPID do ambiente para injetar no JavaScript
+VAPID_PUBLIC_KEY = os.getenv('VAPID_PUBLIC_KEY', '')
+
+# Scripts JS separados para não bloquear renderização
+st.markdown(f"""
 
 <script>
-function updateClock() {
+// Configurar VAPID para Push Notifications
+window.VAPID_CONFIG = {{
+    publicKey: '{VAPID_PUBLIC_KEY}',
+    configured: {str(bool(VAPID_PUBLIC_KEY)).lower()}
+}};
+
+function updateClock() {{
     const now = new Date();
     const dateStr = now.toLocaleDateString('pt-BR');
-    const timeStr = now.toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'});
+    const timeStr = now.toLocaleTimeString('pt-BR', {{hour: '2-digit', minute: '2-digit'}});
     const elements = document.querySelectorAll('.user-info');
-    elements.forEach(el => {
-        if (el.textContent.includes('•')) {
+    elements.forEach(el => {{
+        if (el.textContent.includes('•')) {{
             const parts = el.textContent.split(' • ');
-            if (parts.length === 2) {
+            if (parts.length === 2) {{
                 el.textContent = parts[0] + ' • ' + dateStr + ' ' + timeStr;
-            }
-        }
-    });
-}
+            }}
+        }}
+    }});
+}}
 // Atualizar a cada minuto
 setInterval(updateClock, 60000);
 // Atualizar imediatamente
 updateClock();
 </script>
 
-<!-- Push Notifications Script -->
-<script src="/static/push-notifications.js"></script>
+<!-- Push Notifications Script - Versão Simplificada para Streamlit -->
+<script src="/static/push-simple.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -511,8 +530,9 @@ def verificar_login(usuario, senha):
         return result
 
 
+@st.cache_data(ttl=300)  # Cache de 5 minutos para projetos
 def obter_projetos_ativos():
-    """Obtém lista de projetos ativos"""
+    """Obtém lista de projetos ativos (com cache)"""
     if REFACTORING_ENABLED:
         results = execute_query(
             "SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome"
@@ -618,6 +638,7 @@ def obter_usuarios_para_aprovacao():
         return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
 
 
+@st.cache_data(ttl=120)  # Cache de 2 minutos para usuários
 def obter_usuarios_ativos():
     """Obtém lista de usuários ativos (retorna dicionários com 'usuario' e 'nome_completo')."""
     if REFACTORING_ENABLED:
@@ -1642,74 +1663,81 @@ def aprovar_hora_extra_rapida_interface():
 
 
 def exibir_widget_notificacoes(horas_extras_system):
-    """Exibe widget fixo de notificações pendentes até serem respondidas - COM DETALHES DE HORAS EXTRAS"""
+    """Exibe widget fixo de notificações pendentes até serem respondidas - OTIMIZADO"""
     try:
-        # Buscar todas as notificações pendentes
-        he_pendentes = 0
-        correcoes_pendentes = 0
-        atestados_pendentes = 0
-        solicitacoes_he_detalhes = []
-        
-        if REFACTORING_ENABLED:
-            try:
-                # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
-                solicitacoes_he_detalhes = execute_query(
-                    """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
-                       FROM solicitacoes_horas_extras 
-                       WHERE aprovador_solicitado = %s AND status = 'pendente'
-                       ORDER BY data_solicitacao DESC""",
-                    (st.session_state.usuario,)
-                ) or []
+        # ⚡ OTIMIZAÇÃO: Usar cache para buscar notificações
+        try:
+            from db_optimized import get_notificacoes_funcionario, get_solicitacoes_he_pendentes
+            
+            notif = get_notificacoes_funcionario(st.session_state.usuario)
+            he_pendentes = notif["he_aprovar"]
+            correcoes_pendentes = notif["correcoes_pendentes"]
+            atestados_pendentes = notif["atestados_pendentes"]
+            
+            # Buscar detalhes apenas se houver HE pendentes
+            solicitacoes_he_detalhes = []
+            if he_pendentes > 0:
+                solicitacoes_he_detalhes = get_solicitacoes_he_pendentes(st.session_state.usuario)
+            
+        except ImportError:
+            # Fallback para queries sem cache
+            he_pendentes = 0
+            correcoes_pendentes = 0
+            atestados_pendentes = 0
+            solicitacoes_he_detalhes = []
+            
+            if REFACTORING_ENABLED:
+                try:
+                    solicitacoes_he_detalhes = execute_query(
+                        """SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                           FROM solicitacoes_horas_extras 
+                           WHERE aprovador_solicitado = %s AND status = 'pendente'
+                           ORDER BY data_solicitacao DESC""",
+                        (st.session_state.usuario,)
+                    ) or []
+                    he_pendentes = len(solicitacoes_he_detalhes)
+                    
+                    result_corr = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    correcoes_pendentes = result_corr[0] if result_corr else 0
+                    
+                    result_at = execute_query(
+                        "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    atestados_pendentes = result_at[0] if result_at else 0
+                except Exception as e:
+                    log_error("Erro ao buscar notificações pendentes", e, {"usuario": st.session_state.usuario})
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
+                
+                cursor.execute("""
+                    SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
+                    FROM solicitacoes_horas_extras 
+                    WHERE aprovador_solicitado = %s AND status = 'pendente'
+                    ORDER BY data_solicitacao DESC
+                """, (st.session_state.usuario,))
+                solicitacoes_he_detalhes = cursor.fetchall()
                 he_pendentes = len(solicitacoes_he_detalhes)
                 
-                # Solicitações de correção de registro pendentes (enviadas pelo usuário)
-                result_corr = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                correcoes_pendentes = result_corr[0] if result_corr else 0
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                correcoes_pendentes = cursor.fetchone()[0]
                 
-                # Atestados de horas pendentes (enviados pelo usuário)
-                result_at = execute_query(
-                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                atestados_pendentes = result_at[0] if result_at else 0
-            except Exception as e:
-                log_error("Erro ao buscar notificações pendentes", e, {"usuario": st.session_state.usuario})
-                he_pendentes = correcoes_pendentes = atestados_pendentes = 0
-        else:
-            # Buscar todas as notificações pendentes
-            conn = get_connection()
-            cursor = conn.cursor()
-            
-            # Solicitações de horas extras pendentes (para aprovar) - COM DETALHES
-            cursor.execute("""
-                SELECT id, usuario, data, hora_inicio, hora_fim, total_horas, justificativa, data_solicitacao
-                FROM solicitacoes_horas_extras 
-                WHERE aprovador_solicitado = %s AND status = 'pendente'
-                ORDER BY data_solicitacao DESC
-            """, (st.session_state.usuario,))
-            solicitacoes_he_detalhes = cursor.fetchall()
-            he_pendentes = len(solicitacoes_he_detalhes)
-            
-            # Solicitações de correção de registro pendentes (enviadas pelo usuário)
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            correcoes_pendentes = cursor.fetchone()[0]
-            
-            # Atestados de horas pendentes (enviados pelo usuário)
-            cursor.execute("""
-                SELECT COUNT(*) FROM atestado_horas 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            atestados_pendentes = cursor.fetchone()[0]
-            
-            conn.close()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM atestado_horas 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                atestados_pendentes = cursor.fetchone()[0]
+                
+                conn.close()
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
@@ -1747,7 +1775,17 @@ def exibir_widget_notificacoes(horas_extras_system):
             
             # Mostrar detalhes de cada solicitação pendente
             for sol in solicitacoes_he_detalhes:
-                sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
+                # Suportar tanto dicionário (cache) quanto tuple (fallback)
+                if isinstance(sol, dict):
+                    sol_id = sol["id"]
+                    sol_usuario = sol["usuario"]
+                    sol_data = sol["data"]
+                    sol_h_inicio = sol["hora_inicio"]
+                    sol_h_fim = sol["hora_fim"]
+                    sol_total = sol["total_horas"]
+                    sol_just = sol["justificativa"]
+                else:
+                    sol_id, sol_usuario, sol_data, sol_h_inicio, sol_h_fim, sol_total, sol_just, sol_data_sol = sol
                 
                 # Buscar nome do solicitante
                 nome_solicitante = sol_usuario
@@ -1885,7 +1923,7 @@ def exibir_widget_notificacoes(horas_extras_system):
 
 # Interface principal do funcionário
 def tela_funcionario():
-    """Interface principal para funcionários"""
+    """Interface principal para funcionários - OTIMIZADO"""
     atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system = init_systems()
 
     # Header
@@ -1909,63 +1947,66 @@ def tela_funcionario():
     with st.sidebar:
         st.markdown("### 📋 Menu Principal")
 
-        # Contar todas as notificações pendentes
-        if REFACTORING_ENABLED:
-            try:
-                # Horas extras para aprovar
-                result_he = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                he_aprovar = result_he[0] if result_he else 0
+        # ⚡ OTIMIZAÇÃO: Usar cache para contagem de notificações
+        try:
+            from db_optimized import get_notificacoes_funcionario
+            notif = get_notificacoes_funcionario(st.session_state.usuario)
+            he_aprovar = notif["he_aprovar"]
+            correcoes_pendentes = notif["correcoes_pendentes"]
+            atestados_pendentes = notif["atestados_pendentes"]
+            total_notif = notif["total"]
+        except ImportError:
+            # Fallback para queries sem cache
+            if REFACTORING_ENABLED:
+                try:
+                    result_he = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    he_aprovar = result_he[0] if result_he else 0
+                    
+                    result_corr = execute_query(
+                        "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    correcoes_pendentes = result_corr[0] if result_corr else 0
+                    
+                    result_at = execute_query(
+                        "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
+                        (st.session_state.usuario,),
+                        fetch_one=True
+                    )
+                    atestados_pendentes = result_at[0] if result_at else 0
+                except Exception as e:
+                    log_error("Erro ao contar notificações da sidebar", e, {"usuario": st.session_state.usuario})
+                    he_aprovar = correcoes_pendentes = atestados_pendentes = 0
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
                 
-                # Solicitações de correção do usuário
-                result_corr = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                correcoes_pendentes = result_corr[0] if result_corr else 0
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_horas_extras 
+                    WHERE aprovador_solicitado = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                he_aprovar = cursor.fetchone()[0]
                 
-                # Atestados pendentes
-                result_at = execute_query(
-                    "SELECT COUNT(*) FROM atestado_horas WHERE usuario = %s AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                atestados_pendentes = result_at[0] if result_at else 0
-            except Exception as e:
-                log_error("Erro ao contar notificações da sidebar", e, {"usuario": st.session_state.usuario})
-                he_aprovar = correcoes_pendentes = atestados_pendentes = 0
-        else:
-            conn = get_connection()
-            cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM solicitacoes_correcao_registro 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                correcoes_pendentes = cursor.fetchone()[0]
+                
+                cursor.execute("""
+                    SELECT COUNT(*) FROM atestado_horas 
+                    WHERE usuario = %s AND status = 'pendente'
+                """, (st.session_state.usuario,))
+                atestados_pendentes = cursor.fetchone()[0]
+                
+                conn.close()
             
-            # Horas extras para aprovar
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                WHERE aprovador_solicitado = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            he_aprovar = cursor.fetchone()[0]
-            
-            # Solicitações de correção do usuário
-            cursor.execute("""
-                SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            correcoes_pendentes = cursor.fetchone()[0]
-            
-            # Atestados pendentes
-            cursor.execute("""
-                SELECT COUNT(*) FROM atestado_horas 
-                WHERE usuario = %s AND status = 'pendente'
-            """, (st.session_state.usuario,))
-            atestados_pendentes = cursor.fetchone()[0]
-            
-            conn.close()
-        
-        total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
+            total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
 
         # CSS para badges
         st.markdown("""
@@ -2014,6 +2055,106 @@ def tela_funcionario():
                 if opcao.split('🔴')[0].strip() == opt.split('🔴')[0].strip():
                     st.session_state.menu_func_index = i
                     break
+
+        st.markdown("---")
+        
+        # Botão para ativar notificações push
+        st.markdown("#### 🔔 Notificações Push")
+        
+        # Verificar se push está configurado
+        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+        if vapid_key:
+            st.components.v1.html(f"""
+            <div id="push-status-sidebar" style="margin: 10px 0; font-size: 13px;">
+                <button id="btn-push-enable" onclick="enablePushNotifications()" style="
+                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                    color: white;
+                    border: none;
+                    padding: 10px 16px;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    cursor: pointer;
+                    width: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                ">
+                    <span>🔔</span>
+                    <span>Ativar Lembretes</span>
+                </button>
+                <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
+            </div>
+            <script>
+            async function enablePushNotifications() {{
+                const btn = document.getElementById('btn-push-enable');
+                const msg = document.getElementById('push-msg');
+                
+                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
+                    setTimeout(enablePushNotifications, 1000);
+                    return;
+                }}
+                
+                const state = PontoESA.Push.getState();
+                
+                if (state.isSubscribed) {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    return;
+                }}
+                
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    
+                    if (result.success) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    }}
+                }} catch (e) {{
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
+                }}
+            }}
+            
+            // Verificar status inicial após carregar
+            setTimeout(function() {{
+                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
+                    const state = PontoESA.Push.getState();
+                    const btn = document.getElementById('btn-push-enable');
+                    const msg = document.getElementById('push-msg');
+                    
+                    if (state.isSubscribed) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    }} else if (!state.isSupported) {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    }} else if (Notification.permission === 'denied') {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                    }}
+                }}
+            }}, 1500);
+            </script>
+            """, height=90)
+        else:
+            st.caption("⚠️ Push não configurado")
+
+        st.markdown("---")
 
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
@@ -2421,88 +2562,123 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     st.subheader("➕ Novo Registro")
     
-    # GPS: Injetar JavaScript para captura de coordenadas
+    # GPS: Injetar JavaScript para captura de coordenadas - OTIMIZADO
     gps_js = """
     <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
-        <div style="padding: 8px; background: #f0f2f6; border-radius: 8px; text-align: center;">
+        <div style="padding: 8px; background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); border-radius: 8px; text-align: center;">
             📍 Obtendo localização GPS...
         </div>
     </div>
     <script>
     (function() {
-        // Função para enviar coordenadas para o Streamlit
-        function sendToStreamlit(lat, lng, accuracy) {
-            // Usar postMessage para comunicar com Streamlit
-            const data = {
-                isStreamlitMessage: true,
-                type: 'streamlit:setComponentValue',
-                data: {latitude: lat, longitude: lng, accuracy: accuracy}
-            };
+        // Verificar cache primeiro para resposta instantânea
+        const cachedLat = sessionStorage.getItem('gps_latitude');
+        const cachedLng = sessionStorage.getItem('gps_longitude');
+        const cachedAcc = sessionStorage.getItem('gps_accuracy');
+        const cachedTime = sessionStorage.getItem('gps_timestamp');
+        
+        // Usar cache se menos de 2 minutos (120000ms)
+        const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
+        
+        function fillInputs(lat, lng) {
+            // Buscar campos GPS pelo placeholder específico
+            const latField = document.querySelector('input[placeholder="GPS Lat"]');
+            const lngField = document.querySelector('input[placeholder="GPS Lng"]');
             
-            // Armazenar no sessionStorage para persistência
-            sessionStorage.setItem('gps_latitude', lat);
-            sessionStorage.setItem('gps_longitude', lng);
-            sessionStorage.setItem('gps_accuracy', accuracy);
-            sessionStorage.setItem('gps_timestamp', Date.now());
-            
-            // Atualizar campos ocultos se existirem
-            setTimeout(function() {
-                const inputs = document.querySelectorAll('input[type="text"]');
-                inputs.forEach(function(input) {
-                    const container = input.closest('.stTextInput');
-                    if (container) {
-                        const label = container.querySelector('label');
-                        if (label) {
-                            if (label.textContent.includes('GPS_LAT')) {
-                                input.value = lat.toString();
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                            if (label.textContent.includes('GPS_LNG')) {
-                                input.value = lng.toString();
-                                input.dispatchEvent(new Event('input', { bubbles: true }));
-                                input.dispatchEvent(new Event('change', { bubbles: true }));
-                            }
-                        }
-                    }
-                });
-            }, 500);
+            if (latField && lngField) {
+                // Preencher latitude
+                latField.value = lat.toString();
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                latField.dispatchEvent(new Event('change', { bubbles: true }));
+                // Disparo adicional para Streamlit
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeInputValueSetter.call(latField, lat.toString());
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                // Preencher longitude
+                lngField.value = lng.toString();
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                lngField.dispatchEvent(new Event('change', { bubbles: true }));
+                nativeInputValueSetter.call(lngField, lng.toString());
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                console.log('GPS fields filled:', lat, lng);
+            } else {
+                console.log('GPS fields not found. Looking for:', 'input[placeholder="GPS Lat"]', 'input[placeholder="GPS Lng"]');
+            }
         }
         
         function updateGpsStatus(success, message) {
             const gpsDiv = document.getElementById('gps-status');
             if (gpsDiv) {
                 if (success) {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #d4edda; border-radius: 8px; color: #155724; text-align: center;">✅ ' + message + '</div>';
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%); border-radius: 8px; color: #1b5e20; text-align: center; font-weight: 500;">✅ ' + message + '</div>';
                 } else {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: #fff3cd; border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #fff3cd 0%, #ffe082 100%); border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
                 }
             }
         }
         
+        // Se cache válido, usar imediatamente enquanto atualiza em background
+        if (cacheValid && cachedLat && cachedLng) {
+            updateGpsStatus(true, 'GPS: ' + parseFloat(cachedLat).toFixed(6) + ', ' + parseFloat(cachedLng).toFixed(6) + ' (±' + Math.round(cachedAcc || 0) + 'm)');
+            setTimeout(() => fillInputs(cachedLat, cachedLng), 300);
+        }
+        
         if (navigator.geolocation) {
+            // Opções otimizadas: timeout menor, aceita cache recente
+            const options = {
+                enableHighAccuracy: false,  // Primeiro, posição rápida
+                timeout: 5000,              // 5 segundos max
+                maximumAge: 120000          // Aceita cache de 2 min
+            };
+            
             navigator.geolocation.getCurrentPosition(
                 function(position) {
                     const lat = position.coords.latitude;
                     const lng = position.coords.longitude;
                     const acc = position.coords.accuracy;
                     
-                    sendToStreamlit(lat, lng, acc);
+                    // Salvar no cache
+                    sessionStorage.setItem('gps_latitude', lat);
+                    sessionStorage.setItem('gps_longitude', lng);
+                    sessionStorage.setItem('gps_accuracy', acc);
+                    sessionStorage.setItem('gps_timestamp', Date.now());
+                    
                     updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
+                    setTimeout(() => fillInputs(lat, lng), 300);
+                    
+                    // Se precisão ruim, tentar alta precisão em background
+                    if (acc > 100) {
+                        navigator.geolocation.getCurrentPosition(
+                            function(p) {
+                                if (p.coords.accuracy < acc) {
+                                    sessionStorage.setItem('gps_latitude', p.coords.latitude);
+                                    sessionStorage.setItem('gps_longitude', p.coords.longitude);
+                                    sessionStorage.setItem('gps_accuracy', p.coords.accuracy);
+                                    sessionStorage.setItem('gps_timestamp', Date.now());
+                                    updateGpsStatus(true, 'GPS: ' + p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) + ' (±' + Math.round(p.coords.accuracy) + 'm)');
+                                    fillInputs(p.coords.latitude, p.coords.longitude);
+                                }
+                            },
+                            function() {},
+                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                        );
+                    }
                 },
                 function(error) {
                     console.log('GPS Error:', error.message);
                     sessionStorage.setItem('gps_error', error.message);
-                    updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                    if (!cacheValid) {
+                        updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                    }
                 },
-                {
-                    enableHighAccuracy: true,
-                    timeout: 15000,
-                    maximumAge: 60000
-                }
+                options
             );
         } else {
-            updateGpsStatus(false, 'Navegador não suporta GPS');
+            if (!cacheValid) {
+                updateGpsStatus(false, 'Navegador não suporta GPS');
+            }
         }
     })();
     </script>
@@ -2574,11 +2750,17 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
         # Campos ocultos para capturar GPS via JavaScript
         # Esses campos são preenchidos automaticamente pelo JavaScript
+        # Usar session_state para persistir valores do GPS
+        if 'gps_lat_value' not in st.session_state:
+            st.session_state.gps_lat_value = ""
+        if 'gps_lng_value' not in st.session_state:
+            st.session_state.gps_lng_value = ""
+        
         col_gps1, col_gps2 = st.columns(2)
         with col_gps1:
-            gps_lat_input = st.text_input("GPS_LAT", value="", key="gps_lat_field", label_visibility="collapsed")
+            gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
         with col_gps2:
-            gps_lng_input = st.text_input("GPS_LNG", value="", key="gps_lng_field", label_visibility="collapsed")
+            gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
 
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
@@ -4472,7 +4654,7 @@ def corrigir_registros_interface():
 
 
 def meus_registros_interface(calculo_horas_system):
-    """Interface para visualizar registros com cálculos"""
+    """Interface para visualizar registros com cálculos - OTIMIZADA"""
     st.markdown("""
     <div class="feature-card">
         <h3>📋 Meus Registros</h3>
@@ -4484,14 +4666,14 @@ def meus_registros_interface(calculo_horas_system):
     col1, col2, col3 = st.columns(3)
     with col1:
         data_inicio = st.date_input(
-            "Data Início", value=date.today() - timedelta(days=30))
+            "Data Início", value=date.today() - timedelta(days=7))  # Reduzido para 7 dias por padrão
     with col2:
         data_fim = st.date_input("Data Fim", value=date.today())
     with col3:
         projeto_filtro = st.selectbox(
             "Projeto", ["Todos"] + obter_projetos_ativos())
 
-    # Calcular horas do período
+    # Calcular horas do período (usa cache)
     calculo_periodo = calculo_horas_system.calcular_horas_periodo(
         st.session_state.usuario,
         data_inicio.strftime("%Y-%m-%d"),
@@ -4531,79 +4713,14 @@ def meus_registros_interface(calculo_horas_system):
         # Formatar dados para exibição
         df['Data'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%d/%m/%Y')
         df['Hora'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%H:%M')
-        df['DataObj'] = pd.to_datetime(df['Data/Hora']).dt.date
         
-        # Adicionar informação de multiplicador para cada dia
-        from calculo_horas_system import eh_dia_com_multiplicador
-        
-        def get_badge_dia(data_obj):
-            info = eh_dia_com_multiplicador(data_obj)
-            if info['tem_multiplicador']:
-                if info['eh_domingo'] and info['eh_feriado']:
-                    return f"🎉📅 {info['nome_feriado']} (DOMINGO) - x2"
-                elif info['eh_domingo']:
-                    return "📅 DOMINGO - Horas em DOBRO (x2)"
-                elif info['eh_feriado']:
-                    return f"🎉 FERIADO: {info['nome_feriado']} - Horas em DOBRO (x2)"
-            return ""
-        
-        # Agrupar por data e exibir com destaque
-        st.markdown("### 📅 Registros Detalhados por Dia")
-        
-        for data_unica in df['DataObj'].unique():
-            registros_dia = df[df['DataObj'] == data_unica]
-            data_formatada = registros_dia.iloc[0]['Data']
-            
-            # Verificar se tem multiplicador
-            badge = get_badge_dia(data_unica)
-            
-            if badge:
-                # Exibir com destaque
-                st.markdown(f"#### {data_formatada}")
-                st.warning(f"**{badge}**")
-            else:
-                st.markdown(f"#### {data_formatada}")
-            
-            # Exibir registros do dia
-            st.dataframe(
-                registros_dia[['Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade']],
-                use_container_width=True,
-                hide_index=True
-            )
-            
-            # Calcular horas do dia
-            calculo_dia = calculo_horas_system.calcular_horas_dia(
-                st.session_state.usuario,
-                data_unica.strftime("%Y-%m-%d")
-            )
-            
-            col1, col2, col3 = st.columns(3)
-            with col1:
-                st.metric("⏱️ Horas Trabalhadas", 
-                         format_time_duration(calculo_dia.get("horas_trabalhadas", 0)))
-            with col2:
-                st.metric("💼 Horas Líquidas", 
-                         format_time_duration(calculo_dia.get("horas_liquidas", 0)))
-            with col3:
-                multiplicador = calculo_dia.get("multiplicador", 1)
-                horas_finais = calculo_dia.get("horas_finais", 0)
-                if multiplicador > 1:
-                    st.metric("✨ Total Contabilizado", 
-                             format_time_duration(horas_finais),
-                             delta=f"x{multiplicador}")
-                else:
-                    st.metric("📊 Total Contabilizado", 
-                             format_time_duration(horas_finais))
-            
-            st.markdown("---")
-
-        # Exibir tabela completa (versão antiga mantida para referência)
-        with st.expander("📊 Ver Tabela Completa (Todos os Registros)"):
-            st.dataframe(
-                df[['Data', 'Hora', 'Tipo', 'Modalidade',
-                    'Projeto', 'Atividade', 'Localização']],
-                use_container_width=True
-            )
+        # Exibir tabela simples e rápida
+        st.markdown("### 📅 Registros do Período")
+        st.dataframe(
+            df[['Data', 'Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização']],
+            use_container_width=True,
+            hide_index=True
+        )
 
         # Botão de exportação
         if st.button("📊 Exportar para Excel"):
@@ -4920,6 +5037,105 @@ def tela_gestor():
                     st.session_state.menu_gestor_index = i
                     break
 
+        st.markdown("---")
+        
+        # Botão para ativar notificações push (gestor também)
+        st.markdown("#### 🔔 Notificações Push")
+        
+        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+        if vapid_key:
+            st.components.v1.html(f"""
+            <div id="push-status-sidebar-gestor" style="margin: 10px 0; font-size: 13px;">
+                <button id="btn-push-enable-gestor" onclick="enablePushNotificationsGestor()" style="
+                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
+                    color: white;
+                    border: none;
+                    padding: 10px 16px;
+                    border-radius: 8px;
+                    font-size: 13px;
+                    cursor: pointer;
+                    width: 100%;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    gap: 8px;
+                ">
+                    <span>🔔</span>
+                    <span>Ativar Lembretes</span>
+                </button>
+                <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
+            </div>
+            <script>
+            async function enablePushNotificationsGestor() {{
+                const btn = document.getElementById('btn-push-enable-gestor');
+                const msg = document.getElementById('push-msg-gestor');
+                
+                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
+                    setTimeout(enablePushNotificationsGestor, 1000);
+                    return;
+                }}
+                
+                const state = PontoESA.Push.getState();
+                
+                if (state.isSubscribed) {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    return;
+                }}
+                
+                btn.disabled = true;
+                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    
+                    if (result.success) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    }}
+                }} catch (e) {{
+                    btn.disabled = false;
+                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
+                }}
+            }}
+            
+            // Verificar status inicial
+            setTimeout(function() {{
+                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
+                    const state = PontoESA.Push.getState();
+                    const btn = document.getElementById('btn-push-enable-gestor');
+                    const msg = document.getElementById('push-msg-gestor');
+                    
+                    if (state.isSubscribed) {{
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                    }} else if (!state.isSupported) {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    }} else if (Notification.permission === 'denied') {{
+                        btn.disabled = true;
+                        btn.style.opacity = '0.5';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                    }}
+                }}
+            }}, 1500);
+            </script>
+            """, height=90)
+        else:
+            st.caption("⚠️ Push não configurado")
+
+        st.markdown("---")
+
         if st.button("🚪 Sair", use_container_width=True):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
@@ -4957,23 +5173,45 @@ def tela_gestor():
 
 
 def dashboard_gestor(banco_horas_system, calculo_horas_system):
-    """Dashboard principal do gestor com destaque para discrepâncias"""
-    st.markdown("""
-    <div class="feature-card">
-        <h3>📊 Dashboard Executivo</h3>
-        <p>Visão geral do sistema de ponto com alertas</p>
-    </div>
-    """, unsafe_allow_html=True)
-
-    # Métricas gerais com tratamento robusto de erros
-    total_usuarios = 0
-    registros_hoje = 0
-    ausencias_pendentes = 0
-    horas_extras_pendentes = 0
-    atestados_mes = 0
+    """Dashboard principal do gestor com gráficos avançados Plotly - OTIMIZADO"""
+    
+    # Importar módulo de dashboard com gráficos
+    try:
+        from dashboard_charts import (
+            render_dashboard_executivo, get_dashboard_data_from_db,
+            create_donut_chart, create_line_chart, create_bar_chart,
+            create_card_metric, create_gauge_chart, THEME_COLORS
+        )
+        CHARTS_ENABLED = True
+    except ImportError:
+        CHARTS_ENABLED = False
+    
+    # ⚡ OTIMIZAÇÃO: Usar módulo com cache e connection pooling
+    try:
+        from db_optimized import get_metricas_dashboard_otimizado, get_registros_semana, get_ausencias_por_tipo
+        USE_OPTIMIZED = True
+    except ImportError:
+        USE_OPTIMIZED = False
+    
+    # Métricas gerais - OTIMIZADO COM CACHE
     hoje = date.today().strftime("%Y-%m-%d")
     
-    if REFACTORING_ENABLED:
+    if USE_OPTIMIZED:
+        # 🚀 Busca todas as métricas de uma vez com cache
+        metricas = get_metricas_dashboard_otimizado()
+        total_usuarios = metricas["total_usuarios"]
+        registros_hoje = metricas["registros_hoje"]
+        ausencias_pendentes = metricas["ausencias_pendentes"]
+        horas_extras_pendentes = metricas["horas_extras_pendentes"]
+        atestados_mes = metricas["atestados_mes"]
+    elif REFACTORING_ENABLED:
+        # Fallback para queries individuais (mais lento)
+        total_usuarios = 0
+        registros_hoje = 0
+        ausencias_pendentes = 0
+        horas_extras_pendentes = 0
+        atestados_mes = 0
+        
         try:
             # Total de usuários ativos
             query_usuarios = "SELECT COUNT(*) FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario'"
@@ -4982,7 +5220,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 total_usuarios = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar total de usuários", e, {"context": "dashboard_gestor"})
-            st.error(f"Erro ao buscar total de usuários: {e}")
 
         try:
             # Registros hoje
@@ -4992,7 +5229,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 registros_hoje = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar registros de hoje", e, {"data": hoje})
-            st.error(f"Erro ao buscar registros de hoje: {e}")
 
         try:
             # Ausências pendentes
@@ -5002,7 +5238,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 ausencias_pendentes = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar ausências pendentes", e, {"status": "pendente"})
-            st.error(f"Erro ao buscar ausências pendentes: {e}")
 
         try:
             # Horas extras pendentes
@@ -5012,7 +5247,6 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 horas_extras_pendentes = resultado[0]
         except Exception as e:
             log_error("Erro ao buscar horas extras pendentes", e, {"status": "pendente"})
-            st.error(f"Erro ao buscar horas extras pendentes: {e}")
 
         try:
             # Atestados do mês
@@ -5082,17 +5316,218 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
 
         conn.close()
 
-    col1, col2, col3, col4, col5 = st.columns(5)
-    with col1:
-        st.metric("👥 Funcionários", total_usuarios)
-    with col2:
-        st.metric("📊 Registros Hoje", registros_hoje)
-    with col3:
-        st.metric("⏳ Ausências Pendentes", ausencias_pendentes)
-    with col4:
-        st.metric("🕐 Horas Extras Pendentes", horas_extras_pendentes)
-    with col5:
-        st.metric("🏥 Atestados do Mês", atestados_mes)
+    # ===== DASHBOARD COM GRÁFICOS PLOTLY =====
+    if CHARTS_ENABLED:
+        # Header estilizado
+        st.markdown(f"""
+        <div style="
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            padding: 30px;
+            border-radius: 15px;
+            color: white;
+            margin-bottom: 30px;
+            text-align: center;
+        ">
+            <h1 style="margin: 0; color: white;">📊 Dashboard Executivo</h1>
+            <p style="margin: 10px 0 0 0; opacity: 0.9;">Atualizado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        # CSS para estilizar os metrics cards
+        st.markdown("""
+        <style>
+        [data-testid="stMetric"] {
+            background: linear-gradient(135deg, #f8f9fa 0%, #e9ecef 100%);
+            border-radius: 12px;
+            padding: 15px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+            border-left: 4px solid #667eea;
+        }
+        [data-testid="stMetric"]:nth-child(1) { border-left-color: #667eea; }
+        [data-testid="stMetric"]:nth-child(2) { border-left-color: #28a745; }
+        [data-testid="stMetric"]:nth-child(3) { border-left-color: #ffc107; }
+        [data-testid="stMetric"]:nth-child(4) { border-left-color: #17a2b8; }
+        [data-testid="stMetricLabel"] { font-size: 14px !important; }
+        [data-testid="stMetricValue"] { font-size: 28px !important; font-weight: bold; }
+        </style>
+        """, unsafe_allow_html=True)
+        
+        # Cards de métricas usando st.metric nativo (mais confiável)
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            st.metric(label="👥 Funcionários Ativos", value=total_usuarios)
+        
+        with col2:
+            st.metric(label="📝 Registros Hoje", value=registros_hoje)
+        
+        with col3:
+            pendencias_total = ausencias_pendentes + horas_extras_pendentes
+            st.metric(label="⏳ Pendências", value=pendencias_total)
+        
+        with col4:
+            st.metric(label="🏥 Atestados (mês)", value=atestados_mes)
+        
+        st.markdown("---")
+        
+        # Gráficos lado a lado
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Gráfico de Rosca - Status de presença
+            # Calcular presentes hoje
+            presentes_hoje = 0
+            if REFACTORING_ENABLED:
+                try:
+                    query_presentes = """
+                        SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto 
+                        WHERE DATE(data_hora) = %s
+                    """
+                    resultado = execute_query(query_presentes, (hoje,), fetch_one=True)
+                    if resultado:
+                        presentes_hoje = resultado[0]
+                except Exception as e:
+                    pass
+            
+            ausentes = max(0, total_usuarios - presentes_hoje)
+            
+            if total_usuarios > 0:
+                fig = create_donut_chart(
+                    labels=['Presentes', 'Ausentes'],
+                    values=[presentes_hoje, ausentes],
+                    title="📍 Status de Presença Hoje",
+                    colors=[THEME_COLORS['success'], THEME_COLORS['danger']]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        
+        with col2:
+            # Gauge de taxa de registros
+            taxa_pontualidade = (presentes_hoje / total_usuarios * 100) if total_usuarios > 0 else 0
+            fig = create_gauge_chart(
+                value=taxa_pontualidade,
+                max_value=100,
+                title="⏱️ Taxa de Presença",
+                suffix="%",
+                color_ranges=[
+                    {'range': [0, 60], 'color': THEME_COLORS['danger']},
+                    {'range': [60, 80], 'color': THEME_COLORS['warning']},
+                    {'range': [80, 100], 'color': THEME_COLORS['success']}
+                ]
+            )
+            st.plotly_chart(fig, use_container_width=True)
+        
+        # Gráfico de linha - Registros últimos 7 dias
+        datas_semana = []
+        valores_semana = []
+        for i in range(6, -1, -1):
+            data_check = (date.today() - timedelta(days=i)).strftime("%Y-%m-%d")
+            count_dia = 0
+            if REFACTORING_ENABLED:
+                try:
+                    query_dia = "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s"
+                    resultado = execute_query(query_dia, (data_check,), fetch_one=True)
+                    if resultado:
+                        count_dia = resultado[0]
+                except Exception:
+                    pass
+            datas_semana.append((date.today() - timedelta(days=i)).strftime("%d/%m"))
+            valores_semana.append(count_dia)
+        
+        fig = create_line_chart(
+            x_data=datas_semana,
+            y_data=valores_semana,
+            title="📈 Registros de Ponto - Últimos 7 Dias",
+            x_label="Data",
+            y_label="Registros",
+            fill=True
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Gráficos de barras
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            # Tipos de ausências no mês
+            ausencias_por_tipo = {}
+            primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
+            if REFACTORING_ENABLED:
+                try:
+                    query_tipos = """
+                        SELECT tipo, COUNT(*) as total FROM ausencias 
+                        WHERE data_inicio >= %s 
+                        GROUP BY tipo
+                    """
+                    resultados = execute_query(query_tipos, (primeiro_dia_mes,), fetch_all=True)
+                    if resultados:
+                        for row in resultados:
+                            ausencias_por_tipo[row[0][:20]] = row[1]  # Truncar nome
+                except Exception:
+                    pass
+            
+            if ausencias_por_tipo:
+                fig = create_bar_chart(
+                    x_data=list(ausencias_por_tipo.keys()),
+                    y_data=list(ausencias_por_tipo.values()),
+                    title="🏥 Ausências por Tipo (Mês)",
+                    x_label="Tipo",
+                    y_label="Quantidade",
+                    color_scale="Plasma"
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Sem dados de ausências no mês")
+        
+        with col2:
+            # Status das solicitações
+            status_counts = {'Pendente': 0, 'Aprovado': 0, 'Rejeitado': 0}
+            if REFACTORING_ENABLED:
+                try:
+                    query_status = """
+                        SELECT status, COUNT(*) FROM ausencias 
+                        WHERE data_inicio >= %s 
+                        GROUP BY status
+                    """
+                    resultados = execute_query(query_status, (primeiro_dia_mes,), fetch_all=True)
+                    if resultados:
+                        for row in resultados:
+                            if row[0] in status_counts:
+                                status_counts[row[0].capitalize()] = row[1]
+                except Exception:
+                    pass
+            
+            if any(status_counts.values()):
+                fig = create_donut_chart(
+                    labels=list(status_counts.keys()),
+                    values=list(status_counts.values()),
+                    title="📋 Status de Solicitações (Mês)",
+                    colors=[THEME_COLORS['warning'], THEME_COLORS['success'], THEME_COLORS['danger']]
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            else:
+                st.info("📊 Sem solicitações no mês")
+        
+        st.markdown("---")
+    
+    else:
+        # Fallback para métricas simples se Plotly não disponível
+        st.markdown("""
+        <div class="feature-card">
+            <h3>📊 Dashboard Executivo</h3>
+            <p>Visão geral do sistema de ponto com alertas</p>
+        </div>
+        """, unsafe_allow_html=True)
+        
+        col1, col2, col3, col4, col5 = st.columns(5)
+        with col1:
+            st.metric("👥 Funcionários", total_usuarios)
+        with col2:
+            st.metric("📊 Registros Hoje", registros_hoje)
+        with col3:
+            st.metric("⏳ Ausências Pendentes", ausencias_pendentes)
+        with col4:
+            st.metric("🕐 Horas Extras Pendentes", horas_extras_pendentes)
+        with col5:
+            st.metric("🏥 Atestados do Mês", atestados_mes)
 
     # Destaque para horários discrepantes
     st.subheader("⚠️ Alertas de Discrepâncias (>Tolerância configurada)")
@@ -6765,11 +7200,25 @@ def todos_registros_interface(calculo_horas_system):
 
                     with col3:
                         if reg['latitude'] and reg['longitude']:
-                            st.markdown(
-                                f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
-                            # Link para Google Maps
-                            maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
-                            st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
+                            # Importar módulo de geocodificação
+                            try:
+                                from geocoding import formatar_localizacao_gestor
+                                loc = formatar_localizacao_gestor(reg['latitude'], reg['longitude'], reg['localizacao'])
+                                
+                                if loc["endereco"]:
+                                    st.markdown(f"📍 **{loc['endereco']}**")
+                                else:
+                                    st.markdown(f"📍 GPS: {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                                
+                                # Link para Google Maps
+                                if loc["maps_url"]:
+                                    st.markdown(f"[🗺️ Ver no Mapa]({loc['maps_url']})")
+                            except ImportError:
+                                # Fallback se módulo não disponível
+                                st.markdown(
+                                    f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
+                                maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
+                                st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
                         else:
                             st.markdown("📍 **GPS:** Não disponível")
 
@@ -7734,6 +8183,9 @@ def gerenciar_usuarios_interface():
                 novo_cpf = st.text_input(
                     "CPF:*", placeholder="Ex: 123.456.789-00",
                     help="Digite o CPF com ou sem pontuação")
+                novo_email = st.text_input(
+                    "E-mail:*", placeholder="Ex: joao.silva@empresa.com",
+                    help="E-mail obrigatório para recuperação de senha e notificações")
                 nova_senha = st.text_input("Senha:*", type="password")
 
             with col2:
@@ -7765,21 +8217,93 @@ def gerenciar_usuarios_interface():
                 "➕ Cadastrar Usuário", use_container_width=True)
 
             if submitted:
-                # Função para validar e limpar CPF
-                def validar_cpf(cpf):
+                # ============================================
+                # FUNÇÃO DE VALIDAÇÃO COMPLETA DE CPF
+                # Implementa algoritmo oficial da Receita Federal
+                # ============================================
+                def validar_cpf(cpf: str) -> tuple:
+                    """
+                    Valida CPF usando o algoritmo oficial dos dígitos verificadores.
+                    
+                    Args:
+                        cpf: String do CPF (com ou sem formatação)
+                        
+                    Returns:
+                        Tuple (cpf_limpo, is_valid, mensagem_erro)
+                    """
                     # Remove caracteres não numéricos
                     cpf_limpo = ''.join(filter(str.isdigit, cpf))
+                    
+                    # Verifica se tem 11 dígitos
                     if len(cpf_limpo) != 11:
-                        return None
-                    return cpf_limpo
+                        return None, False, "CPF deve ter 11 dígitos"
+                    
+                    # Verifica se todos os dígitos são iguais (CPFs inválidos conhecidos)
+                    if cpf_limpo == cpf_limpo[0] * 11:
+                        return None, False, "CPF inválido (todos os dígitos iguais)"
+                    
+                    # Calcula o primeiro dígito verificador
+                    soma = 0
+                    for i in range(9):
+                        soma += int(cpf_limpo[i]) * (10 - i)
+                    resto = soma % 11
+                    digito1 = 0 if resto < 2 else 11 - resto
+                    
+                    # Verifica primeiro dígito
+                    if int(cpf_limpo[9]) != digito1:
+                        return None, False, "CPF inválido (dígito verificador incorreto)"
+                    
+                    # Calcula o segundo dígito verificador
+                    soma = 0
+                    for i in range(10):
+                        soma += int(cpf_limpo[i]) * (11 - i)
+                    resto = soma % 11
+                    digito2 = 0 if resto < 2 else 11 - resto
+                    
+                    # Verifica segundo dígito
+                    if int(cpf_limpo[10]) != digito2:
+                        return None, False, "CPF inválido (dígito verificador incorreto)"
+                    
+                    return cpf_limpo, True, None
+                
+                # ============================================
+                # FUNÇÃO DE VALIDAÇÃO DE E-MAIL
+                # ============================================
+                def validar_email(email: str) -> tuple:
+                    """
+                    Valida formato de e-mail.
+                    
+                    Args:
+                        email: String do e-mail
+                        
+                    Returns:
+                        Tuple (email_limpo, is_valid, mensagem_erro)
+                    """
+                    import re
+                    
+                    if not email or not email.strip():
+                        return None, False, "E-mail é obrigatório"
+                    
+                    email_limpo = email.strip().lower()
+                    
+                    # Regex para validação de e-mail
+                    pattern = r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$'
+                    
+                    if not re.match(pattern, email_limpo):
+                        return None, False, "Formato de e-mail inválido"
+                    
+                    return email_limpo, True, None
                 
                 # Validações
-                cpf_validado = validar_cpf(novo_cpf) if novo_cpf else None
+                cpf_limpo, cpf_valido, cpf_erro = validar_cpf(novo_cpf) if novo_cpf else (None, False, "CPF é obrigatório")
+                email_limpo, email_valido, email_erro = validar_email(novo_email)
                 
                 if not novo_login or not novo_nome or not nova_senha:
                     st.error("❌ Preencha todos os campos obrigatórios!")
-                elif not novo_cpf or not cpf_validado:
-                    st.error("❌ CPF inválido! Digite um CPF com 11 dígitos.")
+                elif not cpf_valido:
+                    st.error(f"❌ {cpf_erro}")
+                elif not email_valido:
+                    st.error(f"❌ {email_erro}")
                 elif nova_data_nascimento is None:
                     st.error("❌ Data de Nascimento é obrigatória!")
                 elif nova_senha != confirmar_senha:
@@ -7792,16 +8316,17 @@ def gerenciar_usuarios_interface():
 
                             insert_query = f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, email, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """
                             novo_usuario_id = execute_update(insert_query, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
-                                cpf_validado,
+                                cpf_limpo,
+                                email_limpo,
                                 nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
@@ -7830,15 +8355,16 @@ def gerenciar_usuarios_interface():
 
                             cursor.execute(f"""
                                 INSERT INTO usuarios 
-                                (usuario, senha, tipo, nome_completo, cpf, data_nascimento, ativo, 
+                                (usuario, senha, tipo, nome_completo, cpf, email, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                             """, (
                                 novo_login,
                                 senha_hash,
                                 novo_tipo,
                                 novo_nome,
-                                cpf_validado,
+                                cpf_limpo,
+                                email_limpo,
                                 nova_data_nascimento.strftime("%Y-%m-%d"),
                                 int(novo_ativo),
                                 jornada_inicio.strftime("%H:%M"),
@@ -8693,6 +9219,230 @@ def sistema_interface():
             st.rerun()
 
     # ============================================
+    # SEÇÃO: Backup por Email (Conformidade Legal)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📧 Backup por Email (Conformidade Legal)")
+    
+    st.info("""
+    ⚖️ **Importante:** Por lei (Portaria 671/2021), os registros de ponto devem ser mantidos por **5 anos**.
+    Configure o envio automático de backups para seu email para garantir a conformidade legal.
+    """)
+    
+    # Verificar se email está configurado
+    from email_notifications import is_email_configured
+    
+    if not is_email_configured():
+        st.warning("""
+        ⚠️ **Sistema de email não configurado**
+        
+        Para ativar backup por email, adicione no Render:
+        - `SMTP_HOST` (ex: smtp.gmail.com)
+        - `SMTP_PORT` (ex: 587)
+        - `SMTP_USER` (seu email)
+        - `SMTP_PASSWORD` (senha de app do Gmail)
+        """)
+    else:
+        st.success("✅ Sistema de email configurado")
+        
+        # Buscar configuração atual de email de backup
+        email_backup_atual = ''
+        backup_email_ativo = '0'
+        backup_email_frequencia = 'semanal'
+        
+        try:
+            conn_bkp = get_connection()
+            cursor_bkp = conn_bkp.cursor()
+            
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
+            result = cursor_bkp.fetchone()
+            if result:
+                email_backup_atual = result[0] or ''
+            
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_ativo'")
+            result = cursor_bkp.fetchone()
+            if result:
+                backup_email_ativo = result[0] or '0'
+                
+            cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_frequencia'")
+            result = cursor_bkp.fetchone()
+            if result:
+                backup_email_frequencia = result[0] or 'semanal'
+            
+            conn_bkp.close()
+        except Exception:
+            pass
+        
+        with st.form("config_backup_email"):
+            col_be1, col_be2 = st.columns([2, 1])
+            
+            with col_be1:
+                email_backup = st.text_input(
+                    "📬 Email para receber backups",
+                    value=email_backup_atual,
+                    placeholder="seu.email@empresa.com.br",
+                    help="O backup será enviado para este email automaticamente"
+                )
+            
+            with col_be2:
+                frequencia = st.selectbox(
+                    "📅 Frequência",
+                    options=['semanal', 'quinzenal', 'mensal'],
+                    index=['semanal', 'quinzenal', 'mensal'].index(backup_email_frequencia) if backup_email_frequencia in ['semanal', 'quinzenal', 'mensal'] else 0,
+                    help="Com que frequência o backup será enviado"
+                )
+            
+            ativar_backup_email = st.checkbox(
+                "✅ Ativar envio automático de backup por email",
+                value=backup_email_ativo == '1',
+                help="Quando ativado, você receberá o backup completo do sistema no email cadastrado"
+            )
+            
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                salvar_config = st.form_submit_button("💾 Salvar Configuração", use_container_width=True)
+            
+            with col_btn2:
+                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", use_container_width=True, type="secondary")
+        
+        if salvar_config:
+            if ativar_backup_email and not email_backup:
+                st.error("❌ Informe o email para receber os backups")
+            else:
+                try:
+                    conn_bkp = get_connection()
+                    cursor_bkp = conn_bkp.cursor()
+                    
+                    configs_backup = [
+                        ('backup_email_destino', email_backup, 'Email para envio de backups'),
+                        ('backup_email_ativo', '1' if ativar_backup_email else '0', 'Backup por email ativo'),
+                        ('backup_email_frequencia', frequencia, 'Frequência do backup por email'),
+                    ]
+                    
+                    for chave, valor, descricao in configs_backup:
+                        cursor_bkp.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, descricao, valor))
+                    
+                    conn_bkp.commit()
+                    conn_bkp.close()
+                    
+                    if ativar_backup_email:
+                        st.success(f"✅ Backup por email ativado! Você receberá backups {frequencia}mente em **{email_backup}**")
+                    else:
+                        st.warning("⚠️ Backup por email desativado")
+                    
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+        
+        if enviar_agora:
+            if not email_backup:
+                st.error("❌ Informe o email para enviar o backup")
+            else:
+                with st.spinner("📤 Gerando e enviando backup... Aguarde..."):
+                    try:
+                        from backup_postgresql import enviar_backup_por_email
+                        sucesso, mensagem = enviar_backup_por_email(email_backup, 'json')
+                        
+                        if sucesso:
+                            st.success(f"✅ {mensagem}")
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {mensagem}")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao enviar backup: {e}")
+
+    # ============================================
+    # SEÇÃO: Push Notifications (Configurações Globais)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📱 Push Notifications (Lembretes no Celular/Navegador)")
+    
+    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+    if vapid_key:
+        st.success("✅ **Push Notifications configurado** - Sistema pronto para enviar lembretes")
+        
+        # Buscar configuração atual
+        push_obrigatorio_atual = '1'  # Padrão: obrigatório
+        try:
+            if REFACTORING_ENABLED:
+                result = execute_query(
+                    "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
+                    fetch_one=True
+                )
+                if result:
+                    push_obrigatorio_atual = result[0]
+            else:
+                conn = get_connection()
+                cursor = conn.cursor()
+                cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
+                result = cursor.fetchone()
+                if result:
+                    push_obrigatorio_atual = result[0]
+                conn.close()
+        except Exception:
+            pass
+        
+        with st.form("config_push_global"):
+            st.markdown("#### ⚙️ Configurações Globais de Push")
+            
+            push_obrigatorio = st.checkbox(
+                "🔒 **Notificações Obrigatórias para Todos**",
+                value=push_obrigatorio_atual == '1',
+                help="Quando ativado, todos os usuários verão um modal pedindo para ativar notificações ao fazer login. Recomendado para garantir que ninguém esqueça de bater o ponto."
+            )
+            
+            st.info("""
+            📋 **Como funciona:**
+            - Após login, um modal aparece pedindo para ativar notificações
+            - O usuário pode clicar "Lembrar mais tarde" (aparecerá novamente no próximo dia)
+            - Quando ativado, recebe lembretes de entrada, saída e hora extra
+            - Apenas você (gestor) pode desabilitar esta obrigatoriedade
+            """)
+            
+            if st.form_submit_button("💾 Salvar Configuração de Push", use_container_width=True):
+                try:
+                    valor = '1' if push_obrigatorio else '0'
+                    
+                    if REFACTORING_ENABLED:
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (valor, valor))
+                    else:
+                        conn = get_connection()
+                        cursor = conn.cursor()
+                        cursor.execute(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (valor, valor))
+                        conn.commit()
+                        conn.close()
+                    
+                    if push_obrigatorio:
+                        st.success("✅ Notificações obrigatórias ATIVADAS! Todos os usuários serão solicitados a ativar.")
+                    else:
+                        st.warning("⚠️ Notificações obrigatórias DESATIVADAS. Modal não aparecerá mais.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+    else:
+        st.warning("""
+        ⚠️ **Push Notifications não configurado**
+        
+        Para ativar, adicione as seguintes variáveis de ambiente no Render:
+        - `VAPID_PUBLIC_KEY`
+        - `VAPID_PRIVATE_KEY`
+        - `VAPID_CLAIM_EMAIL`
+        """)
+
+    # ============================================
     # SEÇÃO: Notificações Automáticas (Scheduler)
     # ============================================
     st.markdown("---")
@@ -9442,14 +10192,13 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
 
 
 # Função principal
-def main():
-    """Função principal que gerencia o estado da aplicação"""
+@st.cache_resource
+def _initialize_app_once():
+    """Inicializa recursos pesados apenas uma vez (cacheado)"""
+    # Inicializar banco de dados
     init_db()
     
-    # ============================================
-    # INICIAR SCHEDULER DE NOTIFICAÇÕES AUTOMÁTICAS
-    # Roda em background thread (sem custo adicional)
-    # ============================================
+    # Iniciar scheduler de notificações
     try:
         from background_scheduler import iniciar_scheduler_background, is_scheduler_running
         if not is_scheduler_running():
@@ -9458,24 +10207,232 @@ def main():
     except Exception as e:
         logger.warning(f"Scheduler de notificações não iniciado: {e}")
     
-    # Garantir que o UploadSystem tenha a estrutura correta da tabela
+    # Inicializar sistema de uploads
     try:
         upload_system_init = UploadSystem()
         logger.info("✅ Sistema de uploads inicializado")
     except Exception as e:
         logger.error(f"Erro ao inicializar sistema de uploads: {e}")
     
-    # Aplicar migration da tabela uploads se necessário
+    # Aplicar migration da tabela uploads
     try:
         from apply_uploads_migration import apply_uploads_migration
         apply_uploads_migration()
     except Exception as e:
         logger.warning(f"Não foi possível aplicar migration de uploads: {e}")
+    
+    return True
+
+
+def exibir_modal_push_obrigatorio():
+    """Exibe modal obrigatório para ativar notificações push após login"""
+    # Verificar se push está configurado
+    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+    if not vapid_key:
+        return  # Push não configurado, não exibir modal
+    
+    # Verificar se já mostrou o modal nesta sessão
+    if st.session_state.get('push_modal_shown', False):
+        return
+    
+    # Verificar se notificações globais estão habilitadas (configuração do gestor)
+    push_obrigatorio = True  # Padrão: obrigatório
+    try:
+        if REFACTORING_ENABLED:
+            result = execute_query(
+                "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
+                fetch_one=True
+            )
+            if result:
+                push_obrigatorio = result[0] == '1'
+        else:
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
+            result = cursor.fetchone()
+            if result:
+                push_obrigatorio = result[0] == '1'
+            conn.close()
+    except Exception:
+        pass  # Se erro, manter padrão (obrigatório)
+    
+    if not push_obrigatorio:
+        return  # Gestor desabilitou notificações obrigatórias
+    
+    # JavaScript para exibir modal de ativação de push
+    usuario = st.session_state.usuario
+    st.components.v1.html(f"""
+    <script>
+    (function() {{
+        // Aguardar push system carregar
+        function checkAndShowModal() {{
+            if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
+                setTimeout(checkAndShowModal, 500);
+                return;
+            }}
+            
+            const state = PontoESA.Push.getState();
+            
+            // Se já está inscrito ou não suporta, não mostrar modal
+            if (state.isSubscribed || !state.isSupported) {{
+                return;
+            }}
+            
+            // Verificar se já dispensou o modal hoje
+            const dismissedDate = localStorage.getItem('push_modal_dismissed_date');
+            const today = new Date().toDateString();
+            if (dismissedDate === today) {{
+                return;
+            }}
+            
+            // Verificar permissão
+            if (Notification.permission === 'denied') {{
+                return;
+            }}
+            
+            // Mostrar modal após 2 segundos
+            setTimeout(function() {{
+                showPushModal();
+            }}, 2000);
+        }}
+        
+        function showPushModal() {{
+            // Verificar se modal já existe
+            if (document.getElementById('push-modal-obrigatorio')) return;
+            
+            const modal = document.createElement('div');
+            modal.id = 'push-modal-obrigatorio';
+            modal.innerHTML = `
+                <div style="
+                    position: fixed;
+                    top: 0;
+                    left: 0;
+                    right: 0;
+                    bottom: 0;
+                    background: rgba(0,0,0,0.7);
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    z-index: 999999;
+                    animation: fadeIn 0.3s ease;
+                ">
+                    <div style="
+                        background: white;
+                        border-radius: 20px;
+                        padding: 35px;
+                        max-width: 420px;
+                        text-align: center;
+                        box-shadow: 0 20px 60px rgba(0,0,0,0.4);
+                        animation: slideUp 0.4s ease;
+                    ">
+                        <div style="font-size: 60px; margin-bottom: 15px;">🔔</div>
+                        <h2 style="margin: 0 0 10px; color: #333; font-size: 22px;">Ative as Notificações!</h2>
+                        <p style="color: #666; margin-bottom: 20px; font-size: 15px; line-height: 1.5;">
+                            Para garantir que você <strong>nunca esqueça</strong> de registrar seu ponto, 
+                            ative as notificações e receba lembretes automáticos.
+                        </p>
+                        <p style="color: #888; margin-bottom: 25px; font-size: 13px;">
+                            📱 Você receberá alertas de entrada, saída e hora extra.
+                        </p>
+                        <div style="display: flex; flex-direction: column; gap: 10px;">
+                            <button id="push-modal-yes" style="
+                                background: linear-gradient(135deg, #4CAF50, #45a049);
+                                color: white;
+                                border: none;
+                                padding: 14px 28px;
+                                border-radius: 10px;
+                                font-size: 16px;
+                                font-weight: 600;
+                                cursor: pointer;
+                                transition: transform 0.2s;
+                            " onmouseover="this.style.transform='scale(1.02)'" onmouseout="this.style.transform='scale(1)'">
+                                ✅ Ativar Notificações
+                            </button>
+                            <button id="push-modal-later" style="
+                                background: transparent;
+                                color: #999;
+                                border: none;
+                                padding: 10px;
+                                font-size: 13px;
+                                cursor: pointer;
+                            ">
+                                Lembrar mais tarde
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <style>
+                    @keyframes fadeIn {{
+                        from {{ opacity: 0; }}
+                        to {{ opacity: 1; }}
+                    }}
+                    @keyframes slideUp {{
+                        from {{ opacity: 0; transform: translateY(30px) scale(0.95); }}
+                        to {{ opacity: 1; transform: translateY(0) scale(1); }}
+                    }}
+                </style>
+            `;
+            
+            document.body.appendChild(modal);
+            
+            // Botão Ativar
+            document.getElementById('push-modal-yes').onclick = async function() {{
+                const btn = this;
+                btn.disabled = true;
+                btn.innerHTML = '⏳ Ativando...';
+                
+                try {{
+                    const result = await PontoESA.Push.init('{usuario}');
+                    
+                    if (result.success) {{
+                        btn.innerHTML = '✅ Ativado!';
+                        btn.style.background = '#9E9E9E';
+                        setTimeout(function() {{
+                            modal.remove();
+                        }}, 1500);
+                    }} else {{
+                        btn.innerHTML = '❌ ' + (result.error || 'Erro');
+                        btn.disabled = false;
+                        setTimeout(function() {{
+                            btn.innerHTML = '✅ Ativar Notificações';
+                        }}, 3000);
+                    }}
+                }} catch (e) {{
+                    btn.innerHTML = '❌ ' + e.message;
+                    btn.disabled = false;
+                }}
+            }};
+            
+            // Botão Lembrar mais tarde
+            document.getElementById('push-modal-later').onclick = function() {{
+                // Salvar que dispensou hoje
+                localStorage.setItem('push_modal_dismissed_date', new Date().toDateString());
+                modal.remove();
+            }};
+        }}
+        
+        // Iniciar verificação
+        checkAndShowModal();
+    }})();
+    </script>
+    """, height=0)
+    
+    # Marcar que já mostrou nesta sessão
+    st.session_state.push_modal_shown = True
+
+
+def main():
+    """Função principal que gerencia o estado da aplicação"""
+    # Inicializar recursos pesados apenas uma vez
+    _initialize_app_once()
 
     if 'logged_in' not in st.session_state:
         st.session_state.logged_in = False
 
     if st.session_state.logged_in:
+        # Exibir modal de ativação de push notifications (obrigatório após login)
+        exibir_modal_push_obrigatorio()
+        
         if st.session_state.tipo_usuario == 'funcionario':
             tela_funcionario()
         elif st.session_state.tipo_usuario == 'gestor':

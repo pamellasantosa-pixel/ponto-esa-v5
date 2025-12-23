@@ -74,6 +74,9 @@ def init_db_postgresql():
             senha VARCHAR(255) NOT NULL,
             tipo VARCHAR(50) NOT NULL,
             nome_completo VARCHAR(255),
+            cpf VARCHAR(11),
+            email VARCHAR(255),
+            data_nascimento DATE,
             ativo INTEGER DEFAULT 1,
             data_criacao TIMESTAMP DEFAULT NOW(),
             jornada_inicio_previsto TIME DEFAULT '08:00',
@@ -290,6 +293,26 @@ def init_db_postgresql():
         CREATE INDEX IF NOT EXISTS idx_solicitacoes_correcao_registro 
         ON solicitacoes_correcao_registro(registro_id)
     ''')
+
+    # ============================================
+    # MIGRATIONS: Adicionar colunas que podem faltar em tabelas existentes
+    # ============================================
+    
+    # Adicionar colunas cpf, email, data_nascimento na tabela usuarios (se não existirem)
+    migration_columns = [
+        ('usuarios', 'cpf', 'VARCHAR(11)'),
+        ('usuarios', 'email', 'VARCHAR(255)'),
+        ('usuarios', 'data_nascimento', 'DATE'),
+    ]
+    
+    for table, column, col_type in migration_columns:
+        try:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {column} {col_type}")
+        except Exception as e:
+            # Coluna já existe ou erro não crítico
+            pass
+    
+    conn.commit()
 
     # Inserir usuários padrão se não existirem
     c.execute("SELECT COUNT(*) FROM usuarios")

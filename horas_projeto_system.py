@@ -430,18 +430,18 @@ def format_percentual(percentual: float) -> str:
     return f"{percentual:.1f}%"
 
 
-# Cores para gráficos de projetos
+# Cores para gráficos de projetos - paleta harmoniosa com tons azuis
 CORES_PROJETOS = [
-    '#FF6384',  # Rosa
-    '#36A2EB',  # Azul
-    '#FFCE56',  # Amarelo
-    '#4BC0C0',  # Teal
-    '#9966FF',  # Roxo
-    '#FF9F40',  # Laranja
-    '#7CBA3C',  # Verde
-    '#EA5545',  # Vermelho
-    '#27AEEF',  # Azul claro
-    '#B33DC6',  # Magenta
+    '#667eea',  # Roxo-azul (cor principal do sistema)
+    '#28a745',  # Verde
+    '#17a2b8',  # Ciano/Teal
+    '#6f42c1',  # Roxo
+    '#fd7e14',  # Laranja
+    '#20c997',  # Verde-água
+    '#007bff',  # Azul
+    '#6c757d',  # Cinza
+    '#5a67d8',  # Indigo
+    '#38b2ac',  # Teal escuro
 ]
 
 

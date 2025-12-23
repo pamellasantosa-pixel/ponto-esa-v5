@@ -1,6 +1,7 @@
 streamlit
 pandas
 openpyxl
+plotly
 
 # Push Notifications
 pywebpush
