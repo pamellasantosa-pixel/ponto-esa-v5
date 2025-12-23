@@ -58,13 +58,13 @@ def _get_pool():
             if database_url:
                 try:
                     # Pool com min 2, max 15 conexões para melhor throughput
+                    # Nota: statement_timeout removido pois não é suportado pelo Neon Pooler
                     _connection_pool = pg_pool.ThreadedConnectionPool(
                         minconn=2,
                         maxconn=15,
                         dsn=database_url,
                         # Configurações para conexões mais rápidas
-                        connect_timeout=10,
-                        options='-c statement_timeout=30000'  # 30s timeout para queries
+                        connect_timeout=10
                     )
                     logger.info("✅ Connection pool PostgreSQL criado (2-15 conexões)")
                 except Exception as e:
