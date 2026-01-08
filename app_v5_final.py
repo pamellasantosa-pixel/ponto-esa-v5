@@ -359,6 +359,23 @@ def get_custom_css():
         background: #f8d7da;
         color: #721c24;
     }
+    
+    /* Ocultar campos de GPS da interface do usuário */
+    input[placeholder="GPS Lat"],
+    input[placeholder="GPS Lng"] {
+        position: absolute !important;
+        left: -9999px !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        height: 1px !important;
+        width: 1px !important;
+    }
+    
+    /* Ocultar containers dos campos GPS */
+    div[data-testid="column"]:has(input[placeholder="GPS Lat"]),
+    div[data-testid="column"]:has(input[placeholder="GPS Lng"]) {
+        display: none !important;
+    }
 </style>
 """
 
