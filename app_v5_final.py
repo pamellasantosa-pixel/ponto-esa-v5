@@ -25,6 +25,7 @@ from banco_horas_system import BancoHorasSystem, format_saldo_display
 from horas_extras_system import HorasExtrasSystem, get_status_emoji
 from atestado_horas_system import AtestadoHorasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
+from push_scheduler import init_push_system, registrar_subscription, verificar_subscription, get_topic_for_user
 # Safe import - provide a robust fallback implementation if streamlit_utils is not available
 # Use dynamic import to avoid static analysis import errors when the optional module is missing.
 import importlib
@@ -168,6 +169,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Inicializar sistema de Push Notifications (ntfy.sh)
+try:
+    init_push_system()
+except Exception as e:
+    pass  # Silenciar erros de inicialização do push
 
 # CSS personalizado com novo layout - cacheado como string para melhor performance
 @st.cache_data
@@ -2113,148 +2120,38 @@ def tela_funcionario():
         # Botão para ativar notificações push
         st.markdown("#### 🔔 Notificações Push")
         
-        # Verificar se push está configurado
-        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
-        if vapid_key:
+        # Sistema de Push Notifications (ntfy.sh - funciona mesmo com app fechado)
+        st.markdown("#### 🔔 Lembretes de Ponto")
+        
+        # Verificar se já está inscrito
+        topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        
+        if push_ativo:
+            st.success("✅ Push ativo!")
+            ntfy_topic = get_topic_for_user(st.session_state.usuario)
+            
             st.components.v1.html(f"""
-            <div id="push-status-sidebar" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable" onclick="enableNotifications()" style="
-                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-                    color: white;
-                    border: none;
-                    padding: 10px 16px;
-                    border-radius: 8px;
-                    font-size: 13px;
-                    cursor: pointer;
-                    width: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                ">
-                    <span>🔔</span>
-                    <span>Ativar Lembretes</span>
-                </button>
-                <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
+            <div style="font-size: 12px; padding: 10px; background: #e8f5e9; border-radius: 8px;">
+                <p style="margin: 0 0 8px 0;">📲 <b>Receba no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
+                    <li>Inscreva-se no tópico:<br>
+                    <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">{ntfy_topic}</code></li>
+                </ol>
             </div>
-            <script>
-            const parentWindow = window.parent;
-            const USUARIO = '{st.session_state.usuario}';
+            """, height=130)
             
-            async function enableNotifications() {{
-                const btn = document.getElementById('btn-push-enable');
-                const msg = document.getElementById('push-msg');
-                
-                if (!('Notification' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    return;
-                }}
-                
-                if (parentWindow.Notification.permission === 'denied') {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    return;
-                }}
-                
-                btn.disabled = true;
-                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
-                
-                try {{
-                    const permission = await parentWindow.Notification.requestPermission();
-                    
-                    if (permission === 'granted') {{
-                        // Salvar preferência no localStorage
-                        parentWindow.localStorage.setItem('ponto_exsa_notifications', 'enabled');
-                        parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
-                        
-                        // Configurar intervalo de verificação de lembretes (a cada 1 minuto)
-                        setupReminderInterval();
-                        
-                        // Notificação de confirmação
-                        new parentWindow.Notification('🎉 Lembretes Ativados!', {{
-                            body: 'Você receberá lembretes enquanto o app estiver aberto.',
-                            icon: '/favicon.ico',
-                            tag: 'ponto-exsa-test',
-                            requireInteraction: false
-                        }});
-                        
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
-                    }}
-                }} catch (e) {{
-                    console.error('[Notif] Erro:', e);
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
-                }}
-            }}
-            
-            function setupReminderInterval() {{
-                // Horários de lembrete (HH:MM)
-                const reminderTimes = ['07:50', '12:00', '13:00', '16:50'];
-                
-                if (parentWindow._pontoExsaReminderInterval) {{
-                    clearInterval(parentWindow._pontoExsaReminderInterval);
-                }}
-                
-                parentWindow._pontoExsaReminderInterval = setInterval(() => {{
-                    const now = new Date();
-                    const currentTime = now.toTimeString().slice(0, 5);
-                    const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
-                    
-                    if (enabled && reminderTimes.includes(currentTime)) {{
-                        const lastNotif = parentWindow.localStorage.getItem('ponto_exsa_last_notif_' + currentTime);
-                        const today = now.toISOString().slice(0, 10);
-                        
-                        if (lastNotif !== today) {{
-                            parentWindow.localStorage.setItem('ponto_exsa_last_notif_' + currentTime, today);
-                            
-                            let mensagem = '⏰ Hora de registrar seu ponto!';
-                            if (currentTime === '07:50') mensagem = '🌅 Bom dia! Não esqueça de registrar a entrada.';
-                            else if (currentTime === '12:00') mensagem = '🍽️ Hora do almoço! Registre a saída.';
-                            else if (currentTime === '13:00') mensagem = '☕ Voltando do almoço? Registre a entrada.';
-                            else if (currentTime === '16:50') mensagem = '🏠 Quase na hora! Registre a saída.';
-                            
-                            new parentWindow.Notification('📋 Ponto EXSA', {{
-                                body: mensagem,
-                                icon: '/favicon.ico',
-                                tag: 'ponto-exsa-reminder-' + currentTime,
-                                requireInteraction: true
-                            }});
-                        }}
-                    }}
-                }}, 60000); // Verificar a cada minuto
-            }}
-            
-            // Verificar status inicial e configurar lembretes se já ativado
-            (function() {{
-                const btn = document.getElementById('btn-push-enable');
-                const msg = document.getElementById('push-msg');
-                const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
-                
-                if (parentWindow.Notification.permission === 'granted' && enabled) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
-                    setupReminderInterval();
-                }} else if (parentWindow.Notification.permission === 'denied') {{
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
-                }}
-            }})();
-            </script>
-            """, height=90)
+            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push"):
+                from push_scheduler import desativar_subscription
+                desativar_subscription(st.session_state.usuario)
+                st.rerun()
         else:
-            st.caption("⚠️ Push não configurado")
+            st.info("📱 Receba lembretes mesmo com o app fechado!")
+            
+            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push"):
+                topic = registrar_subscription(st.session_state.usuario)
+                st.success("✅ Ativado!")
+                st.rerun()
 
         st.markdown("---")
 
@@ -5139,107 +5036,38 @@ def tela_gestor():
 
         st.markdown("---")
         
-        # Botão para ativar notificações (gestor também)
-        st.markdown("#### 🔔 Notificações Push")
+        # Sistema de Push Notifications (ntfy.sh - funciona mesmo com app fechado)
+        st.markdown("#### 🔔 Lembretes de Ponto")
         
-        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
-        if vapid_key:
+        # Verificar se já está inscrito
+        topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        
+        if push_ativo:
+            st.success("✅ Push ativo!")
+            ntfy_topic = get_topic_for_user(st.session_state.usuario)
+            
             st.components.v1.html(f"""
-            <div id="push-status-sidebar-gestor" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable-gestor" onclick="enableNotificationsGestor()" style="
-                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-                    color: white;
-                    border: none;
-                    padding: 10px 16px;
-                    border-radius: 8px;
-                    font-size: 13px;
-                    cursor: pointer;
-                    width: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                ">
-                    <span>🔔</span>
-                    <span>Ativar Lembretes</span>
-                </button>
-                <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
+            <div style="font-size: 12px; padding: 10px; background: #e8f5e9; border-radius: 8px;">
+                <p style="margin: 0 0 8px 0;">📲 <b>Receba no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+                    <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
+                    <li>Inscreva-se no tópico:<br>
+                    <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">{ntfy_topic}</code></li>
+                </ol>
             </div>
-            <script>
-            const parentWindow = window.parent;
-            const USUARIO = '{st.session_state.usuario}';
+            """, height=130)
             
-            async function enableNotificationsGestor() {{
-                const btn = document.getElementById('btn-push-enable-gestor');
-                const msg = document.getElementById('push-msg-gestor');
-                
-                if (!('Notification' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    return;
-                }}
-                
-                if (parentWindow.Notification.permission === 'denied') {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    return;
-                }}
-                
-                btn.disabled = true;
-                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
-                
-                try {{
-                    const permission = await parentWindow.Notification.requestPermission();
-                    
-                    if (permission === 'granted') {{
-                        parentWindow.localStorage.setItem('ponto_exsa_notifications', 'enabled');
-                        parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
-                        
-                        new parentWindow.Notification('🎉 Lembretes Ativados!', {{
-                            body: 'Você receberá lembretes enquanto o app estiver aberto.',
-                            icon: '/favicon.ico',
-                            tag: 'ponto-exsa-test',
-                            requireInteraction: false
-                        }});
-                        
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
-                    }}
-                }} catch (e) {{
-                    console.error('[Notif] Erro:', e);
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
-                }}
-            }}
-            
-            // Verificar status inicial
-            (function() {{
-                const btn = document.getElementById('btn-push-enable-gestor');
-                const msg = document.getElementById('push-msg-gestor');
-                const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
-                
-                if (parentWindow.Notification.permission === 'granted' && enabled) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
-                }} else if (parentWindow.Notification.permission === 'denied') {{
-                    btn.disabled = true;
-                    btn.style.opacity = '0.5';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
-                }}
-            }})();
-            </script>
-            """, height=90)
+            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push_gestor"):
+                from push_scheduler import desativar_subscription
+                desativar_subscription(st.session_state.usuario)
+                st.rerun()
         else:
-            st.caption("⚠️ Push não configurado")
+            st.info("📱 Receba lembretes mesmo com o app fechado!")
+            
+            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push_gestor"):
+                topic = registrar_subscription(st.session_state.usuario)
+                st.success("✅ Ativado!")
+                st.rerun()
 
         st.markdown("---")
 
