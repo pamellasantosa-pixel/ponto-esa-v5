@@ -2103,22 +2103,28 @@ def tela_funcionario():
                 <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
             </div>
             <script>
+            // Acessar contexto da página pai (fora do iframe do Streamlit)
+            const parentWindow = window.parent;
+            const VAPID_KEY = '{vapid_key}';
+            const USUARIO = '{st.session_state.usuario}';
+            
             async function enablePushNotifications() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
                 
-                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
-                    setTimeout(enablePushNotifications, 1000);
+                // Verificar se Service Worker e Push são suportados no contexto pai
+                if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
                     return;
                 }}
                 
-                const state = PontoESA.Push.getState();
-                
-                if (state.isSubscribed) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                // Verificar permissão
+                if (parentWindow.Notification.permission === 'denied') {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado nas configurações do navegador</span>';
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
                     return;
                 }}
                 
@@ -2126,46 +2132,114 @@ def tela_funcionario():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    // Registrar Service Worker no contexto pai
+                    const registration = await parentWindow.navigator.serviceWorker.register('/static/sw.js', {{ scope: '/' }});
+                    await parentWindow.navigator.serviceWorker.ready;
                     
-                    if (result.success) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    // Verificar subscription existente
+                    let subscription = await registration.pushManager.getSubscription();
+                    
+                    if (!subscription) {{
+                        // Solicitar permissão
+                        const permission = await parentWindow.Notification.requestPermission();
+                        if (permission !== 'granted') {{
+                            btn.disabled = false;
+                            btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
+                            return;
+                        }}
+                        
+                        // Converter chave VAPID
+                        const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
+                        const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
+                        const rawData = atob(base64);
+                        const outputArray = new Uint8Array(rawData.length);
+                        for (let i = 0; i < rawData.length; ++i) {{
+                            outputArray[i] = rawData.charCodeAt(i);
+                        }}
+                        
+                        // Criar subscription
+                        subscription = await registration.pushManager.subscribe({{
+                            userVisibleOnly: true,
+                            applicationServerKey: outputArray
+                        }});
                     }}
+                    
+                    // Salvar subscription localmente
+                    const subscriptionJson = subscription.toJSON();
+                    parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
+                        usuario: USUARIO,
+                        endpoint: subscription.endpoint,
+                        p256dh: subscriptionJson.keys.p256dh,
+                        auth: subscriptionJson.keys.auth
+                    }}));
+                    parentWindow.localStorage.setItem('ponto_exsa_push_user', USUARIO);
+                    
+                    // Tentar enviar ao servidor
+                    try {{
+                        await fetch(parentWindow.location.origin + '/api/push/subscribe', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{
+                                usuario: USUARIO,
+                                subscription: {{
+                                    endpoint: subscription.endpoint,
+                                    keys: {{ p256dh: subscriptionJson.keys.p256dh, auth: subscriptionJson.keys.auth }}
+                                }}
+                            }})
+                        }});
+                    }} catch (e) {{ console.log('API não disponível'); }}
+                    
+                    // Mostrar notificação de teste
+                    registration.showNotification('🎉 Notificações Ativadas!', {{
+                        body: 'Você receberá lembretes de ponto no Ponto ExSA.',
+                        icon: '/static/icon-192.svg',
+                        tag: 'ponto-exsa-test'
+                    }});
+                    
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    
                 }} catch (e) {{
+                    console.error('Erro push:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
                 }}
             }}
             
-            // Verificar status inicial após carregar
-            setTimeout(function() {{
-                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
-                    const state = PontoESA.Push.getState();
-                    const btn = document.getElementById('btn-push-enable');
-                    const msg = document.getElementById('push-msg');
-                    
-                    if (state.isSubscribed) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    }} else if (!state.isSupported) {{
+            // Verificar status inicial
+            (async function() {{
+                const btn = document.getElementById('btn-push-enable');
+                const msg = document.getElementById('push-msg');
+                
+                try {{
+                    if ('serviceWorker' in parentWindow.navigator) {{
+                        const registration = await parentWindow.navigator.serviceWorker.getRegistration();
+                        if (registration) {{
+                            const subscription = await registration.pushManager.getSubscription();
+                            if (subscription) {{
+                                btn.style.background = '#9E9E9E';
+                                btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                                msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                            }}
+                        }}
+                        
+                        if (parentWindow.Notification.permission === 'denied') {{
+                            btn.disabled = true;
+                            btn.style.opacity = '0.5';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                        }}
+                    }} else {{
                         btn.disabled = true;
                         btn.style.opacity = '0.5';
                         msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
-                    }} else if (Notification.permission === 'denied') {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
                     }}
+                }} catch (e) {{
+                    console.log('Erro ao verificar status:', e);
                 }}
-            }}, 1500);
+            }})();
             </script>
             """, height=90)
         else:
@@ -2773,11 +2847,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         if 'gps_lng_value' not in st.session_state:
             st.session_state.gps_lng_value = ""
         
-        col_gps1, col_gps2 = st.columns(2)
-        with col_gps1:
-            gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
-        with col_gps2:
-            gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
+        # Container oculto para campos GPS - invisível para o usuário
+        st.markdown('<div style="position:absolute;left:-9999px;height:0;overflow:hidden;">', unsafe_allow_html=True)
+        gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
+        gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
+        st.markdown('</div>', unsafe_allow_html=True)
 
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
@@ -5083,22 +5157,28 @@ def tela_gestor():
                 <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
             </div>
             <script>
+            // Acessar contexto da página pai (fora do iframe do Streamlit)
+            const parentWindow = window.parent;
+            const VAPID_KEY = '{vapid_key}';
+            const USUARIO = '{st.session_state.usuario}';
+            
             async function enablePushNotificationsGestor() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
                 
-                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
-                    setTimeout(enablePushNotificationsGestor, 1000);
+                // Verificar se Service Worker e Push são suportados no contexto pai
+                if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
                     return;
                 }}
                 
-                const state = PontoESA.Push.getState();
-                
-                if (state.isSubscribed) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                // Verificar permissão
+                if (parentWindow.Notification.permission === 'denied') {{
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado nas configurações do navegador</span>';
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
                     return;
                 }}
                 
@@ -5106,18 +5186,77 @@ def tela_gestor():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
+                    // Registrar Service Worker no contexto pai
+                    const registration = await parentWindow.navigator.serviceWorker.register('/static/sw.js', {{ scope: '/' }});
+                    await parentWindow.navigator.serviceWorker.ready;
                     
-                    if (result.success) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
+                    // Verificar subscription existente
+                    let subscription = await registration.pushManager.getSubscription();
+                    
+                    if (!subscription) {{
+                        // Solicitar permissão
+                        const permission = await parentWindow.Notification.requestPermission();
+                        if (permission !== 'granted') {{
+                            btn.disabled = false;
+                            btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
+                            return;
+                        }}
+                        
+                        // Converter chave VAPID
+                        const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
+                        const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
+                        const rawData = atob(base64);
+                        const outputArray = new Uint8Array(rawData.length);
+                        for (let i = 0; i < rawData.length; ++i) {{
+                            outputArray[i] = rawData.charCodeAt(i);
+                        }}
+                        
+                        // Criar subscription
+                        subscription = await registration.pushManager.subscribe({{
+                            userVisibleOnly: true,
+                            applicationServerKey: outputArray
+                        }});
                     }}
+                    
+                    // Salvar subscription localmente
+                    const subscriptionJson = subscription.toJSON();
+                    parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
+                        usuario: USUARIO,
+                        endpoint: subscription.endpoint,
+                        p256dh: subscriptionJson.keys.p256dh,
+                        auth: subscriptionJson.keys.auth
+                    }}));
+                    parentWindow.localStorage.setItem('ponto_exsa_push_user', USUARIO);
+                    
+                    // Tentar enviar ao servidor
+                    try {{
+                        await fetch(parentWindow.location.origin + '/api/push/subscribe', {{
+                            method: 'POST',
+                            headers: {{ 'Content-Type': 'application/json' }},
+                            body: JSON.stringify({{
+                                usuario: USUARIO,
+                                subscription: {{
+                                    endpoint: subscription.endpoint,
+                                    keys: {{ p256dh: subscriptionJson.keys.p256dh, auth: subscriptionJson.keys.auth }}
+                                }}
+                            }})
+                        }});
+                    }} catch (e) {{ console.log('API não disponível'); }}
+                    
+                    // Mostrar notificação de teste
+                    registration.showNotification('🎉 Notificações Ativadas!', {{
+                        body: 'Você receberá lembretes de ponto no Ponto ExSA.',
+                        icon: '/static/icon-192.svg',
+                        tag: 'ponto-exsa-test'
+                    }});
+                    
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    
                 }} catch (e) {{
+                    console.error('Erro push:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
@@ -5125,27 +5264,36 @@ def tela_gestor():
             }}
             
             // Verificar status inicial
-            setTimeout(function() {{
-                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
-                    const state = PontoESA.Push.getState();
-                    const btn = document.getElementById('btn-push-enable-gestor');
-                    const msg = document.getElementById('push-msg-gestor');
-                    
-                    if (state.isSubscribed) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    }} else if (!state.isSupported) {{
+            (async function() {{
+                const btn = document.getElementById('btn-push-enable-gestor');
+                const msg = document.getElementById('push-msg-gestor');
+                
+                try {{
+                    if ('serviceWorker' in parentWindow.navigator) {{
+                        const registration = await parentWindow.navigator.serviceWorker.getRegistration();
+                        if (registration) {{
+                            const subscription = await registration.pushManager.getSubscription();
+                            if (subscription) {{
+                                btn.style.background = '#9E9E9E';
+                                btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                                msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
+                            }}
+                        }}
+                        
+                        if (parentWindow.Notification.permission === 'denied') {{
+                            btn.disabled = true;
+                            btn.style.opacity = '0.5';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                        }}
+                    }} else {{
                         btn.disabled = true;
                         btn.style.opacity = '0.5';
                         msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
-                    }} else if (Notification.permission === 'denied') {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
                     }}
+                }} catch (e) {{
+                    console.log('Erro ao verificar status:', e);
                 }}
-            }}, 1500);
+            }})();
             </script>
             """, height=90)
         else:
