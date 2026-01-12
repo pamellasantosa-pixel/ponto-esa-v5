@@ -2138,26 +2138,51 @@ def tela_funcionario():
                 <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
             </div>
             <script>
-            // Acessar contexto da página pai (fora do iframe do Streamlit)
             const parentWindow = window.parent;
             const VAPID_KEY = '{vapid_key}';
             const USUARIO = '{st.session_state.usuario}';
+            
+            // Service Worker inline para evitar problemas de MIME type
+            const swCode = `
+                self.addEventListener('install', e => {{ self.skipWaiting(); }});
+                self.addEventListener('activate', e => {{ e.waitUntil(self.clients.claim()); }});
+                self.addEventListener('push', e => {{
+                    const data = e.data ? e.data.json() : {{}};
+                    const title = data.title || 'Ponto ExSA';
+                    const options = {{
+                        body: data.body || data.message || 'Nova notificação',
+                        icon: data.icon || '/favicon.ico',
+                        badge: '/favicon.ico',
+                        tag: data.tag || 'ponto-exsa',
+                        vibrate: [200, 100, 200],
+                        data: data.data || {{}}
+                    }};
+                    e.waitUntil(self.registration.showNotification(title, options));
+                }});
+                self.addEventListener('notificationclick', e => {{
+                    e.notification.close();
+                    e.waitUntil(clients.matchAll({{ type: 'window' }}).then(list => {{
+                        for (const client of list) {{
+                            if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
+                        }}
+                        if (clients.openWindow) return clients.openWindow('/');
+                    }}));
+                }});
+            `;
             
             async function enablePushNotifications() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
                 
-                // Verificar se Service Worker e Push são suportados no contexto pai
                 if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
                 }}
                 
-                // Verificar permissão
                 if (parentWindow.Notification.permission === 'denied') {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado nas configurações do navegador</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
@@ -2167,15 +2192,17 @@ def tela_funcionario():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    // Registrar Service Worker no contexto pai
-                    const registration = await parentWindow.navigator.serviceWorker.register('/app/static/sw.js', {{ scope: '/' }});
+                    // Criar Service Worker via Blob URL
+                    const blob = new Blob([swCode], {{ type: 'application/javascript' }});
+                    const swUrl = URL.createObjectURL(blob);
+                    
+                    // Registrar SW
+                    const registration = await parentWindow.navigator.serviceWorker.register(swUrl, {{ scope: '/' }});
                     await parentWindow.navigator.serviceWorker.ready;
                     
-                    // Verificar subscription existente
                     let subscription = await registration.pushManager.getSubscription();
                     
                     if (!subscription) {{
-                        // Solicitar permissão
                         const permission = await parentWindow.Notification.requestPermission();
                         if (permission !== 'granted') {{
                             btn.disabled = false;
@@ -2184,57 +2211,35 @@ def tela_funcionario():
                             return;
                         }}
                         
-                        // Converter chave VAPID
+                        // Converter VAPID key
                         const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
                         const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
                         const rawData = atob(base64);
                         const outputArray = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) {{
-                            outputArray[i] = rawData.charCodeAt(i);
-                        }}
+                        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
                         
-                        // Criar subscription
                         subscription = await registration.pushManager.subscribe({{
                             userVisibleOnly: true,
                             applicationServerKey: outputArray
                         }});
                     }}
                     
-                    // Salvar subscription localmente
-                    const subscriptionJson = subscription.toJSON();
+                    // Salvar subscription
+                    const subJson = subscription.toJSON();
                     parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
-                        usuario: USUARIO,
-                        endpoint: subscription.endpoint,
-                        p256dh: subscriptionJson.keys.p256dh,
-                        auth: subscriptionJson.keys.auth
+                        usuario: USUARIO, endpoint: subscription.endpoint,
+                        p256dh: subJson.keys.p256dh, auth: subJson.keys.auth
                     }}));
-                    parentWindow.localStorage.setItem('ponto_exsa_push_user', USUARIO);
                     
-                    // Tentar enviar ao servidor
-                    try {{
-                        await fetch(parentWindow.location.origin + '/api/push/subscribe', {{
-                            method: 'POST',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify({{
-                                usuario: USUARIO,
-                                subscription: {{
-                                    endpoint: subscription.endpoint,
-                                    keys: {{ p256dh: subscriptionJson.keys.p256dh, auth: subscriptionJson.keys.auth }}
-                                }}
-                            }})
-                        }});
-                    }} catch (e) {{ console.log('API não disponível'); }}
-                    
-                    // Mostrar notificação de teste
-                    registration.showNotification('🎉 Notificações Ativadas!', {{
-                        body: 'Você receberá lembretes de ponto no Ponto ExSA.',
-                        icon: '/static/icon-192.svg',
+                    // Notificação de teste
+                    registration.showNotification('🎉 Lembretes Ativados!', {{
+                        body: 'Você receberá lembretes de ponto.',
                         tag: 'ponto-exsa-test'
                     }});
                     
                     btn.style.background = '#9E9E9E';
                     btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
                     
                 }} catch (e) {{
                     console.error('Erro push:', e);
@@ -2244,36 +2249,28 @@ def tela_funcionario():
                 }}
             }}
             
-            // Verificar status inicial
+            // Verificar status
             (async function() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
-                
                 try {{
                     if ('serviceWorker' in parentWindow.navigator) {{
-                        const registration = await parentWindow.navigator.serviceWorker.getRegistration();
-                        if (registration) {{
-                            const subscription = await registration.pushManager.getSubscription();
-                            if (subscription) {{
+                        const reg = await parentWindow.navigator.serviceWorker.getRegistration();
+                        if (reg) {{
+                            const sub = await reg.pushManager.getSubscription();
+                            if (sub) {{
                                 btn.style.background = '#9E9E9E';
                                 btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
                                 msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
                             }}
                         }}
-                        
                         if (parentWindow.Notification.permission === 'denied') {{
                             btn.disabled = true;
                             btn.style.opacity = '0.5';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
                         }}
-                    }} else {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     }}
-                }} catch (e) {{
-                    console.log('Erro ao verificar status:', e);
-                }}
+                }} catch (e) {{ console.log('Status check error:', e); }}
             }})();
             </script>
             """, height=90)
@@ -5190,26 +5187,51 @@ def tela_gestor():
                 <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
             </div>
             <script>
-            // Acessar contexto da página pai (fora do iframe do Streamlit)
             const parentWindow = window.parent;
             const VAPID_KEY = '{vapid_key}';
             const USUARIO = '{st.session_state.usuario}';
+            
+            // Service Worker inline
+            const swCode = `
+                self.addEventListener('install', e => {{ self.skipWaiting(); }});
+                self.addEventListener('activate', e => {{ e.waitUntil(self.clients.claim()); }});
+                self.addEventListener('push', e => {{
+                    const data = e.data ? e.data.json() : {{}};
+                    const title = data.title || 'Ponto ExSA';
+                    const options = {{
+                        body: data.body || data.message || 'Nova notificação',
+                        icon: data.icon || '/favicon.ico',
+                        badge: '/favicon.ico',
+                        tag: data.tag || 'ponto-exsa',
+                        vibrate: [200, 100, 200],
+                        data: data.data || {{}}
+                    }};
+                    e.waitUntil(self.registration.showNotification(title, options));
+                }});
+                self.addEventListener('notificationclick', e => {{
+                    e.notification.close();
+                    e.waitUntil(clients.matchAll({{ type: 'window' }}).then(list => {{
+                        for (const client of list) {{
+                            if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
+                        }}
+                        if (clients.openWindow) return clients.openWindow('/');
+                    }}));
+                }});
+            `;
             
             async function enablePushNotificationsGestor() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
                 
-                // Verificar se Service Worker e Push são suportados no contexto pai
                 if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
                 }}
                 
-                // Verificar permissão
                 if (parentWindow.Notification.permission === 'denied') {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado nas configurações do navegador</span>';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
@@ -5219,15 +5241,14 @@ def tela_gestor():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    // Registrar Service Worker no contexto pai
-                    const registration = await parentWindow.navigator.serviceWorker.register('/app/static/sw.js', {{ scope: '/' }});
+                    const blob = new Blob([swCode], {{ type: 'application/javascript' }});
+                    const swUrl = URL.createObjectURL(blob);
+                    const registration = await parentWindow.navigator.serviceWorker.register(swUrl, {{ scope: '/' }});
                     await parentWindow.navigator.serviceWorker.ready;
                     
-                    // Verificar subscription existente
                     let subscription = await registration.pushManager.getSubscription();
                     
                     if (!subscription) {{
-                        // Solicitar permissão
                         const permission = await parentWindow.Notification.requestPermission();
                         if (permission !== 'granted') {{
                             btn.disabled = false;
@@ -5236,57 +5257,32 @@ def tela_gestor():
                             return;
                         }}
                         
-                        // Converter chave VAPID
                         const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
                         const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
                         const rawData = atob(base64);
                         const outputArray = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) {{
-                            outputArray[i] = rawData.charCodeAt(i);
-                        }}
+                        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
                         
-                        // Criar subscription
                         subscription = await registration.pushManager.subscribe({{
                             userVisibleOnly: true,
                             applicationServerKey: outputArray
                         }});
                     }}
                     
-                    // Salvar subscription localmente
-                    const subscriptionJson = subscription.toJSON();
+                    const subJson = subscription.toJSON();
                     parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
-                        usuario: USUARIO,
-                        endpoint: subscription.endpoint,
-                        p256dh: subscriptionJson.keys.p256dh,
-                        auth: subscriptionJson.keys.auth
+                        usuario: USUARIO, endpoint: subscription.endpoint,
+                        p256dh: subJson.keys.p256dh, auth: subJson.keys.auth
                     }}));
-                    parentWindow.localStorage.setItem('ponto_exsa_push_user', USUARIO);
                     
-                    // Tentar enviar ao servidor
-                    try {{
-                        await fetch(parentWindow.location.origin + '/api/push/subscribe', {{
-                            method: 'POST',
-                            headers: {{ 'Content-Type': 'application/json' }},
-                            body: JSON.stringify({{
-                                usuario: USUARIO,
-                                subscription: {{
-                                    endpoint: subscription.endpoint,
-                                    keys: {{ p256dh: subscriptionJson.keys.p256dh, auth: subscriptionJson.keys.auth }}
-                                }}
-                            }})
-                        }});
-                    }} catch (e) {{ console.log('API não disponível'); }}
-                    
-                    // Mostrar notificação de teste
-                    registration.showNotification('🎉 Notificações Ativadas!', {{
-                        body: 'Você receberá lembretes de ponto no Ponto ExSA.',
-                        icon: '/static/icon-192.svg',
+                    registration.showNotification('🎉 Lembretes Ativados!', {{
+                        body: 'Você receberá lembretes de ponto.',
                         tag: 'ponto-exsa-test'
                     }});
                     
                     btn.style.background = '#9E9E9E';
                     btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
                     
                 }} catch (e) {{
                     console.error('Erro push:', e);
@@ -5296,36 +5292,27 @@ def tela_gestor():
                 }}
             }}
             
-            // Verificar status inicial
             (async function() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
-                
                 try {{
                     if ('serviceWorker' in parentWindow.navigator) {{
-                        const registration = await parentWindow.navigator.serviceWorker.getRegistration();
-                        if (registration) {{
-                            const subscription = await registration.pushManager.getSubscription();
-                            if (subscription) {{
+                        const reg = await parentWindow.navigator.serviceWorker.getRegistration();
+                        if (reg) {{
+                            const sub = await reg.pushManager.getSubscription();
+                            if (sub) {{
                                 btn.style.background = '#9E9E9E';
                                 btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
                                 msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
                             }}
                         }}
-                        
                         if (parentWindow.Notification.permission === 'denied') {{
                             btn.disabled = true;
                             btn.style.opacity = '0.5';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
+                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
                         }}
-                    }} else {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     }}
-                }} catch (e) {{
-                    console.log('Erro ao verificar status:', e);
-                }}
+                }} catch (e) {{ console.log('Status check error:', e); }}
             }})();
             </script>
             """, height=90)
