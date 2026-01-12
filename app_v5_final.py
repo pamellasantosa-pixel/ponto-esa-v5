@@ -2117,29 +2117,32 @@ def tela_funcionario():
 
         st.markdown("---")
         
-        # Botão para ativar notificações push
-        st.markdown("#### 🔔 Notificações Push")
-        
         # Sistema de Push Notifications (ntfy.sh - funciona mesmo com app fechado)
         st.markdown("#### 🔔 Lembretes de Ponto")
         
         # Verificar se já está inscrito
-        topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        try:
+            topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        except:
+            topic, push_ativo = None, False
+        
+        ntfy_topic = get_topic_for_user(st.session_state.usuario)
         
         if push_ativo:
             st.success("✅ Push ativo!")
-            ntfy_topic = get_topic_for_user(st.session_state.usuario)
             
-            st.components.v1.html(f"""
-            <div style="font-size: 12px; padding: 10px; background: #e8f5e9; border-radius: 8px;">
-                <p style="margin: 0 0 8px 0;">📲 <b>Receba no celular:</b></p>
-                <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+            st.markdown(f"""
+            <div style="font-size: 13px; padding: 12px; background: #e8f5e9; border-radius: 8px; margin: 10px 0;">
+                <p style="margin: 0 0 10px 0;"><b>📲 Para receber no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 2;">
                     <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
-                    <li>Inscreva-se no tópico:<br>
-                    <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">{ntfy_topic}</code></li>
+                    <li>Inscreva-se no tópico:</li>
                 </ol>
+                <div style="background: #fff; padding: 8px 12px; border-radius: 6px; margin-top: 8px; text-align: center;">
+                    <code style="font-size: 14px; font-weight: bold; color: #1976d2;">{ntfy_topic}</code>
+                </div>
             </div>
-            """, height=130)
+            """, unsafe_allow_html=True)
             
             if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push"):
                 from push_scheduler import desativar_subscription
@@ -2150,8 +2153,8 @@ def tela_funcionario():
             
             if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push"):
                 topic = registrar_subscription(st.session_state.usuario)
-                st.success("✅ Ativado!")
-                st.rerun()
+                st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
+                st.info("🔄 Recarregue a página para ver as instruções completas")
 
         st.markdown("---")
 
@@ -5040,22 +5043,28 @@ def tela_gestor():
         st.markdown("#### 🔔 Lembretes de Ponto")
         
         # Verificar se já está inscrito
-        topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        try:
+            topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        except:
+            topic, push_ativo = None, False
+        
+        ntfy_topic = get_topic_for_user(st.session_state.usuario)
         
         if push_ativo:
             st.success("✅ Push ativo!")
-            ntfy_topic = get_topic_for_user(st.session_state.usuario)
             
-            st.components.v1.html(f"""
-            <div style="font-size: 12px; padding: 10px; background: #e8f5e9; border-radius: 8px;">
-                <p style="margin: 0 0 8px 0;">📲 <b>Receba no celular:</b></p>
-                <ol style="margin: 0; padding-left: 20px; line-height: 1.8;">
+            st.markdown(f"""
+            <div style="font-size: 13px; padding: 12px; background: #e8f5e9; border-radius: 8px; margin: 10px 0;">
+                <p style="margin: 0 0 10px 0;"><b>📲 Para receber no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 2;">
                     <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
-                    <li>Inscreva-se no tópico:<br>
-                    <code style="background: #fff; padding: 2px 6px; border-radius: 4px; font-size: 11px;">{ntfy_topic}</code></li>
+                    <li>Inscreva-se no tópico:</li>
                 </ol>
+                <div style="background: #fff; padding: 8px 12px; border-radius: 6px; margin-top: 8px; text-align: center;">
+                    <code style="font-size: 14px; font-weight: bold; color: #1976d2;">{ntfy_topic}</code>
+                </div>
             </div>
-            """, height=130)
+            """, unsafe_allow_html=True)
             
             if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push_gestor"):
                 from push_scheduler import desativar_subscription
@@ -5066,8 +5075,8 @@ def tela_gestor():
             
             if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push_gestor"):
                 topic = registrar_subscription(st.session_state.usuario)
-                st.success("✅ Ativado!")
-                st.rerun()
+                st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
+                st.info("🔄 Recarregue a página para ver as instruções completas")
 
         st.markdown("---")
 
