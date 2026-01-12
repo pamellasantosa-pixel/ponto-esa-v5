@@ -12,12 +12,15 @@ from database import get_connection, SQL_PLACEHOLDER
 class NotificationManager:
     def __init__(self):
         self.active_notifications = {}
+    
     def get_notifications(self, user_id):
         return self.active_notifications.get(user_id, [])
+    
     def add_notification(self, user_id, payload):
         if user_id not in self.active_notifications:
             self.active_notifications[user_id] = []
         self.active_notifications[user_id].append(payload)
+        
         # Persistência mínima em SQLite/PostgreSQL
         conn = get_connection()
         cur = conn.cursor()
@@ -34,6 +37,42 @@ class NotificationManager:
         )
         conn.commit()
         conn.close()
+        
+        # Enviar também via ntfy (push no celular)
+        self._enviar_push_ntfy(user_id, title, message, type_)
+    
+    def _enviar_push_ntfy(self, user_id, title, message, type_):
+        """Envia notificação via ntfy.sh para o celular do usuário"""
+        try:
+            from push_scheduler import verificar_subscription, get_topic_for_user, enviar_notificacao
+            
+            # Verificar se usuário tem push ativado
+            topic, ativo = verificar_subscription(user_id)
+            if not ativo:
+                return
+            
+            # Escolher emoji baseado no tipo
+            emoji_map = {
+                'aprovacao': '✅',
+                'rejeicao': '❌',
+                'solicitacao': '📋',
+                'horas_extras': '⏰',
+                'atestado': '📄',
+                'correcao': '🔧',
+                'info': 'ℹ️',
+            }
+            emoji = emoji_map.get(type_, '🔔')
+            
+            # Enviar via ntfy
+            enviar_notificacao(
+                usuario=user_id,
+                titulo=title or "Notificação",
+                mensagem=message or "",
+                emoji=emoji
+            )
+        except Exception as e:
+            # Silenciar erros de push para não afetar o sistema principal
+            print(f"[Push] Erro ao enviar ntfy: {e}")
 
     def start_repeating_notification(self, job_id, user_id, payload, interval_seconds=3, stop_condition=None, **kwargs):
         # Simulação simples: criar duas notificações imediatamente para satisfazer testes

@@ -139,13 +139,20 @@ def enviar_email(
                 )
                 msg.attach(parte)
         
-        # Conectar e enviar
+        # Conectar e enviar - Usar SSL (porta 465) ou TLS (porta 587)
         context = ssl.create_default_context()
         
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls(context=context)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
+        if SMTP_PORT == 465:
+            # SSL direto (mais confiável em alguns servidores)
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
+        else:
+            # STARTTLS (porta 587)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+                server.starttls(context=context)
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
         
         logger.info(f"Email enviado para {destinatario}: {assunto}")
         return True, "Email enviado com sucesso"
@@ -156,6 +163,9 @@ def enviar_email(
     except smtplib.SMTPException as e:
         logger.error(f"Erro SMTP: {e}")
         return False, f"Erro ao enviar email: {str(e)}"
+    except OSError as e:
+        logger.error(f"Erro de rede ao enviar email: {e}")
+        return False, f"Erro: {str(e)}"
     except Exception as e:
         logger.error(f"Erro ao enviar email: {e}")
         return False, f"Erro: {str(e)}"
