@@ -387,6 +387,31 @@ def get_custom_css():
         border: none !important;
     }
 </style>
+<script>
+// Ocultar campos GPS via JavaScript (fallback para navegadores sem :has())
+function hideGpsFields() {
+    document.querySelectorAll('input[placeholder="GPS Lat"], input[placeholder="GPS Lng"]').forEach(function(input) {
+        var container = input.closest('div[data-testid="stTextInput"]') || input.parentElement.parentElement.parentElement;
+        if (container) {
+            container.style.display = 'none';
+            container.style.height = '0';
+            container.style.overflow = 'hidden';
+            container.style.margin = '0';
+            container.style.padding = '0';
+        }
+    });
+}
+// Executar imediatamente e depois de 1 segundo (para quando Streamlit re-renderiza)
+hideGpsFields();
+setTimeout(hideGpsFields, 500);
+setTimeout(hideGpsFields, 1000);
+setTimeout(hideGpsFields, 2000);
+// Observar mudanças no DOM
+if (typeof MutationObserver !== 'undefined') {
+    var observer = new MutationObserver(hideGpsFields);
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+</script>
 """
 
 # Aplicar CSS
