@@ -16,7 +16,7 @@
     // Namespace global
     window.PontoESA = window.PontoESA || {};
 
-    const SW_PATH = '/static/sw.js';
+    const SW_PATH = '/app/static/sw.js';
     const STORAGE_KEY = 'ponto_exsa_push_subscription';
 
     // Estado do sistema

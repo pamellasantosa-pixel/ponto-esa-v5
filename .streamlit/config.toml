@@ -1,0 +1,14 @@
+[server]
+enableStaticServing = true
+headless = true
+address = "0.0.0.0"
+port = 8501
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+primaryColor = "#4CAF50"
+backgroundColor = "#f0f2f6"
+secondaryBackgroundColor = "#e8eaed"
+textColor = "#1f1f1f"

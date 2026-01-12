@@ -360,21 +360,31 @@ def get_custom_css():
         color: #721c24;
     }
     
-    /* Ocultar campos de GPS da interface do usuário */
+    /* Ocultar campos de GPS da interface do usuário - esconder containers completos */
+    /* Usar seletor de atributo para inputs com placeholders GPS */
+    div.stTextInput:has(input[placeholder="GPS Lat"]),
+    div.stTextInput:has(input[placeholder="GPS Lng"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lat"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lng"]) {
+        display: none !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Fallback para navegadores que não suportam :has() */
     input[placeholder="GPS Lat"],
     input[placeholder="GPS Lng"] {
         position: absolute !important;
         left: -9999px !important;
         opacity: 0 !important;
         pointer-events: none !important;
-        height: 1px !important;
-        width: 1px !important;
-    }
-    
-    /* Ocultar containers dos campos GPS */
-    div[data-testid="column"]:has(input[placeholder="GPS Lat"]),
-    div[data-testid="column"]:has(input[placeholder="GPS Lng"]) {
-        display: none !important;
+        height: 0 !important;
+        width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
     }
 </style>
 """
@@ -416,7 +426,7 @@ updateClock();
 </script>
 
 <!-- Push Notifications Script - Versão Simplificada para Streamlit -->
-<script src="/static/push-simple.js"></script>
+<script src="/app/static/push-simple.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -2133,7 +2143,7 @@ def tela_funcionario():
                 
                 try {{
                     // Registrar Service Worker no contexto pai
-                    const registration = await parentWindow.navigator.serviceWorker.register('/static/sw.js', {{ scope: '/' }});
+                    const registration = await parentWindow.navigator.serviceWorker.register('/app/static/sw.js', {{ scope: '/' }});
                     await parentWindow.navigator.serviceWorker.ready;
                     
                     // Verificar subscription existente
@@ -2840,18 +2850,16 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
         # Campos ocultos para capturar GPS via JavaScript
-        # Esses campos são preenchidos automaticamente pelo JavaScript
+        # O CSS global oculta esses campos automaticamente baseado no placeholder
         # Usar session_state para persistir valores do GPS
         if 'gps_lat_value' not in st.session_state:
             st.session_state.gps_lat_value = ""
         if 'gps_lng_value' not in st.session_state:
             st.session_state.gps_lng_value = ""
         
-        # Container oculto para campos GPS - invisível para o usuário
-        st.markdown('<div style="position:absolute;left:-9999px;height:0;overflow:hidden;">', unsafe_allow_html=True)
+        # Campos GPS - ocultos via CSS (placeholder="GPS Lat" e "GPS Lng")
         gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
         gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
-        st.markdown('</div>', unsafe_allow_html=True)
 
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
@@ -5187,7 +5195,7 @@ def tela_gestor():
                 
                 try {{
                     // Registrar Service Worker no contexto pai
-                    const registration = await parentWindow.navigator.serviceWorker.register('/static/sw.js', {{ scope: '/' }});
+                    const registration = await parentWindow.navigator.serviceWorker.register('/app/static/sw.js', {{ scope: '/' }});
                     await parentWindow.navigator.serviceWorker.ready;
                     
                     // Verificar subscription existente

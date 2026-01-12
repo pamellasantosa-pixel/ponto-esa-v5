@@ -12,10 +12,10 @@ const CACHE_VERSION = '2.0.0';
 // Lista de recursos para cache offline
 const STATIC_CACHE = [
     '/',
-    '/static/manifest.json',
-    '/static/icon-192.svg',
-    '/static/icon-512.svg',
-    '/static/offline.html'
+    '/app/static/manifest.json',
+    '/app/static/icon-192.svg',
+    '/app/static/icon-512.svg',
+    '/app/static/offline.html'
 ];
 
 // ============================================
