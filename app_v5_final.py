@@ -2146,7 +2146,7 @@ def tela_funcionario():
                 const msg = document.getElementById('push-msg');
                 
                 if (!('Notification' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
@@ -2166,15 +2166,19 @@ def tela_funcionario():
                     const permission = await parentWindow.Notification.requestPermission();
                     
                     if (permission === 'granted') {{
-                        // Salvar preferência
+                        // Salvar preferência no localStorage
                         parentWindow.localStorage.setItem('ponto_exsa_notifications', 'enabled');
                         parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
                         
-                        // Mostrar notificação de teste
+                        // Configurar intervalo de verificação de lembretes (a cada 1 minuto)
+                        setupReminderInterval();
+                        
+                        // Notificação de confirmação
                         new parentWindow.Notification('🎉 Lembretes Ativados!', {{
-                            body: 'Você receberá lembretes de ponto quando o app estiver aberto.',
+                            body: 'Você receberá lembretes enquanto o app estiver aberto.',
                             icon: '/favicon.ico',
-                            tag: 'ponto-exsa-test'
+                            tag: 'ponto-exsa-test',
+                            requireInteraction: false
                         }});
                         
                         btn.style.background = '#9E9E9E';
@@ -2186,22 +2190,61 @@ def tela_funcionario():
                         msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
                     }}
                 }} catch (e) {{
-                    console.error('Erro:', e);
+                    console.error('[Notif] Erro:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
                 }}
             }}
             
-            // Verificar status inicial
+            function setupReminderInterval() {{
+                // Horários de lembrete (HH:MM)
+                const reminderTimes = ['07:50', '12:00', '13:00', '16:50'];
+                
+                if (parentWindow._pontoExsaReminderInterval) {{
+                    clearInterval(parentWindow._pontoExsaReminderInterval);
+                }}
+                
+                parentWindow._pontoExsaReminderInterval = setInterval(() => {{
+                    const now = new Date();
+                    const currentTime = now.toTimeString().slice(0, 5);
+                    const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
+                    
+                    if (enabled && reminderTimes.includes(currentTime)) {{
+                        const lastNotif = parentWindow.localStorage.getItem('ponto_exsa_last_notif_' + currentTime);
+                        const today = now.toISOString().slice(0, 10);
+                        
+                        if (lastNotif !== today) {{
+                            parentWindow.localStorage.setItem('ponto_exsa_last_notif_' + currentTime, today);
+                            
+                            let mensagem = '⏰ Hora de registrar seu ponto!';
+                            if (currentTime === '07:50') mensagem = '🌅 Bom dia! Não esqueça de registrar a entrada.';
+                            else if (currentTime === '12:00') mensagem = '🍽️ Hora do almoço! Registre a saída.';
+                            else if (currentTime === '13:00') mensagem = '☕ Voltando do almoço? Registre a entrada.';
+                            else if (currentTime === '16:50') mensagem = '🏠 Quase na hora! Registre a saída.';
+                            
+                            new parentWindow.Notification('📋 Ponto EXSA', {{
+                                body: mensagem,
+                                icon: '/favicon.ico',
+                                tag: 'ponto-exsa-reminder-' + currentTime,
+                                requireInteraction: true
+                            }});
+                        }}
+                    }}
+                }}, 60000); // Verificar a cada minuto
+            }}
+            
+            // Verificar status inicial e configurar lembretes se já ativado
             (function() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
+                const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
                 
-                if (parentWindow.Notification.permission === 'granted') {{
+                if (parentWindow.Notification.permission === 'granted' && enabled) {{
                     btn.style.background = '#9E9E9E';
                     btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
                     msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
+                    setupReminderInterval();
                 }} else if (parentWindow.Notification.permission === 'denied') {{
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
@@ -5131,7 +5174,7 @@ def tela_gestor():
                 const msg = document.getElementById('push-msg-gestor');
                 
                 if (!('Notification' in parentWindow)) {{
-                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
+                    msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta notificações</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
                     return;
@@ -5155,9 +5198,10 @@ def tela_gestor():
                         parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
                         
                         new parentWindow.Notification('🎉 Lembretes Ativados!', {{
-                            body: 'Você receberá lembretes de ponto quando o app estiver aberto.',
+                            body: 'Você receberá lembretes enquanto o app estiver aberto.',
                             icon: '/favicon.ico',
-                            tag: 'ponto-exsa-test'
+                            tag: 'ponto-exsa-test',
+                            requireInteraction: false
                         }});
                         
                         btn.style.background = '#9E9E9E';
@@ -5169,18 +5213,20 @@ def tela_gestor():
                         msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
                     }}
                 }} catch (e) {{
-                    console.error('Erro:', e);
+                    console.error('[Notif] Erro:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
                 }}
             }}
             
+            // Verificar status inicial
             (function() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
+                const enabled = parentWindow.localStorage.getItem('ponto_exsa_notifications') === 'enabled';
                 
-                if (parentWindow.Notification.permission === 'granted') {{
+                if (parentWindow.Notification.permission === 'granted' && enabled) {{
                     btn.style.background = '#9E9E9E';
                     btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
                     msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
