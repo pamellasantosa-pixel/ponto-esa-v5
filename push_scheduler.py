@@ -122,6 +122,9 @@ def registrar_subscription(usuario: str) -> str:
     """Registra um usuário para receber push notifications"""
     from database_postgresql import get_connection
     
+    # Garantir que tabela existe
+    criar_tabela_subscriptions()
+    
     topic = get_topic_for_user(usuario)
     
     try:
