@@ -2118,7 +2118,7 @@ def tela_funcionario():
         if vapid_key:
             st.components.v1.html(f"""
             <div id="push-status-sidebar" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable" onclick="enablePushNotifications()" style="
+                <button id="btn-push-enable" onclick="enableNotifications()" style="
                     background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
                     color: white;
                     border: none;
@@ -2139,42 +2139,13 @@ def tela_funcionario():
             </div>
             <script>
             const parentWindow = window.parent;
-            const VAPID_KEY = '{vapid_key}';
             const USUARIO = '{st.session_state.usuario}';
             
-            // Service Worker inline para evitar problemas de MIME type
-            const swCode = `
-                self.addEventListener('install', e => {{ self.skipWaiting(); }});
-                self.addEventListener('activate', e => {{ e.waitUntil(self.clients.claim()); }});
-                self.addEventListener('push', e => {{
-                    const data = e.data ? e.data.json() : {{}};
-                    const title = data.title || 'Ponto ExSA';
-                    const options = {{
-                        body: data.body || data.message || 'Nova notificação',
-                        icon: data.icon || '/favicon.ico',
-                        badge: '/favicon.ico',
-                        tag: data.tag || 'ponto-exsa',
-                        vibrate: [200, 100, 200],
-                        data: data.data || {{}}
-                    }};
-                    e.waitUntil(self.registration.showNotification(title, options));
-                }});
-                self.addEventListener('notificationclick', e => {{
-                    e.notification.close();
-                    e.waitUntil(clients.matchAll({{ type: 'window' }}).then(list => {{
-                        for (const client of list) {{
-                            if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
-                        }}
-                        if (clients.openWindow) return clients.openWindow('/');
-                    }}));
-                }});
-            `;
-            
-            async function enablePushNotifications() {{
+            async function enableNotifications() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
                 
-                if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
+                if (!('Notification' in parentWindow)) {{
                     msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
@@ -2192,85 +2163,50 @@ def tela_funcionario():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    // Criar Service Worker via Blob URL
-                    const blob = new Blob([swCode], {{ type: 'application/javascript' }});
-                    const swUrl = URL.createObjectURL(blob);
+                    const permission = await parentWindow.Notification.requestPermission();
                     
-                    // Registrar SW
-                    const registration = await parentWindow.navigator.serviceWorker.register(swUrl, {{ scope: '/' }});
-                    await parentWindow.navigator.serviceWorker.ready;
-                    
-                    let subscription = await registration.pushManager.getSubscription();
-                    
-                    if (!subscription) {{
-                        const permission = await parentWindow.Notification.requestPermission();
-                        if (permission !== 'granted') {{
-                            btn.disabled = false;
-                            btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
-                            return;
-                        }}
+                    if (permission === 'granted') {{
+                        // Salvar preferência
+                        parentWindow.localStorage.setItem('ponto_exsa_notifications', 'enabled');
+                        parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
                         
-                        // Converter VAPID key
-                        const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
-                        const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
-                        const rawData = atob(base64);
-                        const outputArray = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-                        
-                        subscription = await registration.pushManager.subscribe({{
-                            userVisibleOnly: true,
-                            applicationServerKey: outputArray
+                        // Mostrar notificação de teste
+                        new parentWindow.Notification('🎉 Lembretes Ativados!', {{
+                            body: 'Você receberá lembretes de ponto quando o app estiver aberto.',
+                            icon: '/favicon.ico',
+                            tag: 'ponto-exsa-test'
                         }});
+                        
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
                     }}
-                    
-                    // Salvar subscription
-                    const subJson = subscription.toJSON();
-                    parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
-                        usuario: USUARIO, endpoint: subscription.endpoint,
-                        p256dh: subJson.keys.p256dh, auth: subJson.keys.auth
-                    }}));
-                    
-                    // Notificação de teste
-                    registration.showNotification('🎉 Lembretes Ativados!', {{
-                        body: 'Você receberá lembretes de ponto.',
-                        tag: 'ponto-exsa-test'
-                    }});
-                    
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
-                    
                 }} catch (e) {{
-                    console.error('Erro push:', e);
+                    console.error('Erro:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
                 }}
             }}
             
-            // Verificar status
-            (async function() {{
+            // Verificar status inicial
+            (function() {{
                 const btn = document.getElementById('btn-push-enable');
                 const msg = document.getElementById('push-msg');
-                try {{
-                    if ('serviceWorker' in parentWindow.navigator) {{
-                        const reg = await parentWindow.navigator.serviceWorker.getRegistration();
-                        if (reg) {{
-                            const sub = await reg.pushManager.getSubscription();
-                            if (sub) {{
-                                btn.style.background = '#9E9E9E';
-                                btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                                msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                            }}
-                        }}
-                        if (parentWindow.Notification.permission === 'denied') {{
-                            btn.disabled = true;
-                            btn.style.opacity = '0.5';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
-                        }}
-                    }}
-                }} catch (e) {{ console.log('Status check error:', e); }}
+                
+                if (parentWindow.Notification.permission === 'granted') {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
+                }} else if (parentWindow.Notification.permission === 'denied') {{
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
+                }}
             }})();
             </script>
             """, height=90)
@@ -5160,14 +5096,14 @@ def tela_gestor():
 
         st.markdown("---")
         
-        # Botão para ativar notificações push (gestor também)
+        # Botão para ativar notificações (gestor também)
         st.markdown("#### 🔔 Notificações Push")
         
         vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
         if vapid_key:
             st.components.v1.html(f"""
             <div id="push-status-sidebar-gestor" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable-gestor" onclick="enablePushNotificationsGestor()" style="
+                <button id="btn-push-enable-gestor" onclick="enableNotificationsGestor()" style="
                     background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
                     color: white;
                     border: none;
@@ -5188,42 +5124,13 @@ def tela_gestor():
             </div>
             <script>
             const parentWindow = window.parent;
-            const VAPID_KEY = '{vapid_key}';
             const USUARIO = '{st.session_state.usuario}';
             
-            // Service Worker inline
-            const swCode = `
-                self.addEventListener('install', e => {{ self.skipWaiting(); }});
-                self.addEventListener('activate', e => {{ e.waitUntil(self.clients.claim()); }});
-                self.addEventListener('push', e => {{
-                    const data = e.data ? e.data.json() : {{}};
-                    const title = data.title || 'Ponto ExSA';
-                    const options = {{
-                        body: data.body || data.message || 'Nova notificação',
-                        icon: data.icon || '/favicon.ico',
-                        badge: '/favicon.ico',
-                        tag: data.tag || 'ponto-exsa',
-                        vibrate: [200, 100, 200],
-                        data: data.data || {{}}
-                    }};
-                    e.waitUntil(self.registration.showNotification(title, options));
-                }});
-                self.addEventListener('notificationclick', e => {{
-                    e.notification.close();
-                    e.waitUntil(clients.matchAll({{ type: 'window' }}).then(list => {{
-                        for (const client of list) {{
-                            if (client.url.includes(self.location.origin) && 'focus' in client) return client.focus();
-                        }}
-                        if (clients.openWindow) return clients.openWindow('/');
-                    }}));
-                }});
-            `;
-            
-            async function enablePushNotificationsGestor() {{
+            async function enableNotificationsGestor() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
                 
-                if (!('serviceWorker' in parentWindow.navigator) || !('PushManager' in parentWindow)) {{
+                if (!('Notification' in parentWindow)) {{
                     msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
                     btn.disabled = true;
                     btn.style.opacity = '0.5';
@@ -5241,78 +5148,47 @@ def tela_gestor():
                 btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
                 
                 try {{
-                    const blob = new Blob([swCode], {{ type: 'application/javascript' }});
-                    const swUrl = URL.createObjectURL(blob);
-                    const registration = await parentWindow.navigator.serviceWorker.register(swUrl, {{ scope: '/' }});
-                    await parentWindow.navigator.serviceWorker.ready;
+                    const permission = await parentWindow.Notification.requestPermission();
                     
-                    let subscription = await registration.pushManager.getSubscription();
-                    
-                    if (!subscription) {{
-                        const permission = await parentWindow.Notification.requestPermission();
-                        if (permission !== 'granted') {{
-                            btn.disabled = false;
-                            btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
-                            return;
-                        }}
+                    if (permission === 'granted') {{
+                        parentWindow.localStorage.setItem('ponto_exsa_notifications', 'enabled');
+                        parentWindow.localStorage.setItem('ponto_exsa_user', USUARIO);
                         
-                        const padding = '='.repeat((4 - VAPID_KEY.length % 4) % 4);
-                        const base64 = (VAPID_KEY + padding).replace(/-/g, '+').replace(/_/g, '/');
-                        const rawData = atob(base64);
-                        const outputArray = new Uint8Array(rawData.length);
-                        for (let i = 0; i < rawData.length; ++i) outputArray[i] = rawData.charCodeAt(i);
-                        
-                        subscription = await registration.pushManager.subscribe({{
-                            userVisibleOnly: true,
-                            applicationServerKey: outputArray
+                        new parentWindow.Notification('🎉 Lembretes Ativados!', {{
+                            body: 'Você receberá lembretes de ponto quando o app estiver aberto.',
+                            icon: '/favicon.ico',
+                            tag: 'ponto-exsa-test'
                         }});
+                        
+                        btn.style.background = '#9E9E9E';
+                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
+                    }} else {{
+                        btn.disabled = false;
+                        btn.innerHTML = '<span>🔔</span><span>Ativar Lembretes</span>';
+                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Permissão negada</span>';
                     }}
-                    
-                    const subJson = subscription.toJSON();
-                    parentWindow.localStorage.setItem('ponto_exsa_push_subscription', JSON.stringify({{
-                        usuario: USUARIO, endpoint: subscription.endpoint,
-                        p256dh: subJson.keys.p256dh, auth: subJson.keys.auth
-                    }}));
-                    
-                    registration.showNotification('🎉 Lembretes Ativados!', {{
-                        body: 'Você receberá lembretes de ponto.',
-                        tag: 'ponto-exsa-test'
-                    }});
-                    
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado!</span>';
-                    
                 }} catch (e) {{
-                    console.error('Erro push:', e);
+                    console.error('Erro:', e);
                     btn.disabled = false;
                     btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
                     msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
                 }}
             }}
             
-            (async function() {{
+            (function() {{
                 const btn = document.getElementById('btn-push-enable-gestor');
                 const msg = document.getElementById('push-msg-gestor');
-                try {{
-                    if ('serviceWorker' in parentWindow.navigator) {{
-                        const reg = await parentWindow.navigator.serviceWorker.getRegistration();
-                        if (reg) {{
-                            const sub = await reg.pushManager.getSubscription();
-                            if (sub) {{
-                                btn.style.background = '#9E9E9E';
-                                btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                                msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                            }}
-                        }}
-                        if (parentWindow.Notification.permission === 'denied') {{
-                            btn.disabled = true;
-                            btn.style.opacity = '0.5';
-                            msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
-                        }}
-                    }}
-                }} catch (e) {{ console.log('Status check error:', e); }}
+                
+                if (parentWindow.Notification.permission === 'granted') {{
+                    btn.style.background = '#9E9E9E';
+                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
+                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Notificações ativadas</span>';
+                }} else if (parentWindow.Notification.permission === 'denied') {{
+                    btn.disabled = true;
+                    btn.style.opacity = '0.5';
+                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado</span>';
+                }}
             }})();
             </script>
             """, height=90)
