@@ -80,6 +80,42 @@ class NotificationManager:
         self.add_notification(user_id, payload)
         return True
 
+    def criar_notificacao(self, usuario_destino, tipo, titulo, mensagem, dados_extras=None):
+        """
+        Cria uma notificação para um usuário (usado pelo app).
+        Também envia via push (ntfy) se o usuário tiver ativado.
+        """
+        payload = {
+            'title': titulo,
+            'message': mensagem,
+            'type': tipo,
+            'data': dados_extras or {}
+        }
+        self.add_notification(usuario_destino, payload)
+        
+        # Se for uma solicitação (funcionário -> gestor), notificar gestor via push
+        if tipo in ['aprovacao_hora_extra', 'aprovacao_atestado', 'aprovacao_correcao']:
+            try:
+                from push_scheduler import notificar_gestor_solicitacao
+                
+                # Extrair nome do solicitante do título
+                solicitante = titulo.split(' - ')[-1] if ' - ' in titulo else 'Funcionário'
+                
+                tipo_map = {
+                    'aprovacao_hora_extra': 'hora_extra',
+                    'aprovacao_atestado': 'atestado',
+                    'aprovacao_correcao': 'correcao'
+                }
+                
+                notificar_gestor_solicitacao(
+                    gestor=usuario_destino,
+                    tipo=tipo_map.get(tipo, tipo),
+                    solicitante=solicitante,
+                    descricao=mensagem[:100]  # Limitar tamanho
+                )
+            except Exception as e:
+                print(f"[Push] Erro ao notificar gestor: {e}")
+
     def stop_repeating_notification(self, *args, **kwargs):
         return True
     # Para testes que esperam API mais rica

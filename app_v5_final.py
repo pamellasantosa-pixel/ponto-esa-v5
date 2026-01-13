@@ -2066,6 +2066,15 @@ def tela_funcionario():
                 conn.close()
             
             total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
+            
+            # Contar mensagens não lidas
+            msgs_nao_lidas = 0
+            try:
+                from push_scheduler import obter_mensagens_usuario
+                msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
+                msgs_nao_lidas = len(msgs)
+            except:
+                pass
 
         # CSS para badges
         st.markdown("""
@@ -2092,6 +2101,7 @@ def tela_funcionario():
             "🏦 Meu Banco de Horas",
             "📊 Minhas Horas por Projeto",
             "📁 Meus Arquivos",
+            f"💬 Mensagens{f' 🔴{msgs_nao_lidas}' if msgs_nao_lidas > 0 else ''}",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
 
@@ -2143,6 +2153,26 @@ def tela_funcionario():
                 </div>
             </div>
             """, unsafe_allow_html=True)
+            
+            # Configurar horários personalizados
+            with st.expander("⏰ Configurar Horários"):
+                from push_scheduler import obter_horarios_usuario, atualizar_horarios_usuario
+                
+                horarios = obter_horarios_usuario(st.session_state.usuario)
+                
+                h_entrada = st.text_input("🌅 Entrada:", value=horarios['entrada'], key="h_entrada")
+                h_almoco_s = st.text_input("🍽️ Saída Almoço:", value=horarios['almoco_saida'], key="h_almoco_s")
+                h_almoco_r = st.text_input("☕ Retorno Almoço:", value=horarios['almoco_retorno'], key="h_almoco_r")
+                h_saida = st.text_input("🏠 Saída:", value=horarios['saida'], key="h_saida")
+                
+                if st.button("💾 Salvar Horários", key="salvar_horarios"):
+                    if atualizar_horarios_usuario(
+                        st.session_state.usuario, 
+                        h_entrada, h_almoco_s, h_almoco_r, h_saida
+                    ):
+                        st.success("✅ Horários atualizados!")
+                    else:
+                        st.error("❌ Erro ao salvar")
             
             if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push"):
                 from push_scheduler import desativar_subscription
@@ -2201,8 +2231,54 @@ def tela_funcionario():
         minhas_horas_projeto_interface()
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
+    elif opcao.startswith("� Mensagens"):
+        mensagens_funcionario_interface()
     elif opcao.startswith("🔔 Notificações"):
         notificacoes_interface(horas_extras_system)
+
+
+def mensagens_funcionario_interface():
+    """Interface para visualizar mensagens diretas recebidas"""
+    from push_scheduler import obter_mensagens_usuario, marcar_mensagem_lida
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>💬 Minhas Mensagens</h3>
+        <p>Mensagens diretas enviadas pelo gestor</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    mensagens = obter_mensagens_usuario(st.session_state.usuario)
+    
+    if mensagens:
+        nao_lidas = [m for m in mensagens if not m[4]]
+        lidas = [m for m in mensagens if m[4]]
+        
+        if nao_lidas:
+            st.markdown("### 🔴 Não Lidas")
+            for msg in nao_lidas:
+                msg_id, remetente, texto, data_envio, lida, nome_remetente = msg
+                
+                with st.expander(f"💬 {nome_remetente or remetente} - {data_envio.strftime('%d/%m/%Y %H:%M')}", expanded=True):
+                    st.markdown(f"**De:** {nome_remetente or remetente}")
+                    st.markdown(f"**Data:** {data_envio.strftime('%d/%m/%Y %H:%M')}")
+                    st.info(texto)
+                    
+                    if st.button("✅ Marcar como lida", key=f"ler_msg_{msg_id}"):
+                        marcar_mensagem_lida(msg_id)
+                        st.rerun()
+        
+        if lidas:
+            st.markdown("### ✅ Lidas")
+            for msg in lidas:
+                msg_id, remetente, texto, data_envio, lida, nome_remetente = msg
+                
+                with st.expander(f"💬 {nome_remetente or remetente} - {data_envio.strftime('%d/%m/%Y %H:%M')}"):
+                    st.markdown(f"**De:** {nome_remetente or remetente}")
+                    st.markdown(f"**Data:** {data_envio.strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(texto)
+    else:
+        st.info("📭 Você não tem mensagens")
 
 
 def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
@@ -5012,6 +5088,8 @@ def tela_gestor():
             "📅 Configurar Jornada",
             f"🔧 Corrigir Registros{f' 🔴{correcoes_pendentes}' if correcoes_pendentes > 0 else ''}",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}",
+            "📢 Comunicação",
+            "🏖️ Férias",
             "⚙️ Sistema"
         ]
         
@@ -5066,6 +5144,26 @@ def tela_gestor():
             </div>
             """, unsafe_allow_html=True)
             
+            # Configurar horários personalizados
+            with st.expander("⏰ Configurar Horários"):
+                from push_scheduler import obter_horarios_usuario, atualizar_horarios_usuario
+                
+                horarios = obter_horarios_usuario(st.session_state.usuario)
+                
+                h_entrada = st.text_input("🌅 Entrada:", value=horarios['entrada'], key="h_entrada_g")
+                h_almoco_s = st.text_input("🍽️ Saída Almoço:", value=horarios['almoco_saida'], key="h_almoco_s_g")
+                h_almoco_r = st.text_input("☕ Retorno Almoço:", value=horarios['almoco_retorno'], key="h_almoco_r_g")
+                h_saida = st.text_input("🏠 Saída:", value=horarios['saida'], key="h_saida_g")
+                
+                if st.button("💾 Salvar Horários", key="salvar_horarios_g"):
+                    if atualizar_horarios_usuario(
+                        st.session_state.usuario, 
+                        h_entrada, h_almoco_s, h_almoco_r, h_saida
+                    ):
+                        st.success("✅ Horários atualizados!")
+                    else:
+                        st.error("❌ Erro ao salvar")
+            
             if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push_gestor"):
                 from push_scheduler import desativar_subscription
                 desativar_subscription(st.session_state.usuario)
@@ -5112,8 +5210,222 @@ def tela_gestor():
         gerenciar_usuarios_interface()
     elif opcao.startswith("🔔 Notificações"):
         notificacoes_gestor_interface(horas_extras_system, atestado_system)
+    elif opcao.startswith("📢 Comunicação"):
+        comunicacao_gestor_interface()
+    elif opcao.startswith("🏖️ Férias"):
+        ferias_gestor_interface()
     elif opcao.startswith("⚙️ Sistema"):
         sistema_interface()
+
+
+def comunicacao_gestor_interface():
+    """Interface de comunicação do gestor - Avisos e mensagens diretas"""
+    from push_scheduler import (
+        enviar_aviso_geral, enviar_mensagem_direta, obter_avisos_gestor,
+        obter_mensagens_usuario, marcar_mensagem_lida
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📢 Central de Comunicação</h3>
+        <p>Envie avisos para todos ou mensagens diretas para funcionários</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["📢 Enviar Aviso", "💬 Mensagem Direta", "📜 Histórico"])
+    
+    with tab1:
+        st.markdown("### 📢 Enviar Aviso Geral")
+        st.info("O aviso será enviado como notificação push para todos os funcionários com lembretes ativados")
+        
+        titulo = st.text_input("Título do Aviso:", placeholder="Ex: Reunião amanhã", key="aviso_titulo")
+        mensagem = st.text_area("Mensagem:", placeholder="Detalhes do aviso...", key="aviso_mensagem", height=100)
+        
+        # Opção de destinatários
+        tipo_dest = st.radio("Enviar para:", ["Todos os funcionários", "Selecionar específicos"], horizontal=True)
+        
+        destinatarios = 'todos'
+        if tipo_dest == "Selecionar específicos":
+            # Buscar funcionários
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
+            funcionarios = cursor.fetchall()
+            conn.close()
+            
+            selecionados = st.multiselect(
+                "Selecione os funcionários:",
+                options=[f[0] for f in funcionarios],
+                format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x)
+            )
+            
+            if selecionados:
+                destinatarios = ','.join(selecionados)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("📤 Enviar Aviso", type="primary", use_container_width=True):
+                if titulo and mensagem:
+                    enviados = enviar_aviso_geral(
+                        gestor=st.session_state.usuario,
+                        titulo=titulo,
+                        mensagem=mensagem,
+                        destinatarios=destinatarios
+                    )
+                    
+                    if enviados > 0:
+                        st.success(f"✅ Aviso enviado para {enviados} funcionário(s)!")
+                    else:
+                        st.warning("⚠️ Nenhum funcionário com push ativado")
+                else:
+                    st.error("❌ Preencha o título e a mensagem")
+    
+    with tab2:
+        st.markdown("### 💬 Enviar Mensagem Direta")
+        st.info("A mensagem será enviada como notificação push para o funcionário selecionado")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo", 
+                      (st.session_state.usuario,))
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        destinatario = st.selectbox(
+            "Destinatário:",
+            options=[f[0] for f in funcionarios],
+            format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x),
+            key="msg_destinatario"
+        )
+        
+        msg_direta = st.text_area("Mensagem:", placeholder="Digite sua mensagem...", key="msg_direta", height=100)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("📤 Enviar Mensagem", type="primary", use_container_width=True):
+                if destinatario and msg_direta:
+                    sucesso = enviar_mensagem_direta(
+                        remetente=st.session_state.usuario,
+                        destinatario=destinatario,
+                        mensagem=msg_direta
+                    )
+                    
+                    if sucesso:
+                        st.success(f"✅ Mensagem enviada!")
+                    else:
+                        st.error("❌ Erro ao enviar mensagem")
+                else:
+                    st.error("❌ Selecione o destinatário e escreva a mensagem")
+    
+    with tab3:
+        st.markdown("### 📜 Histórico de Avisos")
+        
+        avisos = obter_avisos_gestor(20)
+        
+        if avisos:
+            for aviso in avisos:
+                aviso_id, gestor, titulo, mensagem, destinatarios, data_envio, nome_gestor = aviso
+                
+                with st.expander(f"📢 {titulo} - {data_envio.strftime('%d/%m/%Y %H:%M')}"):
+                    st.markdown(f"**Enviado por:** {nome_gestor or gestor}")
+                    st.markdown(f"**Para:** {'Todos' if destinatarios == 'todos' else destinatarios}")
+                    st.markdown(f"**Mensagem:** {mensagem}")
+        else:
+            st.info("📋 Nenhum aviso enviado ainda")
+
+
+def ferias_gestor_interface():
+    """Interface para gerenciar férias dos funcionários"""
+    from push_scheduler import cadastrar_ferias, obter_ferias_funcionarios, excluir_ferias
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🏖️ Gerenciar Férias</h3>
+        <p>Cadastre férias e configure lembretes automáticos</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["➕ Cadastrar Férias", "📋 Férias Cadastradas"])
+    
+    with tab1:
+        st.markdown("### ➕ Cadastrar Férias")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario' ORDER BY nome_completo")
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        funcionario = st.selectbox(
+            "Funcionário:",
+            options=[f[0] for f in funcionarios],
+            format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x),
+            key="ferias_funcionario"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio = st.date_input("Data de Início:", key="ferias_inicio")
+        with col2:
+            data_fim = st.date_input("Data de Fim:", key="ferias_fim")
+        
+        dias_aviso = st.slider("Notificar quantos dias antes:", min_value=1, max_value=30, value=7)
+        
+        if st.button("💾 Cadastrar Férias", type="primary"):
+            if funcionario and data_inicio and data_fim:
+                if data_fim >= data_inicio:
+                    sucesso = cadastrar_ferias(funcionario, data_inicio, data_fim, dias_aviso)
+                    
+                    if sucesso:
+                        st.success(f"✅ Férias cadastradas! O funcionário será notificado {dias_aviso} dias antes.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Erro ao cadastrar férias")
+                else:
+                    st.error("❌ A data de fim deve ser maior ou igual à data de início")
+            else:
+                st.error("❌ Preencha todos os campos")
+    
+    with tab2:
+        st.markdown("### 📋 Férias Cadastradas")
+        
+        ferias = obter_ferias_funcionarios()
+        
+        if ferias:
+            from datetime import date
+            hoje = date.today()
+            
+            for f in ferias:
+                ferias_id, usuario, data_inicio, data_fim, dias_aviso, notificado, nome = f
+                
+                # Calcular status
+                if data_fim < hoje:
+                    status = "✅ Concluídas"
+                    cor = "#e8f5e9"
+                elif data_inicio <= hoje <= data_fim:
+                    status = "🏖️ Em férias"
+                    cor = "#fff3e0"
+                else:
+                    dias_restantes = (data_inicio - hoje).days
+                    status = f"📅 Em {dias_restantes} dias"
+                    cor = "#e3f2fd"
+                
+                with st.expander(f"{status} | {nome or usuario} - {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"):
+                    st.markdown(f"**Funcionário:** {nome or usuario}")
+                    st.markdown(f"**Período:** {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+                    duracao = (data_fim - data_inicio).days + 1
+                    st.markdown(f"**Duração:** {duracao} dias")
+                    st.markdown(f"**Aviso:** {dias_aviso} dias antes")
+                    st.markdown(f"**Notificado:** {'Sim' if notificado else 'Não'}")
+                    
+                    if st.button("🗑️ Excluir", key=f"excluir_ferias_{ferias_id}"):
+                        if excluir_ferias(ferias_id):
+                            st.success("✅ Férias excluídas!")
+                            st.rerun()
+        else:
+            st.info("📋 Nenhuma férias cadastrada")
 
 
 def dashboard_gestor(banco_horas_system, calculo_horas_system):
