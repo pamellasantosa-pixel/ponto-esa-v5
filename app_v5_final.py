@@ -2067,14 +2067,14 @@ def tela_funcionario():
             
             total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
             
-            # Contar mensagens não lidas
-            msgs_nao_lidas = 0
-            try:
-                from push_scheduler import obter_mensagens_usuario
-                msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
-                msgs_nao_lidas = len(msgs)
-            except:
-                pass
+        # Contar mensagens não lidas (fora do bloco try/except)
+        msgs_nao_lidas = 0
+        try:
+            from push_scheduler import obter_mensagens_usuario
+            msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
+            msgs_nao_lidas = len(msgs) if msgs else 0
+        except:
+            pass
 
         # CSS para badges
         st.markdown("""
