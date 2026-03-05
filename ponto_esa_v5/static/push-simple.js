@@ -202,6 +202,38 @@
             
             localStorage.setItem(STORAGE_KEY, JSON.stringify(subscriptionData));
             
+            // Tentar enviar para API do servidor (se disponível)
+            try {
+                const apiUrl = window.location.origin + '/api/push/subscribe';
+                const response = await fetch(apiUrl, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        usuario: usuario,
+                        subscription: {
+                            endpoint: subscription.endpoint,
+                            keys: {
+                                p256dh: subscriptionJson.keys.p256dh,
+                                auth: subscriptionJson.keys.auth
+                            }
+                        },
+                        userAgent: navigator.userAgent,
+                        deviceInfo: navigator.platform || 'Unknown'
+                    })
+                });
+                
+                if (response.ok) {
+                    console.log('[Push] Subscription salva no servidor com sucesso');
+                } else {
+                    console.log('[Push] API não disponível, subscription salva apenas localmente');
+                }
+            } catch (apiError) {
+                // API não disponível - subscriptions funcionarão apenas localmente
+                console.log('[Push] Servidor API não disponível:', apiError.message);
+            }
+            
             // Disparar evento para o Streamlit capturar
             window.dispatchEvent(new CustomEvent('pushSubscribed', {
                 detail: subscriptionData

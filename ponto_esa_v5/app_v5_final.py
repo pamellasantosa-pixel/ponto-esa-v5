@@ -25,6 +25,7 @@ from banco_horas_system import BancoHorasSystem, format_saldo_display
 from horas_extras_system import HorasExtrasSystem, get_status_emoji
 from atestado_horas_system import AtestadoHorasSystem
 from upload_system import UploadSystem, format_file_size, get_file_icon, is_image_file, get_category_name
+from push_scheduler import init_push_system, registrar_subscription, verificar_subscription, get_topic_for_user
 # Safe import - provide a robust fallback implementation if streamlit_utils is not available
 # Use dynamic import to avoid static analysis import errors when the optional module is missing.
 import importlib
@@ -168,6 +169,12 @@ st.set_page_config(
     layout="wide",
     initial_sidebar_state="expanded"
 )
+
+# Inicializar sistema de Push Notifications (ntfy.sh)
+try:
+    init_push_system()
+except Exception as e:
+    pass  # Silenciar erros de inicialização do push
 
 # CSS personalizado com novo layout - cacheado como string para melhor performance
 @st.cache_data
@@ -359,7 +366,59 @@ def get_custom_css():
         background: #f8d7da;
         color: #721c24;
     }
+    
+    /* Ocultar campos de GPS da interface do usuário - esconder containers completos */
+    /* Usar seletor de atributo para inputs com placeholders GPS */
+    div.stTextInput:has(input[placeholder="GPS Lat"]),
+    div.stTextInput:has(input[placeholder="GPS Lng"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lat"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lng"]) {
+        display: none !important;
+        height: 0 !important;
+        overflow: hidden !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    
+    /* Fallback para navegadores que não suportam :has() */
+    input[placeholder="GPS Lat"],
+    input[placeholder="GPS Lng"] {
+        position: absolute !important;
+        left: -9999px !important;
+        opacity: 0 !important;
+        pointer-events: none !important;
+        height: 0 !important;
+        width: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: none !important;
+    }
 </style>
+<script>
+// Ocultar campos GPS via JavaScript (fallback para navegadores sem :has())
+function hideGpsFields() {
+    document.querySelectorAll('input[placeholder="GPS Lat"], input[placeholder="GPS Lng"]').forEach(function(input) {
+        var container = input.closest('div[data-testid="stTextInput"]') || input.parentElement.parentElement.parentElement;
+        if (container) {
+            container.style.display = 'none';
+            container.style.height = '0';
+            container.style.overflow = 'hidden';
+            container.style.margin = '0';
+            container.style.padding = '0';
+        }
+    });
+}
+// Executar imediatamente e depois de 1 segundo (para quando Streamlit re-renderiza)
+hideGpsFields();
+setTimeout(hideGpsFields, 500);
+setTimeout(hideGpsFields, 1000);
+setTimeout(hideGpsFields, 2000);
+// Observar mudanças no DOM
+if (typeof MutationObserver !== 'undefined') {
+    var observer = new MutationObserver(hideGpsFields);
+    observer.observe(document.body, { childList: true, subtree: true });
+}
+</script>
 """
 
 # Aplicar CSS
@@ -399,7 +458,7 @@ updateClock();
 </script>
 
 <!-- Push Notifications Script - Versão Simplificada para Streamlit -->
-<script src="/static/push-simple.js"></script>
+<script src="/app/static/push-simple.js"></script>
 """, unsafe_allow_html=True)
 
 # JavaScript para captura de GPS
@@ -1036,6 +1095,7 @@ def iniciar_hora_extra_interface():
                                 INSERT INTO horas_extras_ativas
                                 (usuario, aprovador, justificativa, data_inicio, hora_inicio, status)
                                 VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'aguardando_aprovacao')
+                                RETURNING id
                             """, (
                                 st.session_state.usuario,
                                 aprovador,
@@ -1045,7 +1105,6 @@ def iniciar_hora_extra_interface():
                             ))
                             
                             # Obter ID da hora extra criada
-                            cursor.execute("SELECT last_insert_rowid()")
                             hora_extra_id = cursor.fetchone()[0]
                             
                             conn.commit()
@@ -2007,6 +2066,15 @@ def tela_funcionario():
                 conn.close()
             
             total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
+            
+        # Contar mensagens não lidas (fora do bloco try/except)
+        msgs_nao_lidas = 0
+        try:
+            from push_scheduler import obter_mensagens_usuario
+            msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
+            msgs_nao_lidas = len(msgs) if msgs else 0
+        except:
+            pass
 
         # CSS para badges
         st.markdown("""
@@ -2033,6 +2101,7 @@ def tela_funcionario():
             "🏦 Meu Banco de Horas",
             "📊 Minhas Horas por Projeto",
             "📁 Meus Arquivos",
+            f"💬 Mensagens{f' 🔴{msgs_nao_lidas}' if msgs_nao_lidas > 0 else ''}",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}"
         ]
 
@@ -2058,101 +2127,64 @@ def tela_funcionario():
 
         st.markdown("---")
         
-        # Botão para ativar notificações push
-        st.markdown("#### 🔔 Notificações Push")
+        # Sistema de Push Notifications (ntfy.sh - funciona mesmo com app fechado)
+        st.markdown("#### 🔔 Lembretes de Ponto")
         
-        # Verificar se push está configurado
-        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
-        if vapid_key:
-            st.components.v1.html(f"""
-            <div id="push-status-sidebar" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable" onclick="enablePushNotifications()" style="
-                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-                    color: white;
-                    border: none;
-                    padding: 10px 16px;
-                    border-radius: 8px;
-                    font-size: 13px;
-                    cursor: pointer;
-                    width: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                ">
-                    <span>🔔</span>
-                    <span>Ativar Lembretes</span>
-                </button>
-                <div id="push-msg" style="margin-top: 8px; text-align: center;"></div>
-            </div>
-            <script>
-            async function enablePushNotifications() {{
-                const btn = document.getElementById('btn-push-enable');
-                const msg = document.getElementById('push-msg');
-                
-                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
-                    setTimeout(enablePushNotifications, 1000);
-                    return;
-                }}
-                
-                const state = PontoESA.Push.getState();
-                
-                if (state.isSubscribed) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    return;
-                }}
-                
-                btn.disabled = true;
-                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
-                
-                try {{
-                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
-                    
-                    if (result.success) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
-                    }}
-                }} catch (e) {{
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
-                }}
-            }}
+        # Verificar se já está inscrito
+        try:
+            topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        except:
+            topic, push_ativo = None, False
+        
+        ntfy_topic = get_topic_for_user(st.session_state.usuario)
+        
+        if push_ativo:
+            st.success("✅ Push ativo!")
             
-            // Verificar status inicial após carregar
-            setTimeout(function() {{
-                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
-                    const state = PontoESA.Push.getState();
-                    const btn = document.getElementById('btn-push-enable');
-                    const msg = document.getElementById('push-msg');
-                    
-                    if (state.isSubscribed) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    }} else if (!state.isSupported) {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
-                    }} else if (Notification.permission === 'denied') {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
-                    }}
-                }}
-            }}, 1500);
-            </script>
-            """, height=90)
+            st.markdown(f"""
+            <div style="font-size: 13px; padding: 12px; background: #e8f5e9; border-radius: 8px; margin: 10px 0;">
+                <p style="margin: 0 0 10px 0;"><b>📲 Para receber no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 2;">
+                    <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
+                    <li>Inscreva-se no tópico:</li>
+                </ol>
+                <div style="background: #fff; padding: 8px 12px; border-radius: 6px; margin-top: 8px; text-align: center;">
+                    <code style="font-size: 14px; font-weight: bold; color: #1976d2;">{ntfy_topic}</code>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Configurar horários personalizados
+            with st.expander("⏰ Configurar Horários"):
+                from push_scheduler import obter_horarios_usuario, atualizar_horarios_usuario
+                
+                horarios = obter_horarios_usuario(st.session_state.usuario)
+                
+                h_entrada = st.text_input("🌅 Entrada:", value=horarios['entrada'], key="h_entrada")
+                h_almoco_s = st.text_input("🍽️ Saída Almoço:", value=horarios['almoco_saida'], key="h_almoco_s")
+                h_almoco_r = st.text_input("☕ Retorno Almoço:", value=horarios['almoco_retorno'], key="h_almoco_r")
+                h_saida = st.text_input("🏠 Saída:", value=horarios['saida'], key="h_saida")
+                
+                if st.button("💾 Salvar Horários", key="salvar_horarios"):
+                    if atualizar_horarios_usuario(
+                        st.session_state.usuario, 
+                        h_entrada, h_almoco_s, h_almoco_r, h_saida
+                    ):
+                        st.success("✅ Horários atualizados!")
+                    else:
+                        st.error("❌ Erro ao salvar")
+            
+            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push"):
+                from push_scheduler import desativar_subscription
+                desativar_subscription(st.session_state.usuario)
+                st.rerun()
         else:
-            st.caption("⚠️ Push não configurado")
+            st.info("📱 Receba lembretes mesmo com o app fechado!")
+            
+            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push"):
+                topic = registrar_subscription(st.session_state.usuario)
+                st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
+                st.info("🔄 Recarregue a página para ver as instruções completas")
 
         st.markdown("---")
 
@@ -2199,8 +2231,54 @@ def tela_funcionario():
         minhas_horas_projeto_interface()
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
+    elif opcao.startswith("� Mensagens"):
+        mensagens_funcionario_interface()
     elif opcao.startswith("🔔 Notificações"):
         notificacoes_interface(horas_extras_system)
+
+
+def mensagens_funcionario_interface():
+    """Interface para visualizar mensagens diretas recebidas"""
+    from push_scheduler import obter_mensagens_usuario, marcar_mensagem_lida
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>💬 Minhas Mensagens</h3>
+        <p>Mensagens diretas enviadas pelo gestor</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    mensagens = obter_mensagens_usuario(st.session_state.usuario)
+    
+    if mensagens:
+        nao_lidas = [m for m in mensagens if not m[4]]
+        lidas = [m for m in mensagens if m[4]]
+        
+        if nao_lidas:
+            st.markdown("### 🔴 Não Lidas")
+            for msg in nao_lidas:
+                msg_id, remetente, texto, data_envio, lida, nome_remetente = msg
+                
+                with st.expander(f"💬 {nome_remetente or remetente} - {data_envio.strftime('%d/%m/%Y %H:%M')}", expanded=True):
+                    st.markdown(f"**De:** {nome_remetente or remetente}")
+                    st.markdown(f"**Data:** {data_envio.strftime('%d/%m/%Y %H:%M')}")
+                    st.info(texto)
+                    
+                    if st.button("✅ Marcar como lida", key=f"ler_msg_{msg_id}"):
+                        marcar_mensagem_lida(msg_id)
+                        st.rerun()
+        
+        if lidas:
+            st.markdown("### ✅ Lidas")
+            for msg in lidas:
+                msg_id, remetente, texto, data_envio, lida, nome_remetente = msg
+                
+                with st.expander(f"💬 {nome_remetente or remetente} - {data_envio.strftime('%d/%m/%Y %H:%M')}"):
+                    st.markdown(f"**De:** {nome_remetente or remetente}")
+                    st.markdown(f"**Data:** {data_envio.strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(texto)
+    else:
+        st.info("📭 Você não tem mensagens")
 
 
 def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
@@ -2559,6 +2637,36 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.rerun()
     
     st.markdown("---")
+
+    # Seção de ativação de Push (ntfy)
+    with st.expander("📲 Push (ntfy) - Ativar / Desativar"):
+        st.write("Ative notificações push para receber lembretes no celular via ntfy.sh")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔔 Ativar Push (ntfy)", key="ativar_push"):
+                try:
+                    from push_scheduler import registrar_subscription, get_topic_for_user
+                    topic = registrar_subscription(st.session_state.usuario)
+                    st.success(f"Push ativado. Inscreva-se no tópico: {topic}")
+                    st.markdown(f"**Tópico:** `{topic}`")
+                    st.markdown(f"**URL de inscrição:** https://ntfy.sh/{topic}")
+                except Exception as e:
+                    st.error(f"Erro ao ativar push: {e}")
+        with col_b:
+            if st.button("🔕 Desativar Push", key="desativar_push"):
+                try:
+                    from push_scheduler import desativar_subscription
+                    desativar_subscription(st.session_state.usuario)
+                    st.info("Push desativado para seu usuário.")
+                except Exception as e:
+                    st.error(f"Erro ao desativar push: {e}")
+
+        st.markdown("---")
+        st.markdown("**Instruções rápidas para ativar no celular:**")
+        st.markdown("- Instale o app `ntfy` (Android: Play Store - 'ntfy') ou use um app compatível com topic subscription.")
+        st.markdown("- No app, adicione nova subscription e informe o tópico mostrado acima (ex.: `ponto-exsa-xxxx`).")
+        st.markdown("- Alternativamente, inscreva-se usando a URL: `https://ntfy.sh/<tópico>` no app ou navegador que suporte subscriptions.")
+        st.markdown("- Após a inscrição, você receberá notificações mesmo com o app em segundo plano.")
     
     st.subheader("➕ Novo Registro")
     
@@ -2715,6 +2823,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             placeholder="Descreva brevemente a atividade realizada..."
         )
         
+        
         # Alerta visual para domingo ou feriado
         from calculo_horas_system import eh_dia_com_multiplicador
         
@@ -2749,18 +2858,16 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
 
         # Campos ocultos para capturar GPS via JavaScript
-        # Esses campos são preenchidos automaticamente pelo JavaScript
+        # O CSS global oculta esses campos automaticamente baseado no placeholder
         # Usar session_state para persistir valores do GPS
         if 'gps_lat_value' not in st.session_state:
             st.session_state.gps_lat_value = ""
         if 'gps_lng_value' not in st.session_state:
             st.session_state.gps_lng_value = ""
         
-        col_gps1, col_gps2 = st.columns(2)
-        with col_gps1:
-            gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
-        with col_gps2:
-            gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
+        # Campos GPS - ocultos via CSS (placeholder="GPS Lat" e "GPS Lng")
+        gps_lat_input = st.text_input("Latitude GPS", value=st.session_state.gps_lat_value, key="gps_lat_field", label_visibility="collapsed", placeholder="GPS Lat")
+        gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
 
         submitted = st.form_submit_button(
             "✅ Registrar Ponto", use_container_width=True)
@@ -2804,6 +2911,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     st.success(f"✅ Ponto registrado com sucesso!")
                 st.info(
                     f"🕐 {data_hora_registro.strftime('%d/%m/%Y às %H:%M')}")
+
+                
 
                 # ✨ NOVO: Integração com sistema de jornada e hora extra
                 if tipo_registro == "Fim":
@@ -5012,6 +5121,8 @@ def tela_gestor():
             "📅 Configurar Jornada",
             f"🔧 Corrigir Registros{f' 🔴{correcoes_pendentes}' if correcoes_pendentes > 0 else ''}",
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}",
+            "📢 Comunicação",
+            "🏖️ Férias",
             "⚙️ Sistema"
         ]
         
@@ -5039,100 +5150,64 @@ def tela_gestor():
 
         st.markdown("---")
         
-        # Botão para ativar notificações push (gestor também)
-        st.markdown("#### 🔔 Notificações Push")
+        # Sistema de Push Notifications (ntfy.sh - funciona mesmo com app fechado)
+        st.markdown("#### 🔔 Lembretes de Ponto")
         
-        vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
-        if vapid_key:
-            st.components.v1.html(f"""
-            <div id="push-status-sidebar-gestor" style="margin: 10px 0; font-size: 13px;">
-                <button id="btn-push-enable-gestor" onclick="enablePushNotificationsGestor()" style="
-                    background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-                    color: white;
-                    border: none;
-                    padding: 10px 16px;
-                    border-radius: 8px;
-                    font-size: 13px;
-                    cursor: pointer;
-                    width: 100%;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    gap: 8px;
-                ">
-                    <span>🔔</span>
-                    <span>Ativar Lembretes</span>
-                </button>
-                <div id="push-msg-gestor" style="margin-top: 8px; text-align: center;"></div>
-            </div>
-            <script>
-            async function enablePushNotificationsGestor() {{
-                const btn = document.getElementById('btn-push-enable-gestor');
-                const msg = document.getElementById('push-msg-gestor');
-                
-                if (typeof PontoESA === 'undefined' || !PontoESA.Push) {{
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">⏳ Aguarde...</span>';
-                    setTimeout(enablePushNotificationsGestor, 1000);
-                    return;
-                }}
-                
-                const state = PontoESA.Push.getState();
-                
-                if (state.isSubscribed) {{
-                    btn.style.background = '#9E9E9E';
-                    btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                    msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    return;
-                }}
-                
-                btn.disabled = true;
-                btn.innerHTML = '<span>⏳</span><span>Ativando...</span>';
-                
-                try {{
-                    const result = await PontoESA.Push.init('{st.session_state.usuario}');
-                    
-                    if (result.success) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">✅ Ativado com sucesso!</span>';
-                    }} else {{
-                        btn.disabled = false;
-                        btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + (result.error || 'Erro') + '</span>';
-                    }}
-                }} catch (e) {{
-                    btn.disabled = false;
-                    btn.innerHTML = '<span>🔔</span><span>Tentar Novamente</span>';
-                    msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">' + e.message + '</span>';
-                }}
-            }}
+        # Verificar se já está inscrito
+        try:
+            topic, push_ativo = verificar_subscription(st.session_state.usuario)
+        except:
+            topic, push_ativo = None, False
+        
+        ntfy_topic = get_topic_for_user(st.session_state.usuario)
+        
+        if push_ativo:
+            st.success("✅ Push ativo!")
             
-            // Verificar status inicial
-            setTimeout(function() {{
-                if (typeof PontoESA !== 'undefined' && PontoESA.Push) {{
-                    const state = PontoESA.Push.getState();
-                    const btn = document.getElementById('btn-push-enable-gestor');
-                    const msg = document.getElementById('push-msg-gestor');
-                    
-                    if (state.isSubscribed) {{
-                        btn.style.background = '#9E9E9E';
-                        btn.innerHTML = '<span>✅</span><span>Lembretes Ativos</span>';
-                        msg.innerHTML = '<span style="color: #4CAF50; font-size: 12px;">Você receberá lembretes</span>';
-                    }} else if (!state.isSupported) {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #ff9800; font-size: 12px;">Navegador não suporta</span>';
-                    }} else if (Notification.permission === 'denied') {{
-                        btn.disabled = true;
-                        btn.style.opacity = '0.5';
-                        msg.innerHTML = '<span style="color: #f44336; font-size: 12px;">Bloqueado no navegador</span>';
-                    }}
-                }}
-            }}, 1500);
-            </script>
-            """, height=90)
+            st.markdown(f"""
+            <div style="font-size: 13px; padding: 12px; background: #e8f5e9; border-radius: 8px; margin: 10px 0;">
+                <p style="margin: 0 0 10px 0;"><b>📲 Para receber no celular:</b></p>
+                <ol style="margin: 0; padding-left: 20px; line-height: 2;">
+                    <li>Instale o app <a href="https://ntfy.sh" target="_blank">ntfy</a></li>
+                    <li>Inscreva-se no tópico:</li>
+                </ol>
+                <div style="background: #fff; padding: 8px 12px; border-radius: 6px; margin-top: 8px; text-align: center;">
+                    <code style="font-size: 14px; font-weight: bold; color: #1976d2;">{ntfy_topic}</code>
+                </div>
+            </div>
+            """, unsafe_allow_html=True)
+            
+            # Configurar horários personalizados
+            with st.expander("⏰ Configurar Horários"):
+                from push_scheduler import obter_horarios_usuario, atualizar_horarios_usuario
+                
+                horarios = obter_horarios_usuario(st.session_state.usuario)
+                
+                h_entrada = st.text_input("🌅 Entrada:", value=horarios['entrada'], key="h_entrada_g")
+                h_almoco_s = st.text_input("🍽️ Saída Almoço:", value=horarios['almoco_saida'], key="h_almoco_s_g")
+                h_almoco_r = st.text_input("☕ Retorno Almoço:", value=horarios['almoco_retorno'], key="h_almoco_r_g")
+                h_saida = st.text_input("🏠 Saída:", value=horarios['saida'], key="h_saida_g")
+                
+                if st.button("💾 Salvar Horários", key="salvar_horarios_g"):
+                    if atualizar_horarios_usuario(
+                        st.session_state.usuario, 
+                        h_entrada, h_almoco_s, h_almoco_r, h_saida
+                    ):
+                        st.success("✅ Horários atualizados!")
+                    else:
+                        st.error("❌ Erro ao salvar")
+            
+            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push_gestor"):
+                from push_scheduler import desativar_subscription
+                desativar_subscription(st.session_state.usuario)
+                st.rerun()
         else:
-            st.caption("⚠️ Push não configurado")
+            st.info("📱 Receba lembretes mesmo com o app fechado!")
+            
+            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push_gestor"):
+                topic = registrar_subscription(st.session_state.usuario)
+                st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
+                st.info("🔄 Recarregue a página para ver as instruções completas")
 
         st.markdown("---")
 
@@ -5168,8 +5243,222 @@ def tela_gestor():
         gerenciar_usuarios_interface()
     elif opcao.startswith("🔔 Notificações"):
         notificacoes_gestor_interface(horas_extras_system, atestado_system)
+    elif opcao.startswith("📢 Comunicação"):
+        comunicacao_gestor_interface()
+    elif opcao.startswith("🏖️ Férias"):
+        ferias_gestor_interface()
     elif opcao.startswith("⚙️ Sistema"):
         sistema_interface()
+
+
+def comunicacao_gestor_interface():
+    """Interface de comunicação do gestor - Avisos e mensagens diretas"""
+    from push_scheduler import (
+        enviar_aviso_geral, enviar_mensagem_direta, obter_avisos_gestor,
+        obter_mensagens_usuario, marcar_mensagem_lida
+    )
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>📢 Central de Comunicação</h3>
+        <p>Envie avisos para todos ou mensagens diretas para funcionários</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2, tab3 = st.tabs(["📢 Enviar Aviso", "💬 Mensagem Direta", "📜 Histórico"])
+    
+    with tab1:
+        st.markdown("### 📢 Enviar Aviso Geral")
+        st.info("O aviso será enviado como notificação push para todos os funcionários com lembretes ativados")
+        
+        titulo = st.text_input("Título do Aviso:", placeholder="Ex: Reunião amanhã", key="aviso_titulo")
+        mensagem = st.text_area("Mensagem:", placeholder="Detalhes do aviso...", key="aviso_mensagem", height=100)
+        
+        # Opção de destinatários
+        tipo_dest = st.radio("Enviar para:", ["Todos os funcionários", "Selecionar específicos"], horizontal=True)
+        
+        destinatarios = 'todos'
+        if tipo_dest == "Selecionar específicos":
+            # Buscar funcionários
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
+            funcionarios = cursor.fetchall()
+            conn.close()
+            
+            selecionados = st.multiselect(
+                "Selecione os funcionários:",
+                options=[f[0] for f in funcionarios],
+                format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x)
+            )
+            
+            if selecionados:
+                destinatarios = ','.join(selecionados)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("📤 Enviar Aviso", type="primary", use_container_width=True):
+                if titulo and mensagem:
+                    enviados = enviar_aviso_geral(
+                        gestor=st.session_state.usuario,
+                        titulo=titulo,
+                        mensagem=mensagem,
+                        destinatarios=destinatarios
+                    )
+                    
+                    if enviados > 0:
+                        st.success(f"✅ Aviso enviado para {enviados} funcionário(s)!")
+                    else:
+                        st.warning("⚠️ Nenhum funcionário com push ativado")
+                else:
+                    st.error("❌ Preencha o título e a mensagem")
+    
+    with tab2:
+        st.markdown("### 💬 Enviar Mensagem Direta")
+        st.info("A mensagem será enviada como notificação push para o funcionário selecionado")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo", 
+                      (st.session_state.usuario,))
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        destinatario = st.selectbox(
+            "Destinatário:",
+            options=[f[0] for f in funcionarios],
+            format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x),
+            key="msg_destinatario"
+        )
+        
+        msg_direta = st.text_area("Mensagem:", placeholder="Digite sua mensagem...", key="msg_direta", height=100)
+        
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            if st.button("📤 Enviar Mensagem", type="primary", use_container_width=True):
+                if destinatario and msg_direta:
+                    sucesso = enviar_mensagem_direta(
+                        remetente=st.session_state.usuario,
+                        destinatario=destinatario,
+                        mensagem=msg_direta
+                    )
+                    
+                    if sucesso:
+                        st.success(f"✅ Mensagem enviada!")
+                    else:
+                        st.error("❌ Erro ao enviar mensagem")
+                else:
+                    st.error("❌ Selecione o destinatário e escreva a mensagem")
+    
+    with tab3:
+        st.markdown("### 📜 Histórico de Avisos")
+        
+        avisos = obter_avisos_gestor(20)
+        
+        if avisos:
+            for aviso in avisos:
+                aviso_id, gestor, titulo, mensagem, destinatarios, data_envio, nome_gestor = aviso
+                
+                with st.expander(f"📢 {titulo} - {data_envio.strftime('%d/%m/%Y %H:%M')}"):
+                    st.markdown(f"**Enviado por:** {nome_gestor or gestor}")
+                    st.markdown(f"**Para:** {'Todos' if destinatarios == 'todos' else destinatarios}")
+                    st.markdown(f"**Mensagem:** {mensagem}")
+        else:
+            st.info("📋 Nenhum aviso enviado ainda")
+
+
+def ferias_gestor_interface():
+    """Interface para gerenciar férias dos funcionários"""
+    from push_scheduler import cadastrar_ferias, obter_ferias_funcionarios, excluir_ferias
+    
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🏖️ Gerenciar Férias</h3>
+        <p>Cadastre férias e configure lembretes automáticos</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    tab1, tab2 = st.tabs(["➕ Cadastrar Férias", "📋 Férias Cadastradas"])
+    
+    with tab1:
+        st.markdown("### ➕ Cadastrar Férias")
+        
+        # Buscar funcionários
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario' ORDER BY nome_completo")
+        funcionarios = cursor.fetchall()
+        conn.close()
+        
+        funcionario = st.selectbox(
+            "Funcionário:",
+            options=[f[0] for f in funcionarios],
+            format_func=lambda x: next((f[1] for f in funcionarios if f[0] == x), x),
+            key="ferias_funcionario"
+        )
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            data_inicio = st.date_input("Data de Início:", key="ferias_inicio")
+        with col2:
+            data_fim = st.date_input("Data de Fim:", key="ferias_fim")
+        
+        dias_aviso = st.slider("Notificar quantos dias antes:", min_value=1, max_value=30, value=7)
+        
+        if st.button("💾 Cadastrar Férias", type="primary"):
+            if funcionario and data_inicio and data_fim:
+                if data_fim >= data_inicio:
+                    sucesso = cadastrar_ferias(funcionario, data_inicio, data_fim, dias_aviso)
+                    
+                    if sucesso:
+                        st.success(f"✅ Férias cadastradas! O funcionário será notificado {dias_aviso} dias antes.")
+                        st.rerun()
+                    else:
+                        st.error("❌ Erro ao cadastrar férias")
+                else:
+                    st.error("❌ A data de fim deve ser maior ou igual à data de início")
+            else:
+                st.error("❌ Preencha todos os campos")
+    
+    with tab2:
+        st.markdown("### 📋 Férias Cadastradas")
+        
+        ferias = obter_ferias_funcionarios()
+        
+        if ferias:
+            from datetime import date
+            hoje = date.today()
+            
+            for f in ferias:
+                ferias_id, usuario, data_inicio, data_fim, dias_aviso, notificado, nome = f
+                
+                # Calcular status
+                if data_fim < hoje:
+                    status = "✅ Concluídas"
+                    cor = "#e8f5e9"
+                elif data_inicio <= hoje <= data_fim:
+                    status = "🏖️ Em férias"
+                    cor = "#fff3e0"
+                else:
+                    dias_restantes = (data_inicio - hoje).days
+                    status = f"📅 Em {dias_restantes} dias"
+                    cor = "#e3f2fd"
+                
+                with st.expander(f"{status} | {nome or usuario} - {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}"):
+                    st.markdown(f"**Funcionário:** {nome or usuario}")
+                    st.markdown(f"**Período:** {data_inicio.strftime('%d/%m/%Y')} a {data_fim.strftime('%d/%m/%Y')}")
+                    duracao = (data_fim - data_inicio).days + 1
+                    st.markdown(f"**Duração:** {duracao} dias")
+                    st.markdown(f"**Aviso:** {dias_aviso} dias antes")
+                    st.markdown(f"**Notificado:** {'Sim' if notificado else 'Não'}")
+                    
+                    if st.button("🗑️ Excluir", key=f"excluir_ferias_{ferias_id}"):
+                        if excluir_ferias(ferias_id):
+                            st.success("✅ Férias excluídas!")
+                            st.rerun()
+        else:
+            st.info("📋 Nenhuma férias cadastrada")
 
 
 def dashboard_gestor(banco_horas_system, calculo_horas_system):
@@ -8358,6 +8647,7 @@ def gerenciar_usuarios_interface():
                                 (usuario, senha, tipo, nome_completo, cpf, email, data_nascimento, ativo, 
                                  jornada_inicio_previsto, jornada_fim_previsto)
                                 VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                RETURNING id
                             """, (
                                 novo_login,
                                 senha_hash,
@@ -8372,7 +8662,6 @@ def gerenciar_usuarios_interface():
                             ))
                             
                             # Obter ID do usuário recém-criado
-                            cursor.execute("SELECT last_insert_rowid()")
                             novo_usuario_id = cursor.fetchone()[0]
 
                             conn.commit()

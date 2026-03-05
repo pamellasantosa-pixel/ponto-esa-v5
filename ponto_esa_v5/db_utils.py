@@ -8,7 +8,11 @@ desnecessária à aplicação.
 from contextlib import contextmanager
 from typing import Any, Dict
 
-from .database import get_connection
+# Importação flexível para funcionar em diferentes contextos
+try:
+    from database import get_connection
+except ImportError:
+    from ponto_esa_v5.database import get_connection
 
 
 def create_success_response(message: str, **extra: Any) -> Dict[str, Any]:
