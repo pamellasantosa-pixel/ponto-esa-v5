@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: ponto-exsa
+    runtime: python
+    buildCommand: pip install -r requirements-pinned.txt
+    startCommand: streamlit run app_v5_final.py --server.port=$PORT --server.address=0.0.0.0 --server.headless=true
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.0
+    headers:
+      - path: /sw.js
+        name: Content-Type
+        value: application/javascript
+      - path: /sw.js
+        name: Service-Worker-Allowed
+        value: /

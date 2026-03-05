@@ -43,10 +43,10 @@ except ImportError:
 
 # Importar conexão com banco
 try:
-    from database import get_connection, SQL_PLACEHOLDER
+    from database import get_connection, return_connection, SQL_PLACEHOLDER
 except ImportError:
     # Fallback se importar de outro local
-    from ponto_esa_v5.database import get_connection, SQL_PLACEHOLDER
+    from ponto_esa_v5.database import get_connection, return_connection, SQL_PLACEHOLDER
 
 
 # ============================================
@@ -140,7 +140,7 @@ def salvar_subscription(
         return False, f"Erro ao salvar subscription: {str(e)}"
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def remover_subscription(endpoint: str) -> Tuple[bool, str]:
@@ -175,7 +175,7 @@ def remover_subscription(endpoint: str) -> Tuple[bool, str]:
         return False, f"Erro ao remover: {str(e)}"
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def obter_subscriptions_usuario(usuario: str) -> List[Dict]:
@@ -223,7 +223,7 @@ def obter_subscriptions_usuario(usuario: str) -> List[Dict]:
         return []
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def marcar_subscription_invalida(endpoint: str) -> None:
@@ -249,7 +249,7 @@ def marcar_subscription_invalida(endpoint: str) -> None:
         logger.error(f"Erro ao marcar subscription inválida: {e}")
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def resetar_falhas_subscription(endpoint: str) -> None:
@@ -271,7 +271,7 @@ def resetar_falhas_subscription(endpoint: str) -> None:
         logger.error(f"Erro ao resetar falhas: {e}")
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 # ============================================
@@ -475,7 +475,7 @@ def enviar_notificacao_para_todos(
         return {'error': str(e)}
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 # ============================================
@@ -512,7 +512,7 @@ def registrar_notificacao_log(
         logger.error(f"Erro ao registrar log de notificação: {e}")
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 # ============================================

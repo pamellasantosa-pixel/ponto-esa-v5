@@ -197,7 +197,7 @@ def render_push_config(usuario: str) -> None:
 def carregar_preferencias_push(usuario: str) -> Dict:
     """Carrega preferências de push do banco de dados."""
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         
         conn = get_connection()
         cursor = conn.cursor()
@@ -209,7 +209,7 @@ def carregar_preferencias_push(usuario: str) -> Dict:
         """, (usuario,))
         
         row = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
         
         if row:
             return {
@@ -236,7 +236,7 @@ def carregar_preferencias_push(usuario: str) -> Dict:
 def salvar_preferencias_push(usuario: str, prefs: Dict) -> bool:
     """Salva preferências de push no banco de dados."""
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         
         conn = get_connection()
         cursor = conn.cursor()
@@ -258,7 +258,7 @@ def salvar_preferencias_push(usuario: str, prefs: Dict) -> bool:
         ))
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
         
         return True
         

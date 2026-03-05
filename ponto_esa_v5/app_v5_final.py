@@ -68,15 +68,12 @@ try:
     REFACTORING_ENABLED = True
 except ImportError:
     # Fallbacks for error_handler functions
+    import logging as _logging_fb
     def log_error(msg, *args, **kwargs):
-        print(f"[ERROR] {msg}", args, kwargs)
-    def get_logger(name=None):
-        import logging
-        return logging.getLogger(name)
+        _logging_fb.getLogger("fallback").error(msg, *args)
     def log_security_event(event, **kwargs):
-        print(f"[SECURITY EVENT] {event}", kwargs)
+        _logging_fb.getLogger("security").info("[SECURITY] %s %s", event, kwargs)
     REFACTORING_ENABLED = False
-    print("[AVISO] Modulos de refatoracao nao disponíveis. Usando get_connection() tradicional.")
 
 import streamlit as st
 import os
@@ -90,15 +87,15 @@ from io import BytesIO
 import sys
 from dotenv import load_dotenv
 import pytz  # Para gerenciar fusos horários
-import logging
 
-# Configurar logger
-logger = logging.getLogger(__name__)
+# Configurar logger centralizado
+from app_logger import get_logger, log_db_error, log_user_action
+logger = get_logger(__name__)
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
-from database import get_connection as get_db_connection, init_db, SQL_PLACEHOLDER
+from database import get_connection as get_db_connection, return_connection as _return_conn, init_db, SQL_PLACEHOLDER
 
 # Expoe placeholder no namespace atual para compatibilidade
 current_module = sys.modules[__name__]
@@ -116,6 +113,101 @@ TIMEZONE_BR = pytz.timezone('America/Sao_Paulo')
 def get_datetime_br():
     """Retorna datetime atual no fuso horário de Brasília"""
     return datetime.now(TIMEZONE_BR)
+
+
+# =============================================
+# VALIDAÇÃO DE INPUT — Previne crashes e injeção
+# =============================================
+
+def validar_texto(valor, nome_campo: str, min_len: int = 1, max_len: int = 255) -> str:
+    """Valida e sanitiza input de texto.
+
+    Args:
+        valor: valor a validar.
+        nome_campo: nome do campo para mensagem de erro.
+        min_len: comprimento mínimo.
+        max_len: comprimento máximo.
+
+    Returns:
+        String sanitizada.
+
+    Raises:
+        ValueError: se a validação falhar.
+    """
+    if valor is None:
+        raise ValueError(f"O campo '{nome_campo}' é obrigatório.")
+    texto = str(valor).strip()
+    if len(texto) < min_len:
+        raise ValueError(f"O campo '{nome_campo}' deve ter pelo menos {min_len} caractere(s).")
+    if len(texto) > max_len:
+        raise ValueError(f"O campo '{nome_campo}' deve ter no máximo {max_len} caracteres.")
+    return texto
+
+
+def validar_numero(valor, nome_campo: str, min_val=None, max_val=None) -> float:
+    """Valida input numérico.
+
+    Args:
+        valor: valor a converter e validar.
+        nome_campo: nome do campo para mensagem de erro.
+        min_val: valor mínimo aceito (opcional).
+        max_val: valor máximo aceito (opcional).
+
+    Returns:
+        Valor numérico validado.
+
+    Raises:
+        ValueError: se não for numérico ou fora do range.
+    """
+    try:
+        num = float(valor)
+    except (TypeError, ValueError):
+        raise ValueError(f"O campo '{nome_campo}' deve ser um número válido. Recebido: '{valor}'")
+    if min_val is not None and num < min_val:
+        raise ValueError(f"O campo '{nome_campo}' deve ser no mínimo {min_val}.")
+    if max_val is not None and num > max_val:
+        raise ValueError(f"O campo '{nome_campo}' deve ser no máximo {max_val}.")
+    return num
+
+
+def validar_cpf(cpf: str) -> str:
+    """Valida e limpa um CPF (apenas dígitos, 11 caracteres).
+
+    Args:
+        cpf: CPF com ou sem formatação.
+
+    Returns:
+        CPF limpo (apenas dígitos).
+
+    Raises:
+        ValueError: se o CPF for inválido.
+    """
+    import re
+    cpf_limpo = re.sub(r'\D', '', str(cpf))
+    if len(cpf_limpo) != 11:
+        raise ValueError("CPF deve conter exatamente 11 dígitos.")
+    if cpf_limpo == cpf_limpo[0] * 11:
+        raise ValueError("CPF inválido (todos os dígitos iguais).")
+    return cpf_limpo
+
+
+def validar_email(email: str) -> str:
+    """Valida formato básico de email.
+
+    Args:
+        email: endereço de email.
+
+    Returns:
+        Email limpo e em lowercase.
+
+    Raises:
+        ValueError: se o formato for inválido.
+    """
+    import re
+    email = str(email).strip().lower()
+    if email and not re.match(r'^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$', email):
+        raise ValueError(f"Email inválido: {email}")
+    return email
 
 # Utilitários seguros para datas/horas (compatível com PostgreSQL/SQLite)
 def _try_parse_dt(value, fmt):
@@ -585,7 +677,7 @@ def verificar_login(usuario, senha):
         cursor.execute(
             "SELECT tipo, nome_completo FROM usuarios WHERE usuario = %s AND senha = %s", (usuario, senha_hash))
         result = cursor.fetchone()
-        conn.close()
+        _return_conn(conn)
         return result
 
 
@@ -602,7 +694,7 @@ def obter_projetos_ativos():
         cursor = conn.cursor()
         cursor.execute("SELECT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
         projetos = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        _return_conn(conn)
         return projetos
 
 
@@ -654,7 +746,7 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
             VALUES ({placeholders})
         ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
         conn.commit()
-        conn.close()
+        _return_conn(conn)
         return data_hora_registro
 
 
@@ -676,7 +768,7 @@ def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
         cursor = conn.cursor()
         cursor.execute(query, params)
         registros = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         return registros
 
 
@@ -693,7 +785,7 @@ def obter_usuarios_para_aprovacao():
         cursor.execute(
             "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
         usuarios = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         return [{"usuario": u[0], "nome": u[1] or u[0]} for u in usuarios]
 
 
@@ -711,7 +803,7 @@ def obter_usuarios_ativos():
         cursor.execute(
             "SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
         rows = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         return [{"usuario": r[0], "nome_completo": r[1] or r[0]} for r in rows]
 
 # Interface de login
@@ -777,9 +869,11 @@ def tela_login():
                         st.session_state.tipo_usuario = resultado[0]
                         st.session_state.nome_completo = resultado[1]
                         st.session_state.logged_in = True
+                        log_user_action(usuario, "login", f"tipo={resultado[0]}")
                         st.success("✅ Login realizado com sucesso!")
                         st.rerun()
                     else:
+                        logger.warning("Tentativa de login falhou para usuario=%s", usuario)
                         st.error("❌ Usuário ou senha incorretos")
                 else:
                     st.warning("⚠️ Preencha todos os campos")
@@ -905,7 +999,7 @@ def validar_limites_horas_extras(usuario):
             """, (usuario, inicio_semana))
             
             horas_semana_historico = cursor.fetchone()[0] or 0
-            conn.close()
+            _return_conn(conn)
         
         horas_hoje_total = horas_hoje_ativas + horas_hoje_historico
         horas_semana_total = horas_semana_ativas + horas_semana_historico
@@ -1137,7 +1231,7 @@ def iniciar_hora_extra_interface():
                         except Exception as e:
                             st.error(f"❌ Erro ao registrar hora extra: {e}")
                         finally:
-                            conn.close()
+                            _return_conn(conn)
 
 
 def exibir_hora_extra_em_andamento():
@@ -1432,7 +1526,7 @@ def exibir_hora_extra_em_andamento():
             logger.error(f"Erro em exibir_hora_extra_em_andamento: {str(e)}")
         finally:
             if conn:
-                conn.close()
+                _return_conn(conn)
 
 
 def aprovar_hora_extra_rapida_interface():
@@ -1718,7 +1812,7 @@ def aprovar_hora_extra_rapida_interface():
             logger.error(f"Erro em aprovar_hora_extra_rapida_interface: {str(e)}")
         finally:
             if conn:
-                conn.close()
+                _return_conn(conn)
 
 
 def exibir_widget_notificacoes(horas_extras_system):
@@ -1796,7 +1890,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                 """, (st.session_state.usuario,))
                 atestados_pendentes = cursor.fetchone()[0]
                 
-                conn.close()
+                _return_conn(conn)
         
         total_notificacoes = he_pendentes + correcoes_pendentes + atestados_pendentes
         
@@ -1864,9 +1958,9 @@ def exibir_widget_notificacoes(horas_extras_system):
                         result = cursor.fetchone()
                         if result:
                             nome_solicitante = result[0]
-                        conn.close()
-                except:
-                    pass
+                        _return_conn(conn)
+                except Exception as e:
+                    logger.debug(f"Erro ao buscar nome do solicitante: {e}")
                 
                 with st.expander(f"🕐 {nome_solicitante} - {sol_data} - {format_time_duration(sol_total)}", expanded=True):
                     col1, col2 = st.columns([2, 1])
@@ -1899,7 +1993,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                                         WHERE id = {SQL_PLACEHOLDER}
                                     """, (st.session_state.usuario, observacoes_he, sol_id))
                                     conn.commit()
-                                    conn.close()
+                                    _return_conn(conn)
                                     st.success("✅ Horas extras aprovadas!")
                                     st.rerun()
                                 except Exception as e:
@@ -1920,7 +2014,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                                             WHERE id = {SQL_PLACEHOLDER}
                                         """, (st.session_state.usuario, observacoes_he, sol_id))
                                         conn.commit()
-                                        conn.close()
+                                        _return_conn(conn)
                                         st.warning("❌ Horas extras rejeitadas.")
                                         st.rerun()
                                     except Exception as e:
@@ -2063,7 +2157,7 @@ def tela_funcionario():
                 """, (st.session_state.usuario,))
                 atestados_pendentes = cursor.fetchone()[0]
                 
-                conn.close()
+                _return_conn(conn)
             
             total_notif = he_aprovar + correcoes_pendentes + atestados_pendentes
             
@@ -2073,8 +2167,8 @@ def tela_funcionario():
             from push_scheduler import obter_mensagens_usuario
             msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
             msgs_nao_lidas = len(msgs) if msgs else 0
-        except:
-            pass
+        except Exception as e:
+            logger.debug(f"Erro ao contar mensagens não lidas: {e}")
 
         # CSS para badges
         st.markdown("""
@@ -2133,7 +2227,8 @@ def tela_funcionario():
         # Verificar se já está inscrito
         try:
             topic, push_ativo = verificar_subscription(st.session_state.usuario)
-        except:
+        except Exception as e:
+            logger.debug(f"Erro ao verificar subscription push (funcionário): {e}")
             topic, push_ativo = None, False
         
         ntfy_topic = get_topic_for_user(st.session_state.usuario)
@@ -2313,7 +2408,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     try:
         h_fim, m_fim = map(int, horario_fim_jornada.split(':'))
         hora_fim_jornada = agora.replace(hour=h_fim, minute=m_fim, second=0, microsecond=0)
-    except:
+    except Exception as e:
+        logger.debug(f"Erro ao parsear horário fim jornada '{horario_fim_jornada}', usando 17:00: {e}")
         hora_fim_jornada = agora.replace(hour=17, minute=0, second=0, microsecond=0)
     
     # Verificar se passou do horário de fim
@@ -2332,8 +2428,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 tipos = [r[0].lower() if r[0] else '' for r in result]
                 ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
                 ja_registrou_fim = 'fim' in tipos
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Erro ao verificar registros de ponto do dia: {e}")
     else:
         try:
             conn = get_connection()
@@ -2345,9 +2441,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             tipos = [r[0].lower() if r[0] else '' for r in cursor.fetchall()]
             ja_registrou_inicio = 'início' in tipos or 'inicio' in tipos
             ja_registrou_fim = 'fim' in tipos
-            conn.close()
-        except:
-            pass
+            _return_conn(conn)
+        except Exception as e:
+            logger.warning(f"Erro ao verificar registros de ponto do dia (legacy): {e}")
     
     # Inicializar session_state para horas extras
     if 'horas_extras_ativa' not in st.session_state:
@@ -2369,8 +2465,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             )
             if usuarios:
                 usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
-        except:
-            pass
+        except Exception as e:
+            logger.warning(f"Erro ao listar usuários para aprovação: {e}")
     else:
         try:
             conn = get_connection()
@@ -2381,9 +2477,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
             )
             usuarios = cursor.fetchall()
             usuarios_lista = [f"{u[1]} ({u[0]})" for u in usuarios]
-            conn.close()
-        except:
-            pass
+            _return_conn(conn)
+        except Exception as e:
+            logger.warning(f"Erro ao listar usuários para aprovação (legacy): {e}")
     
     # ========== POPUP: Deseja fazer horas extras? ==========
     if passou_horario_fim and ja_registrou_inicio and not ja_registrou_fim and not st.session_state.popup_hora_extra_mostrado and not st.session_state.horas_extras_ativa:
@@ -2604,7 +2700,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                             aprovador_username
                         ))
                         conn.commit()
-                        conn.close()
+                        _return_conn(conn)
                         
                         # Registrar fim do expediente
                         registrar_ponto(
@@ -3254,7 +3350,7 @@ def historico_horas_extras_interface():
             return
         finally:
             if conn:
-                conn.close()
+                _return_conn(conn)
     
     # Exibir resumo
     if horas_extras_completo:
@@ -3867,7 +3963,7 @@ def notificacoes_interface(horas_extras_system):
         """, (st.session_state.usuario,))
         atestados_pendentes = cursor.fetchone()[0]
         
-        conn.close()
+        _return_conn(conn)
     
     total = he_aprovar + correcoes_pendentes + atestados_pendentes
     
@@ -4167,7 +4263,7 @@ def registrar_ausencia_interface(upload_system):
                     ))
 
                     conn.commit()
-                    conn.close()
+                    _return_conn(conn)
 
                 st.success("✅ Ausência registrada com sucesso!")
 
@@ -4567,7 +4663,7 @@ def solicitar_correcao_registro_interface():
                                 ))
                                 
                                 conn.commit()
-                                conn.close()
+                                _return_conn(conn)
                             
                             st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
                             st.rerun()
@@ -4613,7 +4709,7 @@ def solicitar_correcao_registro_interface():
             """, (st.session_state.usuario,))
             
             solicitacoes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if solicitacoes:
             for sol in solicitacoes:
@@ -5011,7 +5107,7 @@ def tela_gestor():
             logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
         finally:
             if conn:
-                conn.close()
+                _return_conn(conn)
     
     # Se houver solicitações pendentes, exibir alerta destacado
     if solicitacoes_pendentes_count > 0:
@@ -5103,7 +5199,7 @@ def tela_gestor():
             """)
             correcoes_pendentes = cursor.fetchone()[0]
             
-            conn.close()
+            _return_conn(conn)
         
         total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
         
@@ -5156,7 +5252,8 @@ def tela_gestor():
         # Verificar se já está inscrito
         try:
             topic, push_ativo = verificar_subscription(st.session_state.usuario)
-        except:
+        except Exception as e:
+            logger.debug(f"Erro ao verificar subscription push (gestor): {e}")
             topic, push_ativo = None, False
         
         ntfy_topic = get_topic_for_user(st.session_state.usuario)
@@ -5284,7 +5381,7 @@ def comunicacao_gestor_interface():
             cursor = conn.cursor()
             cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo")
             funcionarios = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
             
             selecionados = st.multiselect(
                 "Selecione os funcionários:",
@@ -5323,7 +5420,7 @@ def comunicacao_gestor_interface():
         cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND usuario != %s ORDER BY nome_completo", 
                       (st.session_state.usuario,))
         funcionarios = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         
         destinatario = st.selectbox(
             "Destinatário:",
@@ -5389,7 +5486,7 @@ def ferias_gestor_interface():
         cursor = conn.cursor()
         cursor.execute("SELECT usuario, nome_completo FROM usuarios WHERE ativo = 1 AND tipo = 'funcionario' ORDER BY nome_completo")
         funcionarios = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         
         funcionario = st.selectbox(
             "Funcionário:",
@@ -5603,7 +5700,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
         except Exception as e:
             st.error(f"Erro ao buscar atestados do mês: {e}")
 
-        conn.close()
+        _return_conn(conn)
 
     # ===== DASHBOARD COM GRÁFICOS PLOTLY =====
     if CHARTS_ENABLED:
@@ -5878,7 +5975,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                 cursor.execute(
                     "SELECT jornada_inicio_previsto, jornada_fim_previsto FROM usuarios WHERE usuario = %s", (usuario,))
                 jornada = cursor.fetchone()
-                conn.close()
+                _return_conn(conn)
 
             if jornada:
                 jornada_inicio = jornada[0] or "08:00"
@@ -6080,7 +6177,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
             ORDER BY data_solicitacao ASC
         """)
         solicitacoes = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
     if solicitacoes:
         st.warning(
@@ -6203,7 +6300,7 @@ def aprovar_correcoes_registros_interface():
                 ORDER BY c.data_solicitacao DESC
             """)
             pendentes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
 
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
@@ -6303,7 +6400,7 @@ def aprovar_correcoes_registros_interface():
                                         """, (st.session_state.usuario, observacoes, correcao_id))
                                         
                                         conn.commit()
-                                        conn.close()
+                                        _return_conn(conn)
                                     
                                     st.success("✅ Correção aprovada e registro atualizado!")
                                     st.rerun()
@@ -6353,7 +6450,7 @@ def aprovar_correcoes_registros_interface():
                                                 """, (st.session_state.usuario, motivo, correcao_id))
                                                 
                                                 conn.commit()
-                                                conn.close()
+                                                _return_conn(conn)
                                             
                                             st.success("❌ Correção rejeitada")
                                             del st.session_state[f'confirm_reject_corr_{correcao_id}']
@@ -6405,7 +6502,7 @@ def aprovar_correcoes_registros_interface():
                 LIMIT 50
             """)
             aprovadas = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if aprovadas:
             st.info(f"✅ {len(aprovadas)} correção(ões) aprovada(s)")
@@ -6469,7 +6566,7 @@ def aprovar_correcoes_registros_interface():
                 LIMIT 50
             """)
             rejeitadas = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if rejeitadas:
             st.warning(f"❌ {len(rejeitadas)} correção(ões) rejeitada(s)")
@@ -6536,7 +6633,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                 ORDER BY h.data_solicitacao DESC
             """)
             he_pendentes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if he_pendentes:
             st.info(f"📋 {len(he_pendentes)} solicitação(ões) de horas extras")
@@ -6616,7 +6713,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                 ORDER BY c.data_solicitacao DESC
             """)
             corr_pendentes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if corr_pendentes:
             st.info(f"📋 {len(corr_pendentes)} solicitação(ões) de correção")
@@ -6671,7 +6768,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                 ORDER BY a.data_registro DESC
             """)
             atestados_pendentes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
         
         if atestados_pendentes:
             st.info(f"📋 {len(atestados_pendentes)} atestado(s) pendente(s)")
@@ -6752,7 +6849,7 @@ def aprovar_atestados_interface(atestado_system):
                 ORDER BY a.data_registro DESC
             """)
             pendentes = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
 
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
@@ -6791,7 +6888,7 @@ def aprovar_atestados_interface(atestado_system):
                                 (arquivo_id,)
                             )
                             arquivo_info = cursor.fetchone()
-                            conn.close()
+                            _return_conn(conn)
 
                             if arquivo_info:
                                 id_arquivo, nome_arq, tamanho, tipo_arquivo = arquivo_info
@@ -6947,7 +7044,7 @@ def aprovar_atestados_interface(atestado_system):
 
         cursor.execute(query, params)
         aprovados = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
         if aprovados:
             st.info(f"✅ {len(aprovados)} atestado(s) aprovado(s)")
@@ -6998,7 +7095,7 @@ def aprovar_atestados_interface(atestado_system):
                                         WHERE id = %s
                                     """, (f"Revertido: {motivo_rev}", atestado_id))
                                     conn.commit()
-                                    conn.close()
+                                    _return_conn(conn)
 
                                     st.success("🔄 Aprovação revertida!")
                                     del st.session_state[f'confirm_reverter_{atestado_id}']
@@ -7027,7 +7124,7 @@ def aprovar_atestados_interface(atestado_system):
             LIMIT 50
         """)
         rejeitados = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
         if rejeitados:
             st.warning(f"❌ {len(rejeitados)} atestado(s) rejeitado(s)")
@@ -7098,7 +7195,7 @@ def aprovar_atestados_interface(atestado_system):
             LIMIT 100
         """)
         todos = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
         if todos:
             # Criar DataFrame
@@ -7167,7 +7264,7 @@ def todos_registros_interface(calculo_horas_system):
             cursor.execute(
                 "SELECT DISTINCT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
             usuarios_list = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
 
         usuario_options = ["Todos"] + \
             [f"{u[1] or u[0]} ({u[0]})" for u in usuarios_list]
@@ -7253,7 +7350,7 @@ def todos_registros_interface(calculo_horas_system):
 
         cursor.execute(query, params)
         registros = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
     # Estatísticas gerais
     st.markdown("### 📊 Estatísticas do Período")
@@ -7524,7 +7621,7 @@ def todos_registros_interface(calculo_horas_system):
                         (usuario,)
                     )
                     jornada = cursor.fetchone()
-                    conn.close()
+                    _return_conn(conn)
 
                     if jornada and jornada[0] and jornada[1]:
                         jornada_inicio_str = jornada[0]
@@ -7720,7 +7817,7 @@ def gerenciar_arquivos_interface(upload_system):
 
         cursor.execute(query, params)
         arquivos = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
     # Estatísticas
     st.markdown("### 📊 Estatísticas")
@@ -7779,7 +7876,7 @@ def gerenciar_arquivos_interface(upload_system):
             hoje = cursor.fetchone()[0]
             st.metric("Uploads Hoje", hoje)
 
-        conn.close()
+        _return_conn(conn)
 
     # Listagem de arquivos
     st.markdown("### 📋 Arquivos")
@@ -7912,7 +8009,7 @@ def gerenciar_projetos_interface():
 
             cursor.execute(query, params)
             projetos = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
 
         # Estatísticas
         col1, col2, col3 = st.columns(3)
@@ -7983,7 +8080,7 @@ def gerenciar_projetos_interface():
                                 """, (novo_nome, nova_descricao, int(novo_status), projeto_id))
 
                                 conn.commit()
-                                conn.close()
+                                _return_conn(conn)
 
                                 st.success("✅ Projeto atualizado!")
                                 st.rerun()
@@ -8013,7 +8110,7 @@ def gerenciar_projetos_interface():
                                     cursor.execute(
                                         f"DELETE FROM projetos WHERE id = {SQL_PLACEHOLDER}", (projeto_id,))
                                     conn.commit()
-                                    conn.close()
+                                    _return_conn(conn)
 
                                     del st.session_state[f"confirm_del_proj_{projeto_id}"]
                                     st.success("✅ Projeto excluído!")
@@ -8064,7 +8161,7 @@ def gerenciar_projetos_interface():
                             """, (nome_novo, descricao_nova, int(ativo_novo)))
 
                             conn.commit()
-                            conn.close()
+                            _return_conn(conn)
 
                             st.success(
                                 f"✅ Projeto '{nome_novo}' cadastrado com sucesso!")
@@ -8162,7 +8259,7 @@ def gerenciar_usuarios_interface():
 
             cursor.execute(query, params)
             usuarios = cursor.fetchall()
-            conn.close()
+            _return_conn(conn)
 
         # Estatísticas
         col1, col2, col3, col4 = st.columns(4)
@@ -8275,7 +8372,8 @@ def gerenciar_usuarios_interface():
                                             hora_inicio_val = time(int(hora_parts[0]), int(hora_parts[1]))
                                         else:
                                             hora_inicio_val = time(8, 0)
-                                    except:
+                                    except Exception as e:
+                                        logger.debug(f"Erro ao parsear hora início da jornada, usando 08:00: {e}")
                                         hora_inicio_val = time(8, 0)
                                     
                                     hora_inicio = st.time_input(
@@ -8297,7 +8395,8 @@ def gerenciar_usuarios_interface():
                                             hora_fim_val = time(int(hora_parts[0]), int(hora_parts[1]))
                                         else:
                                             hora_fim_val = time(17, 0)
-                                    except:
+                                    except Exception as e:
+                                        logger.debug(f"Erro ao parsear hora fim da jornada, usando 17:00: {e}")
                                         hora_fim_val = time(17, 0)
                                     
                                     hora_fim = st.time_input(
@@ -8359,7 +8458,7 @@ def gerenciar_usuarios_interface():
                                     )
 
                                     conn.commit()
-                                    conn.close()
+                                    _return_conn(conn)
 
                                     st.success("✅ Senha alterada com sucesso!")
 
@@ -8416,7 +8515,7 @@ def gerenciar_usuarios_interface():
                                 ))
 
                                 conn.commit()
-                                conn.close()
+                                _return_conn(conn)
                                 
                                 # Salvar jornada semanal
                                 from jornada_semanal_system import salvar_jornada_semanal
@@ -8450,7 +8549,7 @@ def gerenciar_usuarios_interface():
                                     cursor.execute(
                                         f"DELETE FROM usuarios WHERE id = {SQL_PLACEHOLDER}", (usuario_id,))
                                     conn.commit()
-                                    conn.close()
+                                    _return_conn(conn)
 
                                     del st.session_state[f"confirm_del_user_{usuario_id}"]
                                     st.success("✅ Usuário excluído!")
@@ -8665,7 +8764,7 @@ def gerenciar_usuarios_interface():
                             novo_usuario_id = cursor.fetchone()[0]
 
                             conn.commit()
-                            conn.close()
+                            _return_conn(conn)
                             
                             # Copiar jornada padrão para dias úteis (seg-sex)
                             from jornada_semanal_system import copiar_jornada_padrao_para_dias
@@ -8822,7 +8921,7 @@ def horas_por_projeto_interface():
             ORDER BY nome_completo
         """)
         funcionarios = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
         
         if funcionarios:
             # Seleção de funcionário
@@ -8900,7 +8999,7 @@ def horas_por_projeto_interface():
         cursor = conn.cursor()
         cursor.execute("SELECT DISTINCT nome FROM projetos WHERE ativo = 1 ORDER BY nome")
         projetos_lista = [row[0] for row in cursor.fetchall()]
-        conn.close()
+        _return_conn(conn)
         
         if projetos_lista:
             projeto_selecionado = st.selectbox(
@@ -9155,8 +9254,8 @@ def relatorios_horas_extras_interface():
                 result = execute_query("SELECT usuario, nome_completo FROM usuarios WHERE tipo = 'funcionario' ORDER BY nome_completo")
                 if result:
                     usuarios_options.extend([f"{r[1]} ({r[0]})" for r in result])
-            except:
-                pass
+            except Exception as e:
+                logger.warning(f"Erro ao buscar usuários para filtro de relatório: {e}")
         
         usuario_filtro = st.selectbox("Funcionário", options=usuarios_options, key="rel_det_usr")
         
@@ -9314,7 +9413,7 @@ def sistema_interface():
         cursor.execute(
             "SELECT chave, valor, descricao FROM configuracoes ORDER BY chave")
         configs = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
 
     # Organizar por categorias
     st.markdown("### ⏰ Configurações de Jornada")
@@ -9381,7 +9480,7 @@ def sistema_interface():
                         """, (valor, chave))
 
                     conn.commit()
-                    conn.close()
+                    _return_conn(conn)
 
                 st.success("✅ Configurações de jornada salvas!")
                 st.rerun()
@@ -9426,7 +9525,7 @@ def sistema_interface():
                 """, (valor, chave))
 
             conn.commit()
-            conn.close()
+            _return_conn(conn)
 
             st.success("✅ Configurações de horas extras salvas!")
             st.rerun()
@@ -9471,7 +9570,7 @@ def sistema_interface():
                 """, (valor, chave))
 
             conn.commit()
-            conn.close()
+            _return_conn(conn)
 
             st.success("✅ Configurações de GPS salvas!")
             st.rerun()
@@ -9503,7 +9602,7 @@ def sistema_interface():
                 """, (valor, chave))
 
             conn.commit()
-            conn.close()
+            _return_conn(conn)
             st.success("✅ Configurações salvas!")
             st.rerun()
 
@@ -9672,7 +9771,7 @@ def sistema_interface():
                 result = cursor.fetchone()
                 if result:
                     push_obrigatorio_atual = result[0]
-                conn.close()
+                _return_conn(conn)
         except Exception:
             pass
         
@@ -9712,7 +9811,7 @@ def sistema_interface():
                             ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
                         """, (valor, valor))
                         conn.commit()
-                        conn.close()
+                        _return_conn(conn)
                     
                     if push_obrigatorio:
                         st.success("✅ Notificações obrigatórias ATIVADAS! Todos os usuários serão solicitados a ativar.")
@@ -9808,7 +9907,7 @@ def sistema_interface():
                 result = cursor.fetchone()
                 if result:
                     config_notif[chave] = result[0]
-            conn.close()
+            _return_conn(conn)
         except Exception:
             pass
     
@@ -9914,7 +10013,7 @@ def sistema_interface():
                             ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
                         """, (chave, valor, f'Config notificação: {chave}', valor))
                     conn.commit()
-                    conn.close()
+                    _return_conn(conn)
                 
                 st.success("✅ Configurações de notificação salvas!")
                 st.info("⚠️ As alterações serão aplicadas na próxima reinicialização do app.")
@@ -10096,7 +10195,7 @@ def configurar_jornada_interface():
             ORDER BY nome_completo
         """)
         usuarios_result = cursor.fetchall()
-        conn.close()
+        _return_conn(conn)
     
     if not usuarios_result:
         st.warning("❌ Nenhum funcionário ativo encontrado")
@@ -10411,7 +10510,7 @@ def buscar_registros_dia(usuario, data):
 
             return registros
         finally:
-            conn.close()
+            _return_conn(conn)
 
 
 def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor):
@@ -10477,7 +10576,7 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
             conn.rollback()
             return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
         finally:
-            conn.close()
+            _return_conn(conn)
 
 
 # Função principal
@@ -10541,7 +10640,7 @@ def exibir_modal_push_obrigatorio():
             result = cursor.fetchone()
             if result:
                 push_obrigatorio = result[0] == '1'
-            conn.close()
+            _return_conn(conn)
     except Exception:
         pass  # Se erro, manter padrão (obrigatório)
     

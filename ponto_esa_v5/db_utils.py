@@ -10,9 +10,9 @@ from typing import Any, Dict
 
 # Importação flexível para funcionar em diferentes contextos
 try:
-    from database import get_connection
+    from database import get_connection, return_connection
 except ImportError:
-    from ponto_esa_v5.database import get_connection
+    from ponto_esa_v5.database import get_connection, return_connection
 
 
 def create_success_response(message: str, **extra: Any) -> Dict[str, Any]:
@@ -42,7 +42,7 @@ def database_transaction(db_path: str | None = None):
     """Context manager simples para transações de banco.
 
     Usa ``get_connection`` do módulo ``database`` e garante commit/rollback
-    adequado em caso de erro.
+    adequado em caso de erro. Devolve a conexão ao pool corretamente.
     """
 
     conn = get_connection(db_path)
@@ -55,7 +55,7 @@ def database_transaction(db_path: str | None = None):
         raise
     finally:
         cursor.close()
-        conn.close()
+        return_connection(conn)
 
 
 __all__ = [

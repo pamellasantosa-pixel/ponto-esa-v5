@@ -10,8 +10,11 @@ from pathlib import Path
 import mimetypes
 import hashlib
 
-from database import get_connection, adapt_sql_for_postgresql, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+from database import get_connection, return_connection, adapt_sql_for_postgresql, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 import database as database_module
+import logging
+
+logger = logging.getLogger(__name__)
 
 # SQL Placeholder para compatibilidade SQLite/PostgreSQL
 SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
@@ -90,7 +93,7 @@ class UploadSystem:
         sql = adapt_sql_for_postgresql(sql)
         cursor.execute(sql)
         conn.commit()
-        conn.close()
+        return_connection(conn)
 
     def validate_file(self, file_content, filename, file_size):
         """Valida arquivo antes do upload"""
@@ -257,7 +260,7 @@ class UploadSystem:
         except Exception as e:
             raise e
         finally:
-            conn.close()
+            return_connection(conn)
 
     def find_file_by_hash(self, file_hash, usuario):
         """Busca arquivo por hash para evitar duplicatas"""
@@ -270,7 +273,7 @@ class UploadSystem:
         ''', (file_hash, usuario))
 
         result = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
 
         if result:
             return {
@@ -304,7 +307,7 @@ class UploadSystem:
         query += " ORDER BY data_upload DESC"
         cursor.execute(query, params)
         uploads = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
 
         # Converter para dicionários
         colunas = ['id', 'usuario', 'nome_original', 'nome_arquivo', 'tipo_arquivo',
@@ -344,7 +347,7 @@ class UploadSystem:
 
         cursor.execute(query, params)
         upload = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
 
         if upload:
             colunas = ['id', 'usuario', 'nome_original', 'nome_arquivo', 'tipo_arquivo',
@@ -383,8 +386,8 @@ class UploadSystem:
             try:
                 if os.path.exists(file_path):
                     os.remove(file_path)
-            except:
-                pass  # Não falhar se não conseguir remover arquivo físico
+            except Exception as e:
+                logger.warning("Não foi possível remover arquivo físico %s: %s", file_path, e)
 
             conn.commit()
             return {"success": True, "message": "Arquivo removido com sucesso"}
@@ -392,7 +395,7 @@ class UploadSystem:
         except Exception as e:
             return {"success": False, "message": f"Erro ao remover arquivo: {str(e)}"}
         finally:
-            conn.close()
+            return_connection(conn)
 
     def get_file_content(self, upload_id, usuario=None):
         """Obtém conteúdo de um arquivo para download (prioriza banco de dados)"""
@@ -413,7 +416,7 @@ class UploadSystem:
                 (file_info['id'],)
             )
             result = cursor.fetchone()
-            conn.close()
+            return_connection(conn)
             
             if result and result[0]:
                 # Conteúdo encontrado no banco de dados
@@ -447,8 +450,8 @@ class UploadSystem:
                 if os.path.getmtime(file_path) < cutoff_time:
                     try:
                         os.remove(file_path)
-                    except:
-                        pass
+                    except Exception as e:
+                        logger.warning("Não foi possível remover arquivo temporário %s: %s", file_path, e)
 
     def get_storage_stats(self):
         """Obtém estatísticas de armazenamento"""
@@ -473,7 +476,7 @@ class UploadSystem:
         ''')
 
         total_stats = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
 
         return {
             "total_files": total_stats[0] or 0,

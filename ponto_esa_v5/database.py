@@ -5,69 +5,12 @@ from dotenv import load_dotenv
 import sqlite3
 from contextlib import contextmanager
 import threading
-from urllib.parse import urlparse, parse_qs, urlencode, urlunparse
 
 # Carregar variáveis de ambiente
 load_dotenv()
 
 # Logger para este módulo
 logger = logging.getLogger(__name__)
-
-
-def clean_database_url_for_neon_pooler(database_url: str) -> str:
-    """
-    Remove parâmetros não suportados pelo Neon Pooler da DATABASE_URL.
-    
-    O Neon Pooler (endpoint com -pooler no nome) não suporta certos parâmetros
-    de startup como 'statement_timeout' nas options.
-    
-    Referência: https://neon.tech/docs/connect/connection-errors#unsupported-startup-parameter
-    """
-    if not database_url:
-        return database_url
-    
-    try:
-        parsed = urlparse(database_url)
-        query_params = parse_qs(parsed.query)
-        
-        # Remover parâmetro 'options' que pode conter statement_timeout
-        if 'options' in query_params:
-            options = query_params['options']
-            if isinstance(options, list):
-                # Filtrar options que contêm statement_timeout
-                cleaned_options = []
-                for opt in options:
-                    # Remover statement_timeout das options
-                    if 'statement_timeout' not in opt:
-                        cleaned_options.append(opt)
-                    else:
-                        # Limpar apenas o statement_timeout, manter outras options
-                        parts = opt.split()
-                        cleaned_parts = [p for p in parts if 'statement_timeout' not in p]
-                        if cleaned_parts:
-                            cleaned_options.append(' '.join(cleaned_parts))
-                
-                if cleaned_options:
-                    query_params['options'] = cleaned_options
-                else:
-                    del query_params['options']
-                    logger.info("Removido parâmetro 'options' da URL (não suportado pelo Neon Pooler)")
-        
-        # Reconstruir a URL
-        new_query = urlencode(query_params, doseq=True)
-        cleaned_url = urlunparse((
-            parsed.scheme,
-            parsed.netloc,
-            parsed.path,
-            parsed.params,
-            new_query,
-            parsed.fragment
-        ))
-        
-        return cleaned_url
-    except Exception as e:
-        logger.warning(f"Erro ao limpar DATABASE_URL: {e}. Usando URL original.")
-        return database_url
 
 # Lista de tabelas obrigatórias que devem existir no banco
 REQUIRED_TABLES = [
@@ -114,15 +57,12 @@ def _get_pool():
             database_url = os.getenv('DATABASE_URL')
             if database_url:
                 try:
-                    # Limpar URL para remover parâmetros não suportados pelo Neon Pooler
-                    cleaned_url = clean_database_url_for_neon_pooler(database_url)
-                    
                     # Pool com min 2, max 15 conexões para melhor throughput
                     # Nota: statement_timeout removido pois não é suportado pelo Neon Pooler
                     _connection_pool = pg_pool.ThreadedConnectionPool(
                         minconn=2,
                         maxconn=15,
-                        dsn=cleaned_url,
+                        dsn=database_url,
                         # Configurações para conexões mais rápidas
                         connect_timeout=10
                     )
@@ -155,9 +95,7 @@ def get_connection(db_path: str | None = None):
         database_url = os.getenv('DATABASE_URL')
         try:
             if database_url:
-                # Limpar URL para remover parâmetros não suportados pelo Neon Pooler
-                cleaned_url = clean_database_url_for_neon_pooler(database_url)
-                conn = psycopg2.connect(cleaned_url, connect_timeout=10)
+                conn = psycopg2.connect(database_url, connect_timeout=10)
                 return conn
             else:
                 db_config_local = {
@@ -170,7 +108,7 @@ def get_connection(db_path: str | None = None):
                 conn = psycopg2.connect(**db_config_local, connect_timeout=10)
                 return conn
         except psycopg2.OperationalError as e:
-            print(f"❌ Erro ao conectar no PostgreSQL: {e}")
+            logger.error(f"Erro ao conectar no PostgreSQL: {e}")
             raise
     else:
         os.makedirs('database', exist_ok=True)
@@ -196,8 +134,8 @@ def return_connection(conn):
     # Fallback: fechar conexão
     try:
         conn.close()
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Erro ao fechar conexão fallback: {e}")
 
 
 @contextmanager
@@ -268,6 +206,17 @@ def init_db():
 def _init_db_internal():
     """Implementação real do init_db (uso interno)"""
     conn = get_connection()
+    try:
+        _init_db_tables(conn)
+    except Exception as e:
+        logger.error(f"Erro fatal na inicialização do banco: {e}")
+        raise
+    finally:
+        return_connection(conn)
+
+
+def _init_db_tables(conn):
+    """Cria tabelas, índices e dados padrão (chamado por _init_db_internal)."""
     c = conn.cursor()
 
     # Tabela usuarios com novos campos para jornada prevista, CPF e data nascimento
@@ -291,8 +240,8 @@ def _init_db_internal():
     try:
         c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cpf TEXT")
         c.execute("ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS data_nascimento DATE")
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração usuarios.cpf/data_nascimento: {e}")
 
     # Tabela registros_ponto com campos de GPS
     c.execute(adapt_sql_for_postgresql('''
@@ -360,8 +309,8 @@ def _init_db_internal():
     # Migração: adicionar coluna total_horas se não existir
     try:
         c.execute("ALTER TABLE solicitacoes_horas_extras ADD COLUMN IF NOT EXISTS total_horas REAL")
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_horas_extras.total_horas: {e}")
 
     # Tabela para uploads de arquivos (DEVE vir antes de atestados_horas por causa da FK)
     c.execute(adapt_sql_for_postgresql('''
@@ -599,63 +548,63 @@ def _init_db_internal():
     try:
         c.execute(
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jornada_inicio_previsto TIME DEFAULT '08:00'")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração usuarios.jornada_inicio_previsto: {e}")
 
     try:
         c.execute(
             "ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS jornada_fim_previsto TIME DEFAULT '17:00'")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração usuarios.jornada_fim_previsto: {e}")
 
     try:
         c.execute("ALTER TABLE registros_ponto ADD COLUMN IF NOT EXISTS latitude REAL")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração registros_ponto.latitude: {e}")
 
     try:
         c.execute("ALTER TABLE registros_ponto ADD COLUMN IF NOT EXISTS longitude REAL")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração registros_ponto.longitude: {e}")
 
     try:
         c.execute(
             "ALTER TABLE ausencias ADD COLUMN IF NOT EXISTS nao_possui_comprovante INTEGER DEFAULT 0")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração ausencias.nao_possui_comprovante: {e}")
 
     # Compatibilidade: adicionar coluna hash_arquivo em uploads se ausente
     try:
         c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS hash_arquivo TEXT")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração uploads.hash_arquivo: {e}")
     try:
         c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'ativo'")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração uploads.status: {e}")
     
-    # 🔧 CORREÇÃO: Adicionar coluna conteudo para armazenar arquivos no banco de dados
-    # Isso resolve o problema de arquivos perdidos em sistemas de arquivos efêmeros (Render, Heroku, etc)
+    # Adicionar coluna conteudo para armazenar arquivos no banco de dados
+    # Resolve o problema de arquivos perdidos em sistemas de arquivos efêmeros (Render, Heroku, etc)
     try:
         c.execute("ALTER TABLE uploads ADD COLUMN IF NOT EXISTS conteudo BYTEA")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração uploads.conteudo: {e}")
 
     # Compatibilidade: adicionar coluna nao_possui_comprovante em atestado_horas se ausente
     try:
         c.execute("ALTER TABLE atestado_horas ADD COLUMN IF NOT EXISTS nao_possui_comprovante INTEGER DEFAULT 0")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração atestado_horas.nao_possui_comprovante: {e}")
 
     # Compatibilidade: adicionar colunas ausentes em solicitacoes_ajuste_ponto
     try:
         c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN IF NOT EXISTS aprovador_solicitado TEXT")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_ajuste_ponto.aprovador_solicitado: {e}")
     try:
         c.execute("ALTER TABLE solicitacoes_ajuste_ponto ADD COLUMN IF NOT EXISTS data_resposta TIMESTAMP")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_ajuste_ponto.data_resposta: {e}")
 
     # Tabela para auditoria de correções de registros
     c.execute(adapt_sql_for_postgresql('''
@@ -689,8 +638,8 @@ def _init_db_internal():
     # Adicionar coluna data_hora_nova em solicitacoes_correcao_registro
     try:
         c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.data_hora_nova: {e}")
 
     # ============================================
     # TABELA PARA PUSH NOTIFICATIONS (Web Push)
@@ -715,8 +664,8 @@ def _init_db_internal():
     # Índice para busca rápida por usuário
     try:
         c.execute("CREATE INDEX IF NOT EXISTS idx_push_subscriptions_usuario ON push_subscriptions(usuario)")
-    except Exception:
-        pass
+    except Exception as e:
+        logger.debug(f"Índice idx_push_subscriptions_usuario: {e}")
 
     # ============================================
     # TABELA PARA HISTÓRICO DE NOTIFICAÇÕES PUSH
@@ -795,7 +744,6 @@ def _init_db_internal():
             logger.debug(f"Índice {idx_name}: {e}")
 
     conn.commit()
-    return_connection(conn)
 
 
 if __name__ == '__main__':

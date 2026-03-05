@@ -64,7 +64,7 @@ def get_email_usuario(usuario: str) -> Optional[str]:
         Email do usuário ou None
     """
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         
         conn = get_connection()
         cursor = conn.cursor()
@@ -74,7 +74,7 @@ def get_email_usuario(usuario: str) -> Optional[str]:
             (usuario,)
         )
         resultado = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
         
         if resultado and resultado[0]:
             return resultado[0]
@@ -139,13 +139,20 @@ def enviar_email(
                 )
                 msg.attach(parte)
         
-        # Conectar e enviar
+        # Conectar e enviar - Usar SSL (porta 465) ou TLS (porta 587)
         context = ssl.create_default_context()
         
-        with smtplib.SMTP(SMTP_HOST, SMTP_PORT) as server:
-            server.starttls(context=context)
-            server.login(SMTP_USER, SMTP_PASSWORD)
-            server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
+        if SMTP_PORT == 465:
+            # SSL direto (mais confiável em alguns servidores)
+            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
+        else:
+            # STARTTLS (porta 587)
+            with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
+                server.starttls(context=context)
+                server.login(SMTP_USER, SMTP_PASSWORD)
+                server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
         
         logger.info(f"Email enviado para {destinatario}: {assunto}")
         return True, "Email enviado com sucesso"
@@ -156,6 +163,9 @@ def enviar_email(
     except smtplib.SMTPException as e:
         logger.error(f"Erro SMTP: {e}")
         return False, f"Erro ao enviar email: {str(e)}"
+    except OSError as e:
+        logger.error(f"Erro de rede ao enviar email: {e}")
+        return False, f"Erro: {str(e)}"
     except Exception as e:
         logger.error(f"Erro ao enviar email: {e}")
         return False, f"Erro: {str(e)}"
@@ -448,16 +458,16 @@ def notificar_lembrete_entrada_email(usuario: str) -> Tuple[bool, str]:
     # Buscar nome do usuário
     nome = usuario
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (usuario,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]  # Primeiro nome
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome para lembrete de entrada: {e}")
     
     assunto, html = template_lembrete_entrada(nome)
     return enviar_email(email, assunto, html)
@@ -472,16 +482,16 @@ def notificar_lembrete_saida_email(usuario: str) -> Tuple[bool, str]:
     # Buscar nome do usuário
     nome = usuario
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (usuario,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome para lembrete de saída: {e}")
     
     assunto, html = template_lembrete_saida(nome)
     return enviar_email(email, assunto, html)
@@ -496,16 +506,16 @@ def notificar_hora_extra_email(usuario: str, minutos: int) -> Tuple[bool, str]:
     # Buscar nome do usuário
     nome = usuario
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (usuario,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome para alerta de hora extra: {e}")
     
     assunto, html = template_hora_extra_prolongada(nome, minutos)
     return enviar_email(email, assunto, html)
@@ -523,16 +533,16 @@ def notificar_gestor_pendencias_email(gestor: str, resumo: Dict) -> Tuple[bool, 
     # Buscar nome do gestor
     nome = gestor
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (gestor,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome do gestor para pendências: {e}")
     
     assunto, html = template_solicitacoes_pendentes_gestor(nome, resumo)
     return enviar_email(email, assunto, html)
@@ -546,16 +556,16 @@ def notificar_aprovacao_email(usuario: str, tipo: str, detalhes: str) -> Tuple[b
     
     nome = usuario
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (usuario,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome para notificação de aprovação: {e}")
     
     assunto, html = template_solicitacao_aprovada(nome, tipo, detalhes)
     return enviar_email(email, assunto, html)
@@ -569,16 +579,16 @@ def notificar_rejeicao_email(usuario: str, tipo: str, motivo: str) -> Tuple[bool
     
     nome = usuario
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         conn = get_connection()
         cursor = conn.cursor()
         cursor.execute(f"SELECT nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}", (usuario,))
         resultado = cursor.fetchone()
         if resultado and resultado[0]:
             nome = resultado[0].split()[0]
-        conn.close()
-    except:
-        pass
+        return_connection(conn)
+    except Exception as e:
+        logger.debug(f"Falha ao buscar nome para notificação de rejeição: {e}")
     
     assunto, html = template_solicitacao_rejeitada(nome, tipo, motivo)
     return enviar_email(email, assunto, html)

@@ -1,12 +1,8 @@
 """
 Módulo de Banco de Dados Otimizado para Ponto ExSA v5.0
-Usa Connection Pooling e Cache para melhorar performance
+Usa o Connection Pool CENTRALIZADO de database.py + Cache Streamlit para queries frequentes.
 
-PROBLEMA: Cada get_connection() abre nova conexão TCP com Neon (nuvem)
-- Latência: ~100-300ms por conexão
-- Múltiplas conexões por página = sistema lento
-
-SOLUÇÃO: Connection Pool + Cache de queries frequentes
+NOTA: NÃO cria pool próprio — reutiliza o pool de database.py via get_connection/return_connection.
 """
 
 import os
@@ -18,65 +14,21 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-# Verificar se usa PostgreSQL
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'true').lower() == 'true'
-SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
-
-# Pool de conexões (singleton via session_state)
-_connection_pool = None
-
-
-def get_connection_pool():
-    """Retorna pool de conexões reutilizável (singleton)"""
-    global _connection_pool
-    
-    if _connection_pool is not None:
-        return _connection_pool
-    
-    if USE_POSTGRESQL:
-        try:
-            from psycopg2 import pool
-            
-            database_url = os.getenv('DATABASE_URL')
-            if database_url:
-                # Pool com mínimo 1, máximo 10 conexões
-                _connection_pool = pool.ThreadedConnectionPool(
-                    minconn=1,
-                    maxconn=10,
-                    dsn=database_url
-                )
-                logger.info("✅ Connection pool PostgreSQL criado com sucesso")
-            else:
-                logger.warning("DATABASE_URL não configurada, usando conexão simples")
-                return None
-        except Exception as e:
-            logger.error(f"Erro ao criar connection pool: {e}")
-            return None
-    
-    return _connection_pool
+# Reutilizar o pool centralizado
+try:
+    from database import get_connection, return_connection, SQL_PLACEHOLDER
+except ImportError:
+    from ponto_esa_v5.database import get_connection, return_connection, SQL_PLACEHOLDER
 
 
 @contextmanager
 def get_pooled_connection():
-    """Context manager para conexão do pool (reutiliza conexões)"""
-    pool = get_connection_pool()
-    conn = None
-    
+    """Context manager para conexão do pool centralizado (devolve ao pool ao final)."""
+    conn = get_connection()
     try:
-        if pool:
-            conn = pool.getconn()
-            yield conn
-        else:
-            # Fallback para conexão simples
-            from database import get_connection
-            conn = get_connection()
-            yield conn
+        yield conn
     finally:
-        if conn:
-            if pool:
-                pool.putconn(conn)
-            else:
-                conn.close()
+        return_connection(conn)
 
 
 def execute_query_optimized(query: str, params: tuple = None, 
@@ -136,7 +88,8 @@ def get_total_usuarios_ativos() -> int:
             fetch_one=True
         )
         return result[0] if result else 0
-    except:
+    except Exception as e:
+        logger.debug(f"Falha ao obter total de usuários ativos: {e}")
         return 0
 
 
@@ -150,7 +103,8 @@ def get_registros_hoje(data_hoje: str) -> int:
             fetch_one=True
         )
         return result[0] if result else 0
-    except:
+    except Exception as e:
+        logger.debug(f"Falha ao obter registros de hoje: {e}")
         return 0
 
 
@@ -164,7 +118,8 @@ def get_presentes_hoje(data_hoje: str) -> int:
             fetch_one=True
         )
         return result[0] if result else 0
-    except:
+    except Exception as e:
+        logger.debug(f"Falha ao obter presentes hoje: {e}")
         return 0
 
 
@@ -186,8 +141,8 @@ def get_pendencias() -> Dict[str, int]:
         )
         if result:
             pendencias["horas_extras"] = result[0]
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao obter pendências: {e}")
     return pendencias
 
 
@@ -203,8 +158,8 @@ def get_lista_usuarios_ativos() -> List[Dict]:
                 {"id": r[0], "usuario": r[1], "nome": r[2], "email": r[3], "tipo": r[4]}
                 for r in result
             ]
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao obter lista de usuários ativos: {e}")
     return []
 
 
@@ -217,8 +172,8 @@ def get_configuracoes_sistema() -> Dict[str, str]:
         )
         if result:
             return {r[0]: r[1] for r in result}
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao obter configurações do sistema: {e}")
     return {}
 
 
@@ -260,8 +215,8 @@ def get_ausencias_por_tipo(data_inicio_mes: str) -> Dict[str, int]:
         if result:
             for row in result:
                 ausencias[row[0][:25]] = row[1]
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao obter ausências por tipo: {e}")
     return ausencias
 
 
@@ -301,8 +256,8 @@ def get_metricas_dashboard_otimizado() -> Dict[str, Any]:
         )
         if result:
             atestados_mes = result[0]
-    except:
-        pass
+    except Exception as e:
+        logger.debug(f"Falha ao obter atestados do mês: {e}")
     
     return {
         "total_usuarios": total_usuarios,
@@ -355,7 +310,7 @@ def testar_performance():
     start = time.time()
     from database import get_connection
     conn = get_connection()
-    conn.close()
+    return_connection(conn)
     resultados["conexao_simples"] = (time.time() - start) * 1000
     
     # Teste 2: Conexão do pool (rápida)

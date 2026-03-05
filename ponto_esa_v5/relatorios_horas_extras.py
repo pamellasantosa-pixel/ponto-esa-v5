@@ -105,7 +105,8 @@ def gerar_relatorio_horas_extras(
                     if delta < 0:
                         delta += 24 * 3600
                     horas = delta / 3600
-                except:
+                except Exception as e:
+                    logger.warning("Erro ao calcular horas extras (hi=%s, hf=%s): %s", hi, hf, e)
                     horas = 0
             
             total_horas += horas
