@@ -13,6 +13,13 @@ import json
 import os
 import logging
 
+try:
+    from database import return_connection
+except ImportError:
+    from ponto_esa_v5.database import return_connection
+
+from constants import agora_br
+
 logger = logging.getLogger(__name__)
 
 class PerformanceMonitor:
@@ -52,7 +59,7 @@ class PerformanceMonitor:
                 disk = psutil.disk_usage('/')
                 
                 system_metric = {
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": agora_br().isoformat(),
                     "cpu_percent": cpu_percent,
                     "memory_percent": memory.percent,
                     "memory_available": memory.available,
@@ -83,7 +90,7 @@ class PerformanceMonitor:
         Registra uma consulta ao banco de dados
         """
         query_metric = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": agora_br().isoformat(),
             "query": query[:200],  # Primeiros 200 caracteres
             "execution_time": execution_time,
             "rows_affected": rows_affected
@@ -100,7 +107,7 @@ class PerformanceMonitor:
         Registra o tempo de carregamento de uma página
         """
         page_metric = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": agora_br().isoformat(),
             "page_name": page_name,
             "load_time": load_time
         }
@@ -116,7 +123,7 @@ class PerformanceMonitor:
         Registra um erro
         """
         error_metric = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": agora_br().isoformat(),
             "component": component,
             "error_message": error_message
         }
@@ -132,7 +139,7 @@ class PerformanceMonitor:
         Gera um relatório de performance
         """
         report = {
-            "generated_at": datetime.now().isoformat(),
+            "generated_at": agora_br().isoformat(),
             "summary": {
                 "total_queries": len(self.metrics["database_queries"]),
                 "total_page_loads": len(self.metrics["page_loads"]),
@@ -229,7 +236,7 @@ class DatabaseOptimizer:
             c.execute("VACUUM")
             
             conn.commit()
-            conn.close()
+            return_connection(conn)
             
             return True
         
@@ -266,7 +273,7 @@ class DatabaseOptimizer:
             indexes = [row[0] for row in c.fetchall()]
             stats["indexes"] = indexes
             
-            conn.close()
+            return_connection(conn)
             return stats
         
         except Exception as e:

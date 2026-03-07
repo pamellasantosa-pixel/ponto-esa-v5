@@ -48,6 +48,8 @@ except ImportError:
     # Fallback se importar de outro local
     from ponto_esa_v5.database import get_connection, return_connection, SQL_PLACEHOLDER
 
+from constants import agora_br
+
 
 # ============================================
 # CONFIGURAÇÃO VAPID
@@ -601,7 +603,7 @@ def notificar_teste(usuario: str) -> Tuple[int, int]:
         mensagem="Se você está vendo isso, as notificações push estão funcionando!",
         tipo="info",
         url="/",
-        dados_extras={'tipo': 'teste', 'timestamp': datetime.now().isoformat()}
+        dados_extras={'tipo': 'teste', 'timestamp': agora_br().isoformat()}
     )
 
 

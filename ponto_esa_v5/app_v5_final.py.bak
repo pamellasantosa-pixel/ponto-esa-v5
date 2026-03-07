@@ -659,49 +659,31 @@ def init_systems():
 
 def verificar_login(usuario, senha):
     """Verifica credenciais de login (suporta bcrypt e SHA256 legado com migração automática)"""
-    try:
-        from password_utils import verify_and_upgrade
-        _has_password_utils = True
-    except Exception as _imp_err:
-        logger.warning("password_utils indisponível (%s), usando SHA256 puro", _imp_err)
-        _has_password_utils = False
-
-    def _check_password(plain, hashed, user):
-        """Verifica senha: tenta password_utils, fallback para SHA256."""
-        if not hashed:
-            return False
-        if _has_password_utils:
-            return verify_and_upgrade(plain, hashed, user)
-        # Fallback: comparação SHA256 direta
-        return hashlib.sha256(plain.encode()).hexdigest() == hashed
-
-    try:
-        if REFACTORING_ENABLED:
-            row = execute_query(
+    from password_utils import verify_and_upgrade
+    
+    if REFACTORING_ENABLED:
+        row = execute_query(
+            f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
+            (usuario,),
+            fetch_one=True
+        )
+        if row and verify_and_upgrade(senha, row[0], usuario):
+            log_security_event("LOGIN", usuario=usuario, severity="INFO")
+            return (row[1], row[2])
+        return None
+    else:
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(
                 f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
-                (usuario,),
-                fetch_one=True
-            )
-            if row and _check_password(senha, row[0], usuario):
-                log_security_event("LOGIN", usuario=usuario, severity="INFO")
+                (usuario,))
+            row = cursor.fetchone()
+            if row and verify_and_upgrade(senha, row[0], usuario):
                 return (row[1], row[2])
             return None
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
-                    (usuario,))
-                row = cursor.fetchone()
-                if row and _check_password(senha, row[0], usuario):
-                    return (row[1], row[2])
-                return None
-            finally:
-                _return_conn(conn)
-    except Exception as login_err:
-        logger.error("Erro ao verificar login para %s: %s", usuario, login_err, exc_info=True)
-        return None
+        finally:
+            _return_conn(conn)
 
 
 @st.cache_data(ttl=300)  # Cache de 5 minutos para projetos
@@ -2375,7 +2357,7 @@ def tela_funcionario():
         minhas_horas_projeto_interface()
     elif opcao == "📁 Meus Arquivos":
         meus_arquivos_interface(upload_system)
-    elif opcao.startswith("💬 Mensagens"):
+    elif opcao.startswith("� Mensagens"):
         mensagens_funcionario_interface()
     elif opcao.startswith("🔔 Notificações"):
         notificacoes_interface(horas_extras_system)
@@ -2423,204 +2405,6 @@ def mensagens_funcionario_interface():
                     st.markdown(texto)
     else:
         st.info("📭 Você não tem mensagens")
-
-
-# ====================================================================
-# Funções auxiliares extraídas de registrar_ponto_interface()
-# ====================================================================
-
-def _render_gps_capture_js():
-    """Injeta JavaScript otimizado para captura de coordenadas GPS."""
-    gps_js = """
-    <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
-        <div style="padding: 8px; background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); border-radius: 8px; text-align: center;">
-            📍 Obtendo localização GPS...
-        </div>
-    </div>
-    <script>
-    (function() {
-        const cachedLat = sessionStorage.getItem('gps_latitude');
-        const cachedLng = sessionStorage.getItem('gps_longitude');
-        const cachedAcc = sessionStorage.getItem('gps_accuracy');
-        const cachedTime = sessionStorage.getItem('gps_timestamp');
-        const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
-
-        function fillInputs(lat, lng) {
-            const latField = document.querySelector('input[placeholder="GPS Lat"]');
-            const lngField = document.querySelector('input[placeholder="GPS Lng"]');
-            if (latField && lngField) {
-                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-                latField.value = lat.toString();
-                latField.dispatchEvent(new Event('input', { bubbles: true }));
-                latField.dispatchEvent(new Event('change', { bubbles: true }));
-                nativeInputValueSetter.call(latField, lat.toString());
-                latField.dispatchEvent(new Event('input', { bubbles: true }));
-                lngField.value = lng.toString();
-                lngField.dispatchEvent(new Event('input', { bubbles: true }));
-                lngField.dispatchEvent(new Event('change', { bubbles: true }));
-                nativeInputValueSetter.call(lngField, lng.toString());
-                lngField.dispatchEvent(new Event('input', { bubbles: true }));
-                console.log('GPS fields filled:', lat, lng);
-            } else {
-                console.log('GPS fields not found.');
-            }
-        }
-
-        function updateGpsStatus(success, message) {
-            const gpsDiv = document.getElementById('gps-status');
-            if (gpsDiv) {
-                if (success) {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%); border-radius: 8px; color: #1b5e20; text-align: center; font-weight: 500;">✅ ' + message + '</div>';
-                } else {
-                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #fff3cd 0%, #ffe082 100%); border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
-                }
-            }
-        }
-
-        if (cacheValid && cachedLat && cachedLng) {
-            updateGpsStatus(true, 'GPS: ' + parseFloat(cachedLat).toFixed(6) + ', ' + parseFloat(cachedLng).toFixed(6) + ' (±' + Math.round(cachedAcc || 0) + 'm)');
-            setTimeout(() => fillInputs(cachedLat, cachedLng), 300);
-        }
-
-        if (navigator.geolocation) {
-            const options = { enableHighAccuracy: false, timeout: 5000, maximumAge: 120000 };
-            navigator.geolocation.getCurrentPosition(
-                function(position) {
-                    const lat = position.coords.latitude;
-                    const lng = position.coords.longitude;
-                    const acc = position.coords.accuracy;
-                    sessionStorage.setItem('gps_latitude', lat);
-                    sessionStorage.setItem('gps_longitude', lng);
-                    sessionStorage.setItem('gps_accuracy', acc);
-                    sessionStorage.setItem('gps_timestamp', Date.now());
-                    updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
-                    setTimeout(() => fillInputs(lat, lng), 300);
-                    if (acc > 100) {
-                        navigator.geolocation.getCurrentPosition(
-                            function(p) {
-                                if (p.coords.accuracy < acc) {
-                                    sessionStorage.setItem('gps_latitude', p.coords.latitude);
-                                    sessionStorage.setItem('gps_longitude', p.coords.longitude);
-                                    sessionStorage.setItem('gps_accuracy', p.coords.accuracy);
-                                    sessionStorage.setItem('gps_timestamp', Date.now());
-                                    updateGpsStatus(true, 'GPS: ' + p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) + ' (±' + Math.round(p.coords.accuracy) + 'm)');
-                                    fillInputs(p.coords.latitude, p.coords.longitude);
-                                }
-                            },
-                            function() {},
-                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
-                        );
-                    }
-                },
-                function(error) {
-                    console.log('GPS Error:', error.message);
-                    sessionStorage.setItem('gps_error', error.message);
-                    if (!cacheValid) {
-                        updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
-                    }
-                },
-                options
-            );
-        } else {
-            if (!cacheValid) {
-                updateGpsStatus(false, 'Navegador não suporta GPS');
-            }
-        }
-    })();
-    </script>
-    """
-    st.components.v1.html(gps_js, height=60)
-
-
-def _handle_post_registration_overtime(data_registro, horas_extras_system):
-    """Detecta e exibe informações de hora extra após registro de Fim."""
-    try:
-        try:
-            from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
-        except ImportError:
-            JornadaSemanalCalculoSystem = None
-            logger.warning("Módulo 'jornada_semanal_calculo_system' não encontrado.")
-
-        tolerancia_minutos = 5
-        if REFACTORING_ENABLED:
-            try:
-                result = execute_query(
-                    "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'",
-                    fetch_one=True
-                )
-                if result:
-                    tolerancia_minutos = int(result[0])
-            except Exception as e:
-                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
-        else:
-            try:
-                cursor = get_db_connection().cursor()
-                cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'")
-                resultado = cursor.fetchone()
-                if resultado:
-                    tolerancia_minutos = int(resultado[0])
-                cursor.close()
-            except Exception as e:
-                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
-
-        resultado_hora_extra = JornadaSemanalCalculoSystem.detectar_hora_extra_dia(
-            st.session_state.usuario,
-            data_registro,
-            tolerancia_minutos=tolerancia_minutos
-        )
-
-        if resultado_hora_extra.get('tem_hora_extra', False):
-            horas_extra = resultado_hora_extra.get('horas_extra', 0)
-            minutos_extra = resultado_hora_extra.get('minutos_extra', 0)
-            st.success(f"""
-            ⏱️ **HORA EXTRA DETECTADA!**
-
-            Você trabalhou:
-            - **{horas_extra:.1f} horas** ({minutos_extra} minutos) de hora extra
-            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
-            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
-            """)
-            if st.button("📝 Solicitar Aprovação de Hora Extra"):
-                st.session_state.solicitar_hora_extra = True
-                st.session_state.hora_extra_horas = horas_extra
-                st.session_state.hora_extra_data = data_registro
-                st.rerun()
-
-        elif resultado_hora_extra.get('categoria') == 'abaixo_jornada':
-            minutos_faltando = abs(resultado_hora_extra.get('minutos_extra', 0))
-            st.warning(f"""
-            ⏰ **REGISTRO ABAIXO DA JORNADA**
-
-            Você trabalhou {minutos_faltando} minutos a menos que o esperado.
-            """)
-        else:
-            st.success(f"""
-            ✅ **EXPEDIENTE FINALIZADO COM SUCESSO!**
-
-            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
-            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
-            - Status: Dentro da jornada (tolerância: {tolerancia_minutos} min)
-
-            Bom descanso! 😊
-            """)
-
-    except ImportError:
-        if horas_extras_system is not None:
-            try:
-                verificacao = horas_extras_system.verificar_fim_jornada(st.session_state.usuario)
-                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
-                    st.info(f"💡 {verificacao.get('message')}")
-            except Exception:
-                st.info("💡 Não foi possível verificar horas extras no momento.")
-    except Exception as e:
-        logger.error(f"Erro ao detectar hora extra: {e}")
-        if horas_extras_system is not None:
-            try:
-                verificacao = horas_extras_system.verificar_fim_jornada(st.session_state.usuario)
-                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
-                    st.info(f"💡 {verificacao.get('message')}")
-            except Exception:
-                st.info("💡 Não foi possível verificar horas extras no momento.")
 
 
 def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
@@ -2979,8 +2763,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                         
                         st.success(f"✅ Horas extras registradas! Total: {int(horas_total)}h {int((horas_total % 1) * 60)}min")
                         st.balloons()
-                        import time as _time_mod
-                        _time_mod.sleep(2)
+                        import time
+                        time.sleep(2)
                         st.rerun()
                         
                     except Exception as e:
@@ -3025,7 +2809,128 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     st.subheader("➕ Novo Registro")
     
-    _render_gps_capture_js()
+    # GPS: Injetar JavaScript para captura de coordenadas - OTIMIZADO
+    gps_js = """
+    <div id="gps-status" style="padding: 10px; margin-bottom: 10px;">
+        <div style="padding: 8px; background: linear-gradient(135deg, #e8f5e9 0%, #c8e6c9 100%); border-radius: 8px; text-align: center;">
+            📍 Obtendo localização GPS...
+        </div>
+    </div>
+    <script>
+    (function() {
+        // Verificar cache primeiro para resposta instantânea
+        const cachedLat = sessionStorage.getItem('gps_latitude');
+        const cachedLng = sessionStorage.getItem('gps_longitude');
+        const cachedAcc = sessionStorage.getItem('gps_accuracy');
+        const cachedTime = sessionStorage.getItem('gps_timestamp');
+        
+        // Usar cache se menos de 2 minutos (120000ms)
+        const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
+        
+        function fillInputs(lat, lng) {
+            // Buscar campos GPS pelo placeholder específico
+            const latField = document.querySelector('input[placeholder="GPS Lat"]');
+            const lngField = document.querySelector('input[placeholder="GPS Lng"]');
+            
+            if (latField && lngField) {
+                // Preencher latitude
+                latField.value = lat.toString();
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                latField.dispatchEvent(new Event('change', { bubbles: true }));
+                // Disparo adicional para Streamlit
+                const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+                nativeInputValueSetter.call(latField, lat.toString());
+                latField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                // Preencher longitude
+                lngField.value = lng.toString();
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                lngField.dispatchEvent(new Event('change', { bubbles: true }));
+                nativeInputValueSetter.call(lngField, lng.toString());
+                lngField.dispatchEvent(new Event('input', { bubbles: true }));
+                
+                console.log('GPS fields filled:', lat, lng);
+            } else {
+                console.log('GPS fields not found. Looking for:', 'input[placeholder="GPS Lat"]', 'input[placeholder="GPS Lng"]');
+            }
+        }
+        
+        function updateGpsStatus(success, message) {
+            const gpsDiv = document.getElementById('gps-status');
+            if (gpsDiv) {
+                if (success) {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #c8e6c9 0%, #a5d6a7 100%); border-radius: 8px; color: #1b5e20; text-align: center; font-weight: 500;">✅ ' + message + '</div>';
+                } else {
+                    gpsDiv.innerHTML = '<div style="padding: 8px; background: linear-gradient(135deg, #fff3cd 0%, #ffe082 100%); border-radius: 8px; color: #856404; text-align: center;">⚠️ ' + message + '</div>';
+                }
+            }
+        }
+        
+        // Se cache válido, usar imediatamente enquanto atualiza em background
+        if (cacheValid && cachedLat && cachedLng) {
+            updateGpsStatus(true, 'GPS: ' + parseFloat(cachedLat).toFixed(6) + ', ' + parseFloat(cachedLng).toFixed(6) + ' (±' + Math.round(cachedAcc || 0) + 'm)');
+            setTimeout(() => fillInputs(cachedLat, cachedLng), 300);
+        }
+        
+        if (navigator.geolocation) {
+            // Opções otimizadas: timeout menor, aceita cache recente
+            const options = {
+                enableHighAccuracy: false,  // Primeiro, posição rápida
+                timeout: 5000,              // 5 segundos max
+                maximumAge: 120000          // Aceita cache de 2 min
+            };
+            
+            navigator.geolocation.getCurrentPosition(
+                function(position) {
+                    const lat = position.coords.latitude;
+                    const lng = position.coords.longitude;
+                    const acc = position.coords.accuracy;
+                    
+                    // Salvar no cache
+                    sessionStorage.setItem('gps_latitude', lat);
+                    sessionStorage.setItem('gps_longitude', lng);
+                    sessionStorage.setItem('gps_accuracy', acc);
+                    sessionStorage.setItem('gps_timestamp', Date.now());
+                    
+                    updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
+                    setTimeout(() => fillInputs(lat, lng), 300);
+                    
+                    // Se precisão ruim, tentar alta precisão em background
+                    if (acc > 100) {
+                        navigator.geolocation.getCurrentPosition(
+                            function(p) {
+                                if (p.coords.accuracy < acc) {
+                                    sessionStorage.setItem('gps_latitude', p.coords.latitude);
+                                    sessionStorage.setItem('gps_longitude', p.coords.longitude);
+                                    sessionStorage.setItem('gps_accuracy', p.coords.accuracy);
+                                    sessionStorage.setItem('gps_timestamp', Date.now());
+                                    updateGpsStatus(true, 'GPS: ' + p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) + ' (±' + Math.round(p.coords.accuracy) + 'm)');
+                                    fillInputs(p.coords.latitude, p.coords.longitude);
+                                }
+                            },
+                            function() {},
+                            { enableHighAccuracy: true, timeout: 10000, maximumAge: 0 }
+                        );
+                    }
+                },
+                function(error) {
+                    console.log('GPS Error:', error.message);
+                    sessionStorage.setItem('gps_error', error.message);
+                    if (!cacheValid) {
+                        updateGpsStatus(false, 'GPS não disponível - registro será feito sem localização');
+                    }
+                },
+                options
+            );
+        } else {
+            if (!cacheValid) {
+                updateGpsStatus(false, 'Navegador não suporta GPS');
+            }
+        }
+    })();
+    </script>
+    """
+    st.components.v1.html(gps_js, height=60)
 
     with st.form("registro_ponto"):
         col1, col2 = st.columns(2)
@@ -3052,24 +2957,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
             projeto = st.selectbox("📊 Projeto", obter_projetos_ativos())
 
-        # Campo de horário — essencial para registros retroativos
-        _agora_form = get_datetime_br()
-        _eh_retroativo = (data_registro < date.today())
-        if _eh_retroativo:
-            st.info(
-                "📅 **Registro retroativo** — informe o horário real "
-                "em que o evento ocorreu."
-            )
-
-        try:
-            hora_registro_input = st.time_input(
-                "🕐 Horário do Registro",
-                value=time(hour=_agora_form.hour, minute=_agora_form.minute),
-            )
-        except Exception as _te:
-            logger.warning("st.time_input falhou: %s", _te)
-            hora_registro_input = time(hour=_agora_form.hour, minute=_agora_form.minute)
-
         atividade = st.text_area(
             "📝 Descrição da Atividade",
             placeholder="Descreva brevemente a atividade realizada..."
@@ -3077,40 +2964,33 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         
         
         # Alerta visual para domingo ou feriado
-        try:
-            from calculo_horas_system import eh_dia_com_multiplicador
-            
-            info_dia = eh_dia_com_multiplicador(data_registro)
-            if info_dia['tem_multiplicador']:
-                if info_dia['eh_domingo'] and info_dia['eh_feriado']:
-                    st.warning(f"""
-                    ⚠️ 🎉📅 **ATENÇÃO: DOMINGO E FERIADO ({info_dia['nome_feriado']})!**
-                    
-                    As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
-                    """)
-                elif info_dia['eh_domingo']:
-                    st.warning(f"""
-                    ⚠️ 📅 **ATENÇÃO: DOMINGO!**
-                    
-                    As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
-                    """)
-                elif info_dia['eh_feriado']:
-                    st.warning(f"""
-                    ⚠️ 🎉 **ATENÇÃO: FERIADO - {info_dia['nome_feriado']}!**
+        from calculo_horas_system import eh_dia_com_multiplicador
+        
+        info_dia = eh_dia_com_multiplicador(data_registro)
+        if info_dia['tem_multiplicador']:
+            if info_dia['eh_domingo'] and info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉📅 **ATENÇÃO: DOMINGO E FERIADO ({info_dia['nome_feriado']})!**
                 
                 As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
                 """)
-        except Exception as _feriado_err:
-            logger.debug("Erro ao verificar feriado/domingo: %s", _feriado_err)
+            elif info_dia['eh_domingo']:
+                st.warning(f"""
+                ⚠️ 📅 **ATENÇÃO: DOMINGO!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
+            elif info_dia['eh_feriado']:
+                st.warning(f"""
+                ⚠️ 🎉 **ATENÇÃO: FERIADO - {info_dia['nome_feriado']}!**
+                
+                As horas trabalhadas neste dia serão **contabilizadas em DOBRO** (x2).
+                """)
 
         # Validação de registros
         data_str = data_registro.strftime("%Y-%m-%d")
-        try:
-            pode_registrar = calculo_horas_system.pode_registrar_tipo(
-                st.session_state.usuario, data_str, tipo_registro)
-        except Exception as _val_err:
-            logger.warning("Erro ao validar registro: %s", _val_err)
-            pode_registrar = True
+        pode_registrar = calculo_horas_system.pode_registrar_tipo(
+            st.session_state.usuario, data_str, tipo_registro)
 
         if tipo_registro in ["Início", "Fim"] and not pode_registrar:
             st.warning(
@@ -3150,8 +3030,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     latitude = None
                     longitude = None
 
-                # Usar o horário informado pelo usuário (campo time_input)
-                hora_str = hora_registro_input.strftime("%H:%M:%S")
+                # Registrar ponto com horário atual
                 data_hora_registro = registrar_ponto(
                     st.session_state.usuario,
                     tipo_registro,
@@ -3159,7 +3038,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     projeto,
                     atividade,
                     data_registro.strftime("%Y-%m-%d"),
-                    hora_str,
+                    None,  # Não passar horário - usar atual
                     latitude,
                     longitude
                 )
@@ -3174,9 +3053,107 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
                 
 
-                # Detecção de hora extra pós-registro (extraído para legibilidade)
+                # ✨ NOVO: Integração com sistema de jornada e hora extra
                 if tipo_registro == "Fim":
-                    _handle_post_registration_overtime(data_registro, horas_extras_system)
+                    try:
+                        try:
+                            from jornada_semanal_calculo_system import JornadaSemanalCalculoSystem
+                        except ImportError:
+                            JornadaSemanalCalculoSystem = None
+                            logger.warning("Módulo 'jornada_semanal_calculo_system' não encontrado. Algumas funcionalidades podem estar indisponíveis.")
+                        
+                        # 🔧 CORREÇÃO: Obter tolerância configurada pelo gestor
+                        tolerancia_minutos = 5  # padrão
+                        if REFACTORING_ENABLED:
+                            try:
+                                query = "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+                                result = execute_query(query, fetch_one=True)
+                                if result:
+                                    tolerancia_minutos = int(result[0])
+                            except Exception as e:
+                                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
+                        else:
+                            try:
+                                cursor = get_db_connection().cursor()
+                                cursor.execute(
+                                    "SELECT valor FROM configuracoes WHERE chave = 'tolerancia_atraso_minutos'"
+                                )
+                                resultado = cursor.fetchone()
+                                if resultado:
+                                    tolerancia_minutos = int(resultado[0])
+                                cursor.close()
+                            except Exception as e:
+                                logger.warning(f"Não foi possível obter tolerância do gestor: {e}")
+                        
+                        # Detectar hora extra COM a tolerância correta
+                        resultado_hora_extra = JornadaSemanalCalculoSystem.detectar_hora_extra_dia(
+                            st.session_state.usuario,
+                            data_registro,
+                            tolerancia_minutos=tolerancia_minutos
+                        )
+                        
+                        if resultado_hora_extra.get('tem_hora_extra', False):
+                            horas_extra = resultado_hora_extra.get('horas_extra', 0)
+                            minutos_extra = resultado_hora_extra.get('minutos_extra', 0)
+                            
+                            # Mostrar resultado
+                            st.success(f"""
+                            ⏱️ **HORA EXTRA DETECTADA!**
+                            
+                            Você trabalhou:
+                            - **{horas_extra:.1f} horas** ({minutos_extra} minutos) de hora extra
+                            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
+                            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
+                            """)
+                            
+                            # Sugerir solicitar aprovação
+                            if st.button("📝 Solicitar Aprovação de Hora Extra"):
+                                # Preparar dados para solicitar
+                                st.session_state.solicitar_hora_extra = True
+                                st.session_state.hora_extra_horas = horas_extra
+                                st.session_state.hora_extra_data = data_registro
+                                st.rerun()
+                        
+                        elif resultado_hora_extra.get('categoria') == 'abaixo_jornada':
+                            minutos_faltando = abs(resultado_hora_extra.get('minutos_extra', 0))
+                            st.warning(f"""
+                            ⏰ **REGISTRO ABAIXO DA JORNADA**
+                            
+                            Você trabalhou {minutos_faltando} minutos a menos que o esperado.
+                            """)
+                        else:
+                            # ✅ Expediente finalizado com sucesso dentro da jornada
+                            st.success(f"""
+                            ✅ **EXPEDIENTE FINALIZADO COM SUCESSO!**
+                            
+                            - Esperado: {resultado_hora_extra.get('esperado_minutos', 0)} min
+                            - Registrado: {resultado_hora_extra.get('registrado_minutos', 0)} min
+                            - Status: Dentro da jornada (tolerância: {tolerancia_minutos} min)
+                            
+                            Bom descanso! 😊
+                            """)
+                    
+                    except ImportError:
+                        # Se sistema de jornada não estiver disponível, usar método antigo
+                        if horas_extras_system is not None:
+                            try:
+                                verificacao = horas_extras_system.verificar_fim_jornada(
+                                    st.session_state.usuario)
+                                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
+                                    st.info(f"💡 {verificacao.get('message')}")
+                            except Exception:
+                                st.info("💡 Não foi possível verificar horas extras no momento.")
+                    except Exception as e:
+                        logger.error(f"Erro ao detectar hora extra: {e}")
+                        # Fallback para método antigo
+                        if horas_extras_system is not None:
+                            try:
+                                verificacao = horas_extras_system.verificar_fim_jornada(
+                                    st.session_state.usuario)
+                                if isinstance(verificacao, dict) and verificacao.get("deve_notificar"):
+                                    st.info(f"💡 {verificacao.get('message')}")
+                            except Exception:
+                                st.info("💡 Não foi possível verificar horas extras no momento.")
 
                 st.rerun()
 
@@ -5486,13 +5463,9 @@ def comunicacao_gestor_interface():
                     )
                     
                     if enviados > 0:
-                        st.success(f"✅ Aviso enviado via ntfy para {enviados} funcionário(s)!")
-                        st.info("📲 Os funcionários receberão a notificação no app ntfy.")
+                        st.success(f"✅ Aviso enviado para {enviados} funcionário(s)!")
                     else:
-                        st.error(
-                            "❌ Não foi possível enviar o aviso. "
-                            "Verifique se o serviço ntfy.sh está acessível."
-                        )
+                        st.warning("⚠️ Nenhum funcionário com push ativado")
                 else:
                     st.error("❌ Preencha o título e a mensagem")
     
@@ -9487,439 +9460,6 @@ def relatorios_horas_extras_interface():
                 st.info("Nenhum registro encontrado com os filtros selecionados.")
 
 
-# ====================================================================
-# Funções auxiliares extraídas de sistema_interface() para legibilidade
-# ====================================================================
-
-def _render_backup_email_section():
-    """Seção de configuração de Backup por Email (Conformidade Legal)."""
-    st.markdown("---")
-    st.markdown("### 📧 Backup por Email (Conformidade Legal)")
-
-    st.info("""
-    ⚖️ **Importante:** Por lei (Portaria 671/2021), os registros de ponto devem ser mantidos por **5 anos**.
-    Configure o envio automático de backups para seu email para garantir a conformidade legal.
-    """)
-
-    # Verificar se email está configurado
-    from email_notifications import is_email_configured
-
-    if not is_email_configured():
-        st.warning("""
-        ⚠️ **Sistema de email não configurado**
-
-        Para ativar backup por email, adicione no Render:
-        - `SMTP_HOST` (ex: smtp.gmail.com)
-        - `SMTP_PORT` (ex: 587)
-        - `SMTP_USER` (seu email)
-        - `SMTP_PASSWORD` (senha de app do Gmail)
-        """)
-    else:
-        st.success("✅ Sistema de email configurado")
-
-        # Buscar configuração atual de email de backup
-        email_backup_atual = ''
-        backup_email_ativo = '0'
-        backup_email_frequencia = 'semanal'
-
-        try:
-            conn_bkp = get_connection()
-            try:
-                cursor_bkp = conn_bkp.cursor()
-
-                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
-                result = cursor_bkp.fetchone()
-                if result:
-                    email_backup_atual = result[0] or ''
-
-                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_ativo'")
-                result = cursor_bkp.fetchone()
-                if result:
-                    backup_email_ativo = result[0] or '0'
-
-                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_frequencia'")
-                result = cursor_bkp.fetchone()
-                if result:
-                    backup_email_frequencia = result[0] or 'semanal'
-            finally:
-                _return_conn(conn_bkp)
-        except Exception as e:
-            logger.debug("Erro silenciado: %s", e)
-
-        with st.form("config_backup_email"):
-            col_be1, col_be2 = st.columns([2, 1])
-
-            with col_be1:
-                email_backup = st.text_input(
-                    "📬 Email para receber backups",
-                    value=email_backup_atual,
-                    placeholder="seu.email@empresa.com.br",
-                    help="O backup será enviado para este email automaticamente"
-                )
-
-            with col_be2:
-                frequencia = st.selectbox(
-                    "📅 Frequência",
-                    options=['semanal', 'quinzenal', 'mensal'],
-                    index=['semanal', 'quinzenal', 'mensal'].index(backup_email_frequencia) if backup_email_frequencia in ['semanal', 'quinzenal', 'mensal'] else 0,
-                    help="Com que frequência o backup será enviado"
-                )
-
-            ativar_backup_email = st.checkbox(
-                "✅ Ativar envio automático de backup por email",
-                value=backup_email_ativo == '1',
-                help="Quando ativado, você receberá o backup completo do sistema no email cadastrado"
-            )
-
-            col_btn1, col_btn2 = st.columns(2)
-
-            with col_btn1:
-                salvar_config = st.form_submit_button("💾 Salvar Configuração", use_container_width=True)
-
-            with col_btn2:
-                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", use_container_width=True, type="secondary")
-
-        if salvar_config:
-            if ativar_backup_email and not email_backup:
-                st.error("❌ Informe o email para receber os backups")
-            else:
-                try:
-                    conn_bkp = get_connection()
-                    try:
-                        cursor_bkp = conn_bkp.cursor()
-
-                        configs_backup = [
-                            ('backup_email_destino', email_backup, 'Email para envio de backups'),
-                            ('backup_email_ativo', '1' if ativar_backup_email else '0', 'Backup por email ativo'),
-                            ('backup_email_frequencia', frequencia, 'Frequência do backup por email'),
-                        ]
-
-                        for chave, valor, descricao in configs_backup:
-                            cursor_bkp.execute(f"""
-                                INSERT INTO configuracoes (chave, valor, descricao)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                            """, (chave, valor, descricao, valor))
-
-                        conn_bkp.commit()
-                    finally:
-                        _return_conn(conn_bkp)
-
-                    if ativar_backup_email:
-                        st.success(f"✅ Backup por email ativado! Você receberá backups {frequencia}mente em **{email_backup}**")
-                    else:
-                        st.warning("⚠️ Backup por email desativado")
-
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Erro ao salvar: {e}")
-
-        if enviar_agora:
-            if not email_backup:
-                st.error("❌ Informe o email para enviar o backup")
-            else:
-                with st.spinner("📤 Gerando e enviando backup... Aguarde..."):
-                    try:
-                        from backup_postgresql import enviar_backup_por_email
-                        sucesso, mensagem = enviar_backup_por_email(email_backup, 'json')
-
-                        if sucesso:
-                            st.success(f"✅ {mensagem}")
-                            st.balloons()
-                        else:
-                            st.error(f"❌ {mensagem}")
-                    except Exception as e:
-                        st.error(f"❌ Erro ao enviar backup: {e}")
-
-
-def _render_push_notifications_config():
-    """Seção de configuração de Push Notifications globais."""
-    st.markdown("---")
-    st.markdown("### 📱 Push Notifications (Lembretes no Celular/Navegador)")
-
-    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
-    if vapid_key:
-        st.success("✅ **Push Notifications configurado** - Sistema pronto para enviar lembretes")
-
-        # Buscar configuração atual
-        push_obrigatorio_atual = '1'  # Padrão: obrigatório
-        try:
-            if REFACTORING_ENABLED:
-                result = execute_query(
-                    "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
-                    fetch_one=True
-                )
-                if result:
-                    push_obrigatorio_atual = result[0]
-            else:
-                conn = get_connection()
-                try:
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
-                    result = cursor.fetchone()
-                    if result:
-                        push_obrigatorio_atual = result[0]
-                finally:
-                    _return_conn(conn)
-        except Exception as e:
-            logger.debug("Erro silenciado: %s", e)
-
-        with st.form("config_push_global"):
-            st.markdown("#### ⚙️ Configurações Globais de Push")
-
-            push_obrigatorio = st.checkbox(
-                "🔒 **Notificações Obrigatórias para Todos**",
-                value=push_obrigatorio_atual == '1',
-                help="Quando ativado, todos os usuários verão um modal pedindo para ativar notificações ao fazer login. Recomendado para garantir que ninguém esqueça de bater o ponto."
-            )
-
-            st.info("""
-            📋 **Como funciona:**
-            - Após login, um modal aparece pedindo para ativar notificações
-            - O usuário pode clicar "Lembrar mais tarde" (aparecerá novamente no próximo dia)
-            - Quando ativado, recebe lembretes de entrada, saída e hora extra
-            - Apenas você (gestor) pode desabilitar esta obrigatoriedade
-            """)
-
-            if st.form_submit_button("💾 Salvar Configuração de Push", use_container_width=True):
-                try:
-                    valor = '1' if push_obrigatorio else '0'
-
-                    if REFACTORING_ENABLED:
-                        execute_update(f"""
-                            INSERT INTO configuracoes (chave, valor, descricao)
-                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
-                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                        """, (valor, valor))
-                    else:
-                        conn = get_connection()
-                        try:
-                            cursor = conn.cursor()
-                            cursor.execute(f"""
-                                INSERT INTO configuracoes (chave, valor, descricao)
-                                VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
-                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                            """, (valor, valor))
-                            conn.commit()
-                        finally:
-                            _return_conn(conn)
-
-                    if push_obrigatorio:
-                        st.success("✅ Notificações obrigatórias ATIVADAS! Todos os usuários serão solicitados a ativar.")
-                    else:
-                        st.warning("⚠️ Notificações obrigatórias DESATIVADAS. Modal não aparecerá mais.")
-                    st.rerun()
-                except Exception as e:
-                    st.error(f"❌ Erro ao salvar: {e}")
-    else:
-        st.warning("""
-        ⚠️ **Push Notifications não configurado**
-
-        Para ativar, adicione as seguintes variáveis de ambiente no Render:
-        - `VAPID_PUBLIC_KEY`
-        - `VAPID_PRIVATE_KEY`
-        - `VAPID_CLAIM_EMAIL`
-        """)
-
-
-def _render_auto_notifications_config():
-    """Seção de configuração de Notificações Automáticas (Scheduler)."""
-    st.markdown("---")
-    st.markdown("### 🔔 Notificações Automáticas")
-    st.markdown("""
-    O sistema envia notificações automáticas para:
-    - **Funcionários** que esqueceram de bater ponto (entrada/saída)
-    - **Funcionários** em hora extra prolongada
-    - **Gestores** sobre solicitações pendentes de aprovação
-    """)
-
-    try:
-        from background_scheduler import obter_status_scheduler, is_scheduler_running
-
-        status = obter_status_scheduler()
-
-        if status['ativo']:
-            st.success("✅ **Scheduler ativo** - Notificações automáticas funcionando!")
-
-            with st.expander("📋 Ver jobs agendados", expanded=False):
-                if status['jobs']:
-                    for job in status['jobs']:
-                        st.markdown(f"- **{job['nome']}**: próxima execução em `{job['proximo_execucao']}`")
-                else:
-                    st.info("Nenhum job agendado no momento.")
-
-            st.markdown(f"🕐 **Horário do servidor:** {status['data_hora_atual']}")
-        else:
-            st.warning("⚠️ **Scheduler inativo** - Notificações automáticas desabilitadas")
-            st.info("O scheduler será iniciado automaticamente ao reiniciar o app.")
-
-    except ImportError:
-        st.info("ℹ️ Módulo de notificações automáticas não disponível.")
-    except Exception as e:
-        st.error(f"❌ Erro ao verificar scheduler: {e}")
-
-    # ============================================
-    # Configuração dos horários de notificação
-    # ============================================
-    st.markdown("#### ⏰ Configurar Horários")
-
-    # Buscar configurações salvas
-    config_notif = {
-        'notif_entrada_ativo': '1',
-        'notif_entrada_horarios': '08:15,08:30,09:00',
-        'notif_saida_ativo': '1',
-        'notif_saida_horarios': '17:15,17:30,18:00',
-        'notif_hora_extra_ativo': '1',
-        'notif_hora_extra_inicio': '18:00',
-        'notif_hora_extra_fim': '22:00',
-        'notif_aprovadores_ativo': '1',
-        'notif_aprovadores_horarios': '09:00,14:00,17:00'
-    }
-
-    # Buscar valores do banco
-    if REFACTORING_ENABLED:
-        try:
-            for chave in config_notif.keys():
-                result = execute_query(
-                    f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}",
-                    (chave,),
-                    fetch_one=True
-                )
-                if result:
-                    config_notif[chave] = result[0]
-        except Exception as e:
-            logger.debug("Erro silenciado: %s", e)
-    else:
-        try:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-                for chave in config_notif.keys():
-                    cursor.execute(f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}", (chave,))
-                    result = cursor.fetchone()
-                    if result:
-                        config_notif[chave] = result[0]
-            finally:
-                _return_conn(conn)
-        except Exception as e:
-            logger.debug("Erro silenciado: %s", e)
-
-    with st.form("config_notificacoes"):
-        # Lembretes de Entrada
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            entrada_ativo = st.checkbox(
-                "Lembrete Entrada",
-                value=config_notif['notif_entrada_ativo'] == '1',
-                help="Notifica funcionários que esqueceram de bater ponto de entrada"
-            )
-        with col2:
-            entrada_horarios = st.text_input(
-                "Horários (separados por vírgula)",
-                value=config_notif['notif_entrada_horarios'],
-                placeholder="08:15,08:30,09:00",
-                key="entrada_horarios"
-            )
-
-        # Lembretes de Saída
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            saida_ativo = st.checkbox(
-                "Lembrete Saída",
-                value=config_notif['notif_saida_ativo'] == '1',
-                help="Notifica funcionários que esqueceram de bater ponto de saída"
-            )
-        with col2:
-            saida_horarios = st.text_input(
-                "Horários (separados por vírgula)",
-                value=config_notif['notif_saida_horarios'],
-                placeholder="17:15,17:30,18:00",
-                key="saida_horarios"
-            )
-
-        # Alertas de Hora Extra
-        col1, col2, col3 = st.columns([1, 1.5, 1.5])
-        with col1:
-            hora_extra_ativo = st.checkbox(
-                "Alerta Hora Extra",
-                value=config_notif['notif_hora_extra_ativo'] == '1',
-                help="Notifica funcionários em hora extra prolongada"
-            )
-        with col2:
-            he_inicio = st.time_input(
-                "Início monitoramento",
-                value=datetime.strptime(config_notif['notif_hora_extra_inicio'], "%H:%M").time(),
-                key="he_inicio"
-            )
-        with col3:
-            he_fim = st.time_input(
-                "Fim monitoramento",
-                value=datetime.strptime(config_notif['notif_hora_extra_fim'], "%H:%M").time(),
-                key="he_fim"
-            )
-
-        # Lembretes para Aprovadores
-        col1, col2 = st.columns([1, 3])
-        with col1:
-            aprovadores_ativo = st.checkbox(
-                "Lembrete Aprovadores",
-                value=config_notif['notif_aprovadores_ativo'] == '1',
-                help="Notifica gestores sobre solicitações pendentes"
-            )
-        with col2:
-            aprovadores_horarios = st.text_input(
-                "Horários (separados por vírgula)",
-                value=config_notif['notif_aprovadores_horarios'],
-                placeholder="09:00,14:00,17:00",
-                key="aprovadores_horarios"
-            )
-
-        if st.form_submit_button("💾 Salvar Configurações de Notificação", use_container_width=True):
-            novas_configs = [
-                ('notif_entrada_ativo', '1' if entrada_ativo else '0'),
-                ('notif_entrada_horarios', entrada_horarios),
-                ('notif_saida_ativo', '1' if saida_ativo else '0'),
-                ('notif_saida_horarios', saida_horarios),
-                ('notif_hora_extra_ativo', '1' if hora_extra_ativo else '0'),
-                ('notif_hora_extra_inicio', he_inicio.strftime("%H:%M")),
-                ('notif_hora_extra_fim', he_fim.strftime("%H:%M")),
-                ('notif_aprovadores_ativo', '1' if aprovadores_ativo else '0'),
-                ('notif_aprovadores_horarios', aprovadores_horarios),
-            ]
-
-            try:
-                if REFACTORING_ENABLED:
-                    for chave, valor in novas_configs:
-                        # Insert or update
-                        execute_update(f"""
-                            INSERT INTO configuracoes (chave, valor, descricao)
-                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                        """, (chave, valor, f'Config notificação: {chave}', valor))
-                else:
-                    conn = get_connection()
-                    try:
-                        cursor = conn.cursor()
-                        for chave, valor in novas_configs:
-                            cursor.execute(f"""
-                                INSERT INTO configuracoes (chave, valor, descricao)
-                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
-                            """, (chave, valor, f'Config notificação: {chave}', valor))
-                        conn.commit()
-                    finally:
-                        _return_conn(conn)
-
-                st.success("✅ Configurações de notificação salvas!")
-                st.info("⚠️ As alterações serão aplicadas na próxima reinicialização do app.")
-                st.rerun()
-            except Exception as e:
-                st.error(f"❌ Erro ao salvar: {e}")
-
-    st.markdown("---")
-    st.caption("💡 **Dica:** Os horários devem estar no formato HH:MM, separados por vírgula. Ex: 08:15,08:30,09:00")
-
-
 def sistema_interface():
     """Interface de configurações do sistema"""
     st.markdown("""
@@ -10222,10 +9762,434 @@ def sistema_interface():
             st.success("✅ Configurações salvas!")
             st.rerun()
 
-    # Seções extraídas para funções auxiliares (legibilidade)
-    _render_backup_email_section()
-    _render_push_notifications_config()
-    _render_auto_notifications_config()
+    # ============================================
+    # SEÇÃO: Backup por Email (Conformidade Legal)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📧 Backup por Email (Conformidade Legal)")
+    
+    st.info("""
+    ⚖️ **Importante:** Por lei (Portaria 671/2021), os registros de ponto devem ser mantidos por **5 anos**.
+    Configure o envio automático de backups para seu email para garantir a conformidade legal.
+    """)
+    
+    # Verificar se email está configurado
+    from email_notifications import is_email_configured
+    
+    if not is_email_configured():
+        st.warning("""
+        ⚠️ **Sistema de email não configurado**
+        
+        Para ativar backup por email, adicione no Render:
+        - `SMTP_HOST` (ex: smtp.gmail.com)
+        - `SMTP_PORT` (ex: 587)
+        - `SMTP_USER` (seu email)
+        - `SMTP_PASSWORD` (senha de app do Gmail)
+        """)
+    else:
+        st.success("✅ Sistema de email configurado")
+        
+        # Buscar configuração atual de email de backup
+        email_backup_atual = ''
+        backup_email_ativo = '0'
+        backup_email_frequencia = 'semanal'
+        
+        try:
+            conn_bkp = get_connection()
+            try:
+                cursor_bkp = conn_bkp.cursor()
+                
+                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
+                result = cursor_bkp.fetchone()
+                if result:
+                    email_backup_atual = result[0] or ''
+                
+                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_ativo'")
+                result = cursor_bkp.fetchone()
+                if result:
+                    backup_email_ativo = result[0] or '0'
+                    
+                cursor_bkp.execute(f"SELECT valor FROM configuracoes WHERE chave = 'backup_email_frequencia'")
+                result = cursor_bkp.fetchone()
+                if result:
+                    backup_email_frequencia = result[0] or 'semanal'
+            finally:
+                _return_conn(conn_bkp)
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
+        
+        with st.form("config_backup_email"):
+            col_be1, col_be2 = st.columns([2, 1])
+            
+            with col_be1:
+                email_backup = st.text_input(
+                    "📬 Email para receber backups",
+                    value=email_backup_atual,
+                    placeholder="seu.email@empresa.com.br",
+                    help="O backup será enviado para este email automaticamente"
+                )
+            
+            with col_be2:
+                frequencia = st.selectbox(
+                    "📅 Frequência",
+                    options=['semanal', 'quinzenal', 'mensal'],
+                    index=['semanal', 'quinzenal', 'mensal'].index(backup_email_frequencia) if backup_email_frequencia in ['semanal', 'quinzenal', 'mensal'] else 0,
+                    help="Com que frequência o backup será enviado"
+                )
+            
+            ativar_backup_email = st.checkbox(
+                "✅ Ativar envio automático de backup por email",
+                value=backup_email_ativo == '1',
+                help="Quando ativado, você receberá o backup completo do sistema no email cadastrado"
+            )
+            
+            col_btn1, col_btn2 = st.columns(2)
+            
+            with col_btn1:
+                salvar_config = st.form_submit_button("💾 Salvar Configuração", use_container_width=True)
+            
+            with col_btn2:
+                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", use_container_width=True, type="secondary")
+        
+        if salvar_config:
+            if ativar_backup_email and not email_backup:
+                st.error("❌ Informe o email para receber os backups")
+            else:
+                try:
+                    conn_bkp = get_connection()
+                    try:
+                        cursor_bkp = conn_bkp.cursor()
+                        
+                        configs_backup = [
+                            ('backup_email_destino', email_backup, 'Email para envio de backups'),
+                            ('backup_email_ativo', '1' if ativar_backup_email else '0', 'Backup por email ativo'),
+                            ('backup_email_frequencia', frequencia, 'Frequência do backup por email'),
+                        ]
+                        
+                        for chave, valor, descricao in configs_backup:
+                            cursor_bkp.execute(f"""
+                                INSERT INTO configuracoes (chave, valor, descricao)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                            """, (chave, valor, descricao, valor))
+                        
+                        conn_bkp.commit()
+                    finally:
+                        _return_conn(conn_bkp)
+                    
+                    if ativar_backup_email:
+                        st.success(f"✅ Backup por email ativado! Você receberá backups {frequencia}mente em **{email_backup}**")
+                    else:
+                        st.warning("⚠️ Backup por email desativado")
+                    
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+        
+        if enviar_agora:
+            if not email_backup:
+                st.error("❌ Informe o email para enviar o backup")
+            else:
+                with st.spinner("📤 Gerando e enviando backup... Aguarde..."):
+                    try:
+                        from backup_postgresql import enviar_backup_por_email
+                        sucesso, mensagem = enviar_backup_por_email(email_backup, 'json')
+                        
+                        if sucesso:
+                            st.success(f"✅ {mensagem}")
+                            st.balloons()
+                        else:
+                            st.error(f"❌ {mensagem}")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao enviar backup: {e}")
+
+    # ============================================
+    # SEÇÃO: Push Notifications (Configurações Globais)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 📱 Push Notifications (Lembretes no Celular/Navegador)")
+    
+    vapid_key = os.getenv('VAPID_PUBLIC_KEY', '')
+    if vapid_key:
+        st.success("✅ **Push Notifications configurado** - Sistema pronto para enviar lembretes")
+        
+        # Buscar configuração atual
+        push_obrigatorio_atual = '1'  # Padrão: obrigatório
+        try:
+            if REFACTORING_ENABLED:
+                result = execute_query(
+                    "SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'",
+                    fetch_one=True
+                )
+                if result:
+                    push_obrigatorio_atual = result[0]
+            else:
+                conn = get_connection()
+                try:
+                    cursor = conn.cursor()
+                    cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'push_notifications_obrigatorio'")
+                    result = cursor.fetchone()
+                    if result:
+                        push_obrigatorio_atual = result[0]
+                finally:
+                    _return_conn(conn)
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
+        
+        with st.form("config_push_global"):
+            st.markdown("#### ⚙️ Configurações Globais de Push")
+            
+            push_obrigatorio = st.checkbox(
+                "🔒 **Notificações Obrigatórias para Todos**",
+                value=push_obrigatorio_atual == '1',
+                help="Quando ativado, todos os usuários verão um modal pedindo para ativar notificações ao fazer login. Recomendado para garantir que ninguém esqueça de bater o ponto."
+            )
+            
+            st.info("""
+            📋 **Como funciona:**
+            - Após login, um modal aparece pedindo para ativar notificações
+            - O usuário pode clicar "Lembrar mais tarde" (aparecerá novamente no próximo dia)
+            - Quando ativado, recebe lembretes de entrada, saída e hora extra
+            - Apenas você (gestor) pode desabilitar esta obrigatoriedade
+            """)
+            
+            if st.form_submit_button("💾 Salvar Configuração de Push", use_container_width=True):
+                try:
+                    valor = '1' if push_obrigatorio else '0'
+                    
+                    if REFACTORING_ENABLED:
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (valor, valor))
+                    else:
+                        conn = get_connection()
+                        try:
+                            cursor = conn.cursor()
+                            cursor.execute(f"""
+                                INSERT INTO configuracoes (chave, valor, descricao)
+                                VALUES ('push_notifications_obrigatorio', {SQL_PLACEHOLDER}, 'Push notifications obrigatórias para todos')
+                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                            """, (valor, valor))
+                            conn.commit()
+                        finally:
+                            _return_conn(conn)
+                    
+                    if push_obrigatorio:
+                        st.success("✅ Notificações obrigatórias ATIVADAS! Todos os usuários serão solicitados a ativar.")
+                    else:
+                        st.warning("⚠️ Notificações obrigatórias DESATIVADAS. Modal não aparecerá mais.")
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"❌ Erro ao salvar: {e}")
+    else:
+        st.warning("""
+        ⚠️ **Push Notifications não configurado**
+        
+        Para ativar, adicione as seguintes variáveis de ambiente no Render:
+        - `VAPID_PUBLIC_KEY`
+        - `VAPID_PRIVATE_KEY`
+        - `VAPID_CLAIM_EMAIL`
+        """)
+
+    # ============================================
+    # SEÇÃO: Notificações Automáticas (Scheduler)
+    # ============================================
+    st.markdown("---")
+    st.markdown("### 🔔 Notificações Automáticas")
+    st.markdown("""
+    O sistema envia notificações automáticas para:
+    - **Funcionários** que esqueceram de bater ponto (entrada/saída)
+    - **Funcionários** em hora extra prolongada
+    - **Gestores** sobre solicitações pendentes de aprovação
+    """)
+    
+    try:
+        from background_scheduler import obter_status_scheduler, is_scheduler_running
+        
+        status = obter_status_scheduler()
+        
+        if status['ativo']:
+            st.success("✅ **Scheduler ativo** - Notificações automáticas funcionando!")
+            
+            with st.expander("📋 Ver jobs agendados", expanded=False):
+                if status['jobs']:
+                    for job in status['jobs']:
+                        st.markdown(f"- **{job['nome']}**: próxima execução em `{job['proximo_execucao']}`")
+                else:
+                    st.info("Nenhum job agendado no momento.")
+            
+            st.markdown(f"🕐 **Horário do servidor:** {status['data_hora_atual']}")
+        else:
+            st.warning("⚠️ **Scheduler inativo** - Notificações automáticas desabilitadas")
+            st.info("O scheduler será iniciado automaticamente ao reiniciar o app.")
+            
+    except ImportError:
+        st.info("ℹ️ Módulo de notificações automáticas não disponível.")
+    except Exception as e:
+        st.error(f"❌ Erro ao verificar scheduler: {e}")
+    
+    # ============================================
+    # Configuração dos horários de notificação
+    # ============================================
+    st.markdown("#### ⏰ Configurar Horários")
+    
+    # Buscar configurações salvas
+    config_notif = {
+        'notif_entrada_ativo': '1',
+        'notif_entrada_horarios': '08:15,08:30,09:00',
+        'notif_saida_ativo': '1',
+        'notif_saida_horarios': '17:15,17:30,18:00',
+        'notif_hora_extra_ativo': '1',
+        'notif_hora_extra_inicio': '18:00',
+        'notif_hora_extra_fim': '22:00',
+        'notif_aprovadores_ativo': '1',
+        'notif_aprovadores_horarios': '09:00,14:00,17:00'
+    }
+    
+    # Buscar valores do banco
+    if REFACTORING_ENABLED:
+        try:
+            for chave in config_notif.keys():
+                result = execute_query(
+                    f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}",
+                    (chave,),
+                    fetch_one=True
+                )
+                if result:
+                    config_notif[chave] = result[0]
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
+    else:
+        try:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                for chave in config_notif.keys():
+                    cursor.execute(f"SELECT valor FROM configuracoes WHERE chave = {SQL_PLACEHOLDER}", (chave,))
+                    result = cursor.fetchone()
+                    if result:
+                        config_notif[chave] = result[0]
+            finally:
+                _return_conn(conn)
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
+    
+    with st.form("config_notificacoes"):
+        # Lembretes de Entrada
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            entrada_ativo = st.checkbox(
+                "Lembrete Entrada",
+                value=config_notif['notif_entrada_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de entrada"
+            )
+        with col2:
+            entrada_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_entrada_horarios'],
+                placeholder="08:15,08:30,09:00",
+                key="entrada_horarios"
+            )
+        
+        # Lembretes de Saída
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            saida_ativo = st.checkbox(
+                "Lembrete Saída",
+                value=config_notif['notif_saida_ativo'] == '1',
+                help="Notifica funcionários que esqueceram de bater ponto de saída"
+            )
+        with col2:
+            saida_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_saida_horarios'],
+                placeholder="17:15,17:30,18:00",
+                key="saida_horarios"
+            )
+        
+        # Alertas de Hora Extra
+        col1, col2, col3 = st.columns([1, 1.5, 1.5])
+        with col1:
+            hora_extra_ativo = st.checkbox(
+                "Alerta Hora Extra",
+                value=config_notif['notif_hora_extra_ativo'] == '1',
+                help="Notifica funcionários em hora extra prolongada"
+            )
+        with col2:
+            he_inicio = st.time_input(
+                "Início monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_inicio'], "%H:%M").time(),
+                key="he_inicio"
+            )
+        with col3:
+            he_fim = st.time_input(
+                "Fim monitoramento",
+                value=datetime.strptime(config_notif['notif_hora_extra_fim'], "%H:%M").time(),
+                key="he_fim"
+            )
+        
+        # Lembretes para Aprovadores
+        col1, col2 = st.columns([1, 3])
+        with col1:
+            aprovadores_ativo = st.checkbox(
+                "Lembrete Aprovadores",
+                value=config_notif['notif_aprovadores_ativo'] == '1',
+                help="Notifica gestores sobre solicitações pendentes"
+            )
+        with col2:
+            aprovadores_horarios = st.text_input(
+                "Horários (separados por vírgula)",
+                value=config_notif['notif_aprovadores_horarios'],
+                placeholder="09:00,14:00,17:00",
+                key="aprovadores_horarios"
+            )
+        
+        if st.form_submit_button("💾 Salvar Configurações de Notificação", use_container_width=True):
+            novas_configs = [
+                ('notif_entrada_ativo', '1' if entrada_ativo else '0'),
+                ('notif_entrada_horarios', entrada_horarios),
+                ('notif_saida_ativo', '1' if saida_ativo else '0'),
+                ('notif_saida_horarios', saida_horarios),
+                ('notif_hora_extra_ativo', '1' if hora_extra_ativo else '0'),
+                ('notif_hora_extra_inicio', he_inicio.strftime("%H:%M")),
+                ('notif_hora_extra_fim', he_fim.strftime("%H:%M")),
+                ('notif_aprovadores_ativo', '1' if aprovadores_ativo else '0'),
+                ('notif_aprovadores_horarios', aprovadores_horarios),
+            ]
+            
+            try:
+                if REFACTORING_ENABLED:
+                    for chave, valor in novas_configs:
+                        # Insert or update
+                        execute_update(f"""
+                            INSERT INTO configuracoes (chave, valor, descricao)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                            ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                        """, (chave, valor, f'Config notificação: {chave}', valor))
+                else:
+                    conn = get_connection()
+                    try:
+                        cursor = conn.cursor()
+                        for chave, valor in novas_configs:
+                            cursor.execute(f"""
+                                INSERT INTO configuracoes (chave, valor, descricao)
+                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                ON CONFLICT (chave) DO UPDATE SET valor = {SQL_PLACEHOLDER}, data_atualizacao = CURRENT_TIMESTAMP
+                            """, (chave, valor, f'Config notificação: {chave}', valor))
+                        conn.commit()
+                    finally:
+                        _return_conn(conn)
+                
+                st.success("✅ Configurações de notificação salvas!")
+                st.info("⚠️ As alterações serão aplicadas na próxima reinicialização do app.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Erro ao salvar: {e}")
+    
+    st.markdown("---")
+    st.caption("💡 **Dica:** Os horários devem estar no formato HH:MM, separados por vírgula. Ex: 08:15,08:30,09:00")
 
 
 # Rodapé unificado

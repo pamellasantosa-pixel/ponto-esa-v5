@@ -1,10 +1,13 @@
 """Compat shim that re-exports the canonical `AtestadoHorasSystem` implementation."""
 
+import logging
 import sys
 import os
 from datetime import datetime
 
-from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+logger = logging.getLogger(__name__)
+
+from database import get_connection, return_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
@@ -63,14 +66,14 @@ class AtestadoHorasSystem:
             )
             conn.commit()
             atestado_id = cursor.lastrowid if hasattr(cursor, "lastrowid") else None
-            conn.close()
+            return_connection(conn)
             return {"success": True, "message": "Atestado registrado com sucesso!", "id": atestado_id, "total_horas": total_horas}
         except Exception as e:
             try:
                 conn.rollback()
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
             return {"success": False, "message": str(e), "total_horas": 0}
     
     def listar_atestados_usuario(self, usuario: str):
@@ -85,7 +88,7 @@ class AtestadoHorasSystem:
             (usuario,),
         )
         rows = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
         colunas = [
             "id",
             "usuario",
@@ -116,14 +119,14 @@ class AtestadoHorasSystem:
                 ("aprovado", gestor, observacoes, atestado_id),
             )
             conn.commit()
-            conn.close()
+            return_connection(conn)
             return {"success": True, "message": "Atestado aprovado"}
         except Exception as e:
             try:
                 conn.rollback()
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
             return {"success": False, "message": str(e)}
     
     def rejeitar_atestado(self, atestado_id, gestor, motivo):
@@ -144,14 +147,14 @@ class AtestadoHorasSystem:
                 ("rejeitado", gestor, motivo, atestado_id)
             )
             conn.commit()
-            conn.close()
+            return_connection(conn)
             return {"success": True, "message": "Atestado rejeitado"}
         except Exception as e:
             try:
                 conn.rollback()
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
             return {"success": False, "message": str(e)}
 
 def format_time_duration(minutos):

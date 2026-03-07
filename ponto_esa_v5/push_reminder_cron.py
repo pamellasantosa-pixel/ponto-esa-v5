@@ -24,6 +24,8 @@ from typing import List, Dict, Tuple, Optional
 # Adicionar diretório ao path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+from constants import agora_br_naive
+
 # Tentar importar pytz para timezone
 try:
     import pytz
@@ -40,7 +42,7 @@ logger = logging.getLogger(__name__)
 
 # Importar módulos do sistema
 try:
-    from database import get_connection, SQL_PLACEHOLDER
+    from database import get_connection, return_connection, SQL_PLACEHOLDER
     from push_notifications import (
         push_system,
         notificar_esqueceu_entrada,
@@ -60,7 +62,7 @@ def get_datetime_br() -> datetime:
     """Retorna datetime atual no fuso de Brasília."""
     if TIMEZONE_BR:
         return datetime.now(TIMEZONE_BR)
-    return datetime.now()
+    return agora_br_naive()
 
 
 def get_date_br() -> date:
@@ -111,7 +113,7 @@ def obter_usuarios_ativos_com_jornada() -> List[Dict]:
         return []
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def verificar_registro_entrada_hoje(usuario: str) -> bool:
@@ -146,7 +148,7 @@ def verificar_registro_entrada_hoje(usuario: str) -> bool:
         return True  # Em caso de erro, não enviar lembrete
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def verificar_registro_saida_hoje(usuario: str) -> bool:
@@ -181,7 +183,7 @@ def verificar_registro_saida_hoje(usuario: str) -> bool:
         return True  # Em caso de erro, não enviar lembrete
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def obter_horas_extras_ativas() -> List[Dict]:
@@ -232,7 +234,7 @@ def obter_horas_extras_ativas() -> List[Dict]:
         return []
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def verificar_config_lembretes(usuario: str) -> Dict:
@@ -286,7 +288,7 @@ def verificar_config_lembretes(usuario: str) -> Dict:
         return defaults
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def eh_dia_util() -> bool:
@@ -315,7 +317,7 @@ def eh_feriado() -> bool:
         return False
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 # ============================================
@@ -544,7 +546,7 @@ def obter_gestores_ativos() -> List[str]:
         return []
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
@@ -573,8 +575,8 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
                 WHERE status = 'pendente'
             """)
             pendentes['horas_extras'] = cursor.fetchone()[0] or 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         # Correções de registro pendentes
         try:
@@ -583,8 +585,8 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
                 WHERE status = 'pendente'
             """)
             pendentes['correcoes'] = cursor.fetchone()[0] or 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         # Atestados pendentes
         try:
@@ -593,8 +595,8 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
                 WHERE status = 'pendente'
             """)
             pendentes['atestados'] = cursor.fetchone()[0] or 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         # Ajustes de ponto pendentes
         try:
@@ -603,8 +605,8 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
                 WHERE status = 'pendente'
             """)
             pendentes['ajustes'] = cursor.fetchone()[0] or 0
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         return pendentes
         
@@ -613,7 +615,7 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
         return pendentes
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
@@ -650,8 +652,8 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
                     'tipo': 'hora_extra',
                     'dias_pendente': dias
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         # Correções urgentes
         try:
@@ -669,8 +671,8 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
                     'tipo': 'correcao',
                     'dias_pendente': dias
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         # Atestados urgentes
         try:
@@ -688,8 +690,8 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
                     'tipo': 'atestado',
                     'dias_pendente': dias
                 })
-        except Exception:
-            pass
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
         
         return urgentes
         
@@ -698,7 +700,7 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
         return []
     finally:
         if conn:
-            conn.close()
+            return_connection(conn)
 
 
 def job_lembrete_aprovadores() -> Dict:

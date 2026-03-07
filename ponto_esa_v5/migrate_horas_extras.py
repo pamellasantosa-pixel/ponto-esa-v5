@@ -1,8 +1,12 @@
 #!/usr/bin/env python3
 """Script para migrar tabela horas_extras_ativas - adicionar colunas faltantes"""
+import os
 import psycopg2
+from dotenv import load_dotenv
 
-DB_URL = 'postgresql://neondb_owner:npg_4dpyuhtMZJL7@ep-spring-tree-ac2y3okx-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require'
+load_dotenv()
+
+DB_URL = os.getenv('DATABASE_URL')
 
 conn = psycopg2.connect(DB_URL)
 cursor = conn.cursor()

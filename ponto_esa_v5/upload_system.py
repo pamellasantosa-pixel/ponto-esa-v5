@@ -13,6 +13,7 @@ import hashlib
 from database import get_connection, return_connection, adapt_sql_for_postgresql, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 import database as database_module
 import logging
+from constants import agora_br
 
 logger = logging.getLogger(__name__)
 
@@ -60,8 +61,8 @@ class UploadSystem:
             os.makedirs(dir_path, exist_ok=True)
 
         # Criar subdiretórios por ano/mês
-        current_year = datetime.now().year
-        current_month = datetime.now().month
+        current_year = agora_br().year
+        current_month = agora_br().month
 
         for base_dir in base_dirs[:-1]:  # Excluir temp
             year_dir = f"{base_dir}/{current_year}"
@@ -131,7 +132,7 @@ class UploadSystem:
         extension = original_filename.lower().split(
             '.')[-1] if '.' in original_filename else 'bin'
         unique_id = str(uuid.uuid4())
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = agora_br().strftime("%Y%m%d_%H%M%S")
 
         return f"{timestamp}_{unique_id}.{extension}"
 
@@ -141,7 +142,7 @@ class UploadSystem:
 
     def get_upload_path(self, categoria, filename):
         """Determina caminho de upload baseado na categoria"""
-        now = datetime.now()
+        now = agora_br()
         year = now.year
         month = now.month
 
@@ -442,7 +443,7 @@ class UploadSystem:
         if not os.path.exists(temp_dir):
             return
 
-        cutoff_time = datetime.now().timestamp() - (max_age_hours * 3600)
+        cutoff_time = agora_br().timestamp() - (max_age_hours * 3600)
 
         for filename in os.listdir(temp_dir):
             file_path = os.path.join(temp_dir, filename)

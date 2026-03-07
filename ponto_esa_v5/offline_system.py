@@ -9,6 +9,8 @@ import datetime
 import os
 import logging
 from pathlib import Path
+from database import return_connection
+from constants import agora_br, agora_br_naive
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,7 @@ class OfflineSystem:
         ''')
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
     
     def is_online(self):
         """Verifica se há conexão com internet"""
@@ -97,7 +99,7 @@ class OfflineSystem:
         ''', (user_id, data, tipo, horario_informado, modalidade, projeto, atividade, localizacao))
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
         
         # Adicionar à fila de sincronização
         self.add_to_sync_queue('registro', cursor.lastrowid)
@@ -115,7 +117,7 @@ class OfflineSystem:
         ''', (user_id, data_inicio, data_fim, tipo, motivo))
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
         
         # Adicionar à fila de sincronização
         self.add_to_sync_queue('ausencia', cursor.lastrowid)
@@ -126,7 +128,7 @@ class OfflineSystem:
         queue_item = {
             'tipo': tipo,
             'item_id': item_id,
-            'timestamp': datetime.datetime.now().isoformat(),
+            'timestamp': agora_br().isoformat(),
             'attempts': 0
         }
         
@@ -295,7 +297,7 @@ class OfflineSystem:
             cursor.execute(query, (user_id,))
         
         registros = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
         
         return registros
     
@@ -304,7 +306,7 @@ class OfflineSystem:
         conn = sqlite3.connect(self.offline_db_path)
         cursor = conn.cursor()
         
-        expires_at = datetime.datetime.now() + datetime.timedelta(minutes=expires_minutes)
+        expires_at = agora_br_naive() + datetime.timedelta(minutes=expires_minutes)
         
         cursor.execute('''
             INSERT OR REPLACE INTO cache_dados (chave, valor, expires_at)
@@ -312,7 +314,7 @@ class OfflineSystem:
         ''', (chave, json.dumps(valor), expires_at))
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
     
     def get_cached_data(self, chave):
         """Recupera dados do cache"""
@@ -325,7 +327,7 @@ class OfflineSystem:
         ''', (chave,))
         
         result = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
         
         if result:
             return json.loads(result[0])
@@ -339,7 +341,7 @@ class OfflineSystem:
         cursor.execute("DELETE FROM cache_dados WHERE expires_at <= datetime('now')")
         
         conn.commit()
-        conn.close()
+        return_connection(conn)
     
     def get_sync_status(self):
         """Retorna status da sincronização"""
@@ -355,7 +357,7 @@ class OfflineSystem:
         cursor.execute("SELECT COUNT(*) FROM ausencias_offline WHERE synced = 0")
         ausencias_pendentes = cursor.fetchone()[0]
         
-        conn.close()
+        return_connection(conn)
         
         return {
             'online': self.is_online(),

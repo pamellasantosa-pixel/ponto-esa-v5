@@ -207,8 +207,8 @@ def criar_tabela_subscriptions() -> None:
                     cursor.execute(
                         f"ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS {col} VARCHAR(5) DEFAULT {default}"
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    logger.debug("Erro silenciado: %s", e)
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS avisos_gestor (
@@ -393,8 +393,31 @@ def obter_horarios_usuario(usuario: str) -> dict:
 # Avisos gerais (gestor → funcionários)
 # ---------------------------------------------------------------------------
 
+def listar_subscriptions_ativas() -> list:
+    """Retorna lista de dicts com info de push de todos os usuários.
+
+    Returns:
+        Lista de {"usuario": str, "topic": str, "ativo": bool}.
+    """
+    try:
+        with _db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT usuario, topic, ativo FROM push_subscriptions ORDER BY usuario"
+            )
+            rows = cursor.fetchall()
+            cursor.close()
+            return [{"usuario": r[0], "topic": r[1], "ativo": bool(r[2])} for r in rows]
+    except Exception as e:
+        log_db_error(__name__, "listar_subscriptions_ativas", e)
+        return []
+
+
 def enviar_aviso_geral(gestor: str, titulo: str, mensagem: str, destinatarios: str = "todos") -> int:
     """Gestor envia aviso para todos os funcionários ou grupo específico.
+
+    Quando o destinatário não tem subscription na tabela, envia diretamente
+    para o tópico ntfy gerado a partir do username (fallback).
 
     Returns:
         Quantidade de notificações enviadas com sucesso.
@@ -403,6 +426,7 @@ def enviar_aviso_geral(gestor: str, titulo: str, mensagem: str, destinatarios: s
         return 0
 
     try:
+        # Salvar aviso no banco
         with _db() as conn:
             cursor = conn.cursor()
 
@@ -411,24 +435,38 @@ def enviar_aviso_geral(gestor: str, titulo: str, mensagem: str, destinatarios: s
                 VALUES ({_ph(4)})
             """, (gestor, titulo, mensagem, destinatarios))
 
-            if destinatarios == "todos":
-                cursor.execute("SELECT DISTINCT usuario FROM push_subscriptions WHERE ativo = TRUE")
-            else:
-                lista = [d.strip() for d in destinatarios.split(",") if d.strip()]
-                placeholders = ", ".join([SQL_PLACEHOLDER] * len(lista))
-                cursor.execute(
-                    f"SELECT DISTINCT usuario FROM push_subscriptions WHERE ativo = TRUE AND usuario IN ({placeholders})",
-                    lista,
-                )
-
-            usuarios = cursor.fetchall()
             conn.commit()
             cursor.close()
 
-        enviados = sum(
-            1 for (u,) in usuarios if enviar_notificacao(u, f"📢 {titulo}", mensagem, "📢")
-        )
-        logger.info("[Push] Aviso enviado para %d usuários", enviados)
+        # Determinar lista de destinatários
+        if destinatarios == "todos":
+            # Buscar todos os usuários ativos do sistema
+            with _db() as conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT usuario FROM usuarios WHERE ativo = 1"
+                )
+                todos_usuarios = [r[0] for r in cursor.fetchall()]
+                cursor.close()
+            lista_destino = todos_usuarios
+        else:
+            lista_destino = [d.strip() for d in destinatarios.split(",") if d.strip()]
+
+        logger.info("[Push] Enviando aviso para %d destinatário(s): %s", len(lista_destino), lista_destino)
+
+        # Enviar para cada destinatário (usa tópico ntfy direto, sem depender de subscription)
+        enviados = 0
+        for usuario in lista_destino:
+            try:
+                ok = enviar_notificacao(usuario, f"📢 {titulo}", mensagem, "📢")
+                if ok:
+                    enviados += 1
+                else:
+                    logger.warning("[Push] Falha ao enviar para %s", usuario)
+            except Exception as e:
+                logger.error("[Push] Erro ao enviar para %s: %s", usuario, e)
+
+        logger.info("[Push] Aviso enviado para %d de %d usuários", enviados, len(lista_destino))
         return enviados
 
     except Exception as e:

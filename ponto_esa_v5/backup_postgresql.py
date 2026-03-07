@@ -24,10 +24,14 @@ logger = logging.getLogger(__name__)
 
 # Importar conexão
 try:
-    from database import get_connection, SQL_PLACEHOLDER, USE_POSTGRESQL
+    from database import get_connection, return_connection, SQL_PLACEHOLDER, USE_POSTGRESQL
+    from constants import VALID_TABLE_NAMES
 except ImportError:
     USE_POSTGRESQL = True
-    from ponto_esa_v5.database import get_connection, SQL_PLACEHOLDER
+    from ponto_esa_v5.database import get_connection, return_connection, SQL_PLACEHOLDER
+    VALID_TABLE_NAMES = None
+
+from constants import agora_br, agora_br_naive
 
 
 class PostgreSQLBackupManager:
@@ -98,7 +102,7 @@ class PostgreSQLBackupManager:
             return [], []
         finally:
             if conn:
-                conn.close()
+                return_connection(conn)
     
     def export_to_json(self, compress: bool = True) -> Optional[str]:
         """
@@ -111,11 +115,11 @@ class PostgreSQLBackupManager:
             Caminho do arquivo de backup ou None em caso de erro
         """
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = agora_br().strftime("%Y%m%d_%H%M%S")
             
             backup_data = {
                 'metadata': {
-                    'timestamp': datetime.now().isoformat(),
+                    'timestamp': agora_br().isoformat(),
                     'version': '2.0.0',
                     'type': 'postgresql_export',
                     'tables': []
@@ -191,7 +195,7 @@ class PostgreSQLBackupManager:
             Caminho do diretório com os CSVs ou None em caso de erro
         """
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = agora_br().strftime("%Y%m%d_%H%M%S")
             csv_dir = os.path.join(self.backup_dir, f"csv_backup_{timestamp}")
             os.makedirs(csv_dir, exist_ok=True)
             
@@ -226,7 +230,7 @@ class PostgreSQLBackupManager:
             
             # Criar arquivo de metadados
             metadata = {
-                'timestamp': datetime.now().isoformat(),
+                'timestamp': agora_br().isoformat(),
                 'tables': self.tables_to_backup
             }
             with open(os.path.join(csv_dir, 'metadata.json'), 'w') as f:
@@ -263,49 +267,66 @@ class PostgreSQLBackupManager:
                 return False, "Formato de backup inválido"
             
             conn = get_connection()
-            cursor = conn.cursor()
-            
-            restored_tables = []
-            errors = []
-            
-            for table_name, table_data in backup_data['data'].items():
-                if not table_data:
-                    continue
+            try:
+                cursor = conn.cursor()
+                
+                restored_tables = []
+                errors = []
+                
+                for table_name, table_data in backup_data['data'].items():
+                    if not table_data:
+                        continue
                     
-                try:
-                    # Limpar tabela se solicitado
-                    if clear_existing:
-                        cursor.execute(f"DELETE FROM {table_name}")
-                    
-                    # Obter colunas do primeiro registro
-                    columns = list(table_data[0].keys())
-                    
-                    # Inserir dados
-                    placeholders = ', '.join(['%s'] * len(columns))
-                    columns_str = ', '.join(columns)
-                    
-                    for row in table_data:
-                        values = [row.get(col) for col in columns]
+                    # Validar nome da tabela contra whitelist
+                    if VALID_TABLE_NAMES and table_name not in VALID_TABLE_NAMES:
+                        errors.append(f"{table_name}: nome de tabela não permitido")
+                        logger.warning("Tentativa de restaurar tabela não permitida: %s", table_name)
+                        continue
                         
-                        try:
-                            cursor.execute(f"""
-                                INSERT INTO {table_name} ({columns_str})
-                                VALUES ({placeholders})
-                                ON CONFLICT DO NOTHING
-                            """, values)
-                        except Exception as insert_error:
-                            # Log mas continua
-                            logger.warning(f"Erro ao inserir em {table_name}: {insert_error}")
-                    
-                    restored_tables.append(table_name)
-                    logger.info(f"Tabela {table_name} restaurada: {len(table_data)} registros")
-                    
-                except Exception as e:
-                    errors.append(f"{table_name}: {str(e)}")
-                    logger.error(f"Erro ao restaurar tabela {table_name}: {e}")
-            
-            conn.commit()
-            conn.close()
+                    try:
+                        # Limpar tabela se solicitado
+                        if clear_existing:
+                            cursor.execute(f"DELETE FROM {table_name}")
+                        
+                        # Obter colunas válidas da tabela real
+                        cursor.execute("""
+                            SELECT column_name FROM information_schema.columns
+                            WHERE table_name = %s ORDER BY ordinal_position
+                        """, (table_name,))
+                        valid_columns = {row[0] for row in cursor.fetchall()}
+                        
+                        # Filtrar apenas colunas que existem na tabela
+                        columns = [c for c in table_data[0].keys() if c in valid_columns]
+                        if not columns:
+                            errors.append(f"{table_name}: nenhuma coluna válida")
+                            continue
+                        
+                        # Inserir dados com parametrização segura
+                        placeholders = ', '.join(['%s'] * len(columns))
+                        columns_str = ', '.join(columns)
+                        
+                        for row in table_data:
+                            values = [row.get(col) for col in columns]
+                            
+                            try:
+                                cursor.execute(f"""
+                                    INSERT INTO {table_name} ({columns_str})
+                                    VALUES ({placeholders})
+                                    ON CONFLICT DO NOTHING
+                                """, values)
+                            except Exception as insert_error:
+                                logger.warning("Erro ao inserir em %s: %s", table_name, insert_error)
+                        
+                        restored_tables.append(table_name)
+                        logger.info("Tabela %s restaurada: %d registros", table_name, len(table_data))
+                        
+                    except Exception as e:
+                        errors.append(f"{table_name}: {str(e)}")
+                        logger.error("Erro ao restaurar tabela %s: %s", table_name, e)
+                
+                conn.commit()
+            finally:
+                return_connection(conn)
             
             if errors:
                 return True, f"Restauração parcial. Tabelas OK: {restored_tables}. Erros: {errors}"
@@ -319,7 +340,7 @@ class PostgreSQLBackupManager:
     def _log_backup(self, filepath: str, file_size: int, backup_type: str):
         """Registra o backup no log."""
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": agora_br().isoformat(),
             "action": "backup_created",
             "file_path": filepath,
             "file_size": file_size,
@@ -334,7 +355,8 @@ class PostgreSQLBackupManager:
             try:
                 with open(log_file, 'r') as f:
                     logs = json.load(f)
-            except:
+            except Exception as e:
+                logger.debug("Erro ao ler log de backup: %s", e)
                 logs = []
         
         logs.append(log_entry)
@@ -349,7 +371,7 @@ class PostgreSQLBackupManager:
     def cleanup_old_backups(self, days_to_keep: int = 30):
         """Remove backups antigos."""
         try:
-            cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+            cutoff_date = agora_br_naive() - timedelta(days=days_to_keep)
             removed = 0
             
             for filename in os.listdir(self.backup_dir):
@@ -578,7 +600,7 @@ def enviar_backup_por_email(
                 return False, "Erro ao criar backup CSV"
             
             # Criar ZIP
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = agora_br().strftime("%Y%m%d_%H%M%S")
             zip_filename = f"backup_ponto_esa_{timestamp}.zip"
             zip_path = os.path.join(tempfile.gettempdir(), zip_filename)
             
@@ -610,7 +632,7 @@ def enviar_backup_por_email(
         conn = None
         stats = {}
         try:
-            from database import get_connection
+            from database import get_connection, return_connection
             conn = get_connection()
             cursor = conn.cursor()
             
@@ -630,10 +652,10 @@ def enviar_backup_por_email(
             stats = {'registros': 'N/A', 'usuarios': 'N/A', 'periodo_inicio': 'N/A', 'periodo_fim': 'N/A'}
         finally:
             if conn:
-                conn.close()
+                return_connection(conn)
         
         # Montar email
-        data_atual = datetime.now().strftime("%d/%m/%Y às %H:%M")
+        data_atual = agora_br().strftime("%d/%m/%Y às %H:%M")
         tamanho_backup = len(backup_bytes) / 1024  # KB
         
         if tamanho_backup > 1024:
@@ -641,7 +663,7 @@ def enviar_backup_por_email(
         else:
             tamanho_str = f"{tamanho_backup:.2f} KB"
         
-        assunto = assunto_personalizado or f"🔒 Backup Ponto ExSA - {datetime.now().strftime('%d/%m/%Y')}"
+        assunto = assunto_personalizado or f"🔒 Backup Ponto ExSA - {agora_br().strftime('%d/%m/%Y')}"
         
         conteudo = f"""
         <h2 style="color: #1a1a2e; margin-bottom: 20px;">📦 Backup Automático</h2>
@@ -757,8 +779,8 @@ def agendar_backup_email_semanal(email_destino: str, dia_semana: int = 0) -> boo
         job_id = 'backup_email_semanal'
         try:
             scheduler.remove_job(job_id)
-        except:
-            pass
+        except Exception as e:
+            logger.debug("Job anterior não encontrado para remoção: %s", e)
         
         # Agendar novo job - Segunda às 06:00
         scheduler.add_job(

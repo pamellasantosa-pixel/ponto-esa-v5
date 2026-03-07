@@ -11,6 +11,8 @@ import pandas as pd
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Any
 import logging
+from ponto_esa_v5.database import SQL_PLACEHOLDER
+from constants import agora_br
 
 logger = logging.getLogger(__name__)
 
@@ -396,7 +398,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
     st.markdown(f"""
     <div class="dashboard-header">
         <h1>📊 Dashboard Executivo</h1>
-        <p>Atualizado em: {datetime.now().strftime('%d/%m/%Y às %H:%M')}</p>
+        <p>Atualizado em: {agora_br().strftime('%d/%m/%Y às %H:%M')}</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -558,7 +560,7 @@ def get_dashboard_data_from_db(execute_query_func) -> Dict[str, Any]:
         
         # Registros hoje
         result = execute_query_func(
-            "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s",
+            f"SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = {SQL_PLACEHOLDER}",
             (hoje,), fetch_one=True
         )
         if result:
@@ -580,8 +582,8 @@ def get_dashboard_data_from_db(execute_query_func) -> Dict[str, Any]:
         
         # Status de presença hoje
         result = execute_query_func(
-            """SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto 
-               WHERE DATE(data_hora) = %s""",
+            f"""SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto 
+               WHERE DATE(data_hora) = {SQL_PLACEHOLDER}""",
             (hoje,), fetch_one=True
         )
         presentes = result[0] if result else 0
@@ -597,7 +599,7 @@ def get_dashboard_data_from_db(execute_query_func) -> Dict[str, Any]:
         for i in range(6, -1, -1):
             data = (date.today() - timedelta(days=i)).strftime("%Y-%m-%d")
             result = execute_query_func(
-                "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s",
+                f"SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = {SQL_PLACEHOLDER}",
                 (data,), fetch_one=True
             )
             datas.append((date.today() - timedelta(days=i)).strftime("%d/%m"))
@@ -608,8 +610,8 @@ def get_dashboard_data_from_db(execute_query_func) -> Dict[str, Any]:
         # Ausências por tipo no mês
         primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
         result = execute_query_func(
-            """SELECT tipo, COUNT(*) as total FROM ausencias 
-               WHERE data_inicio >= %s 
+            f"""SELECT tipo, COUNT(*) as total FROM ausencias 
+               WHERE data_inicio >= {SQL_PLACEHOLDER} 
                GROUP BY tipo""",
             (primeiro_dia_mes,), fetch_all=True
         )
@@ -619,11 +621,11 @@ def get_dashboard_data_from_db(execute_query_func) -> Dict[str, Any]:
         
         # Atestados do mês
         result = execute_query_func(
-            """SELECT 
+            f"""SELECT 
                 COUNT(*) as total,
                 SUM(CASE WHEN status = 'aprovado' THEN 1 ELSE 0 END) as aprovados
                FROM ausencias 
-               WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'""",
+               WHERE data_inicio >= {SQL_PLACEHOLDER} AND tipo LIKE '%%Atestado%%'""",
             (primeiro_dia_mes,), fetch_one=True
         )
         if result:
@@ -673,7 +675,7 @@ def render_funcionario_dashboard(dados: Dict[str, Any], usuario: str):
         margin-bottom: 20px;
     ">
         <h2>👋 Bem-vindo(a), {usuario}!</h2>
-        <p>{datetime.now().strftime('%A, %d de %B de %Y')}</p>
+        <p>{agora_br().strftime('%A, %d de %B de %Y')}</p>
     </div>
     """, unsafe_allow_html=True)
     

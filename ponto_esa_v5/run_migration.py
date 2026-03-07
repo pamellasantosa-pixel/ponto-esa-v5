@@ -14,8 +14,7 @@ load_dotenv()
 
 def get_database_url():
     """Obter URL do banco de dados"""
-    return os.environ.get('DATABASE_URL', 
-        'postgresql://neondb_owner:npg_4dpyuhtMZJL7@ep-spring-tree-ac2y3okx-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require')
+    return os.environ.get('DATABASE_URL')
 
 def run_migration():
     """Executar migração da tabela"""

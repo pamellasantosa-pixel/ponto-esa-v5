@@ -19,6 +19,7 @@ import logging
 import threading
 import atexit
 from typing import Optional, Dict, List
+from constants import agora_br
 
 # Configurar logging
 logging.basicConfig(
@@ -66,7 +67,7 @@ def carregar_configuracoes_notificacao() -> Dict:
     }
     
     try:
-        from database import get_connection, SQL_PLACEHOLDER
+        from database import get_connection, return_connection, SQL_PLACEHOLDER
         
         conn = get_connection()
         cursor = conn.cursor()
@@ -74,7 +75,7 @@ def carregar_configuracoes_notificacao() -> Dict:
         # Buscar configurações do banco
         cursor.execute("SELECT chave, valor FROM configuracoes WHERE chave LIKE 'notif_%'")
         rows = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
         
         for chave, valor in rows:
             if chave == 'notif_entrada_ativo':
@@ -109,7 +110,8 @@ def parse_horario(horario_str: str) -> tuple:
     try:
         parts = horario_str.strip().split(':')
         return int(parts[0]), int(parts[1])
-    except:
+    except Exception as e:
+        logger.debug("Erro ao parsear horário '%s': %s", horario_str, e)
         return None, None
 
 
@@ -124,7 +126,7 @@ def agendar_backup_email_automatico(scheduler_instance) -> bool:
         True se agendou com sucesso
     """
     try:
-        from database import get_connection
+        from database import get_connection, return_connection
         from apscheduler.triggers.cron import CronTrigger
         
         # Buscar configurações
@@ -137,7 +139,7 @@ def agendar_backup_email_automatico(scheduler_instance) -> bool:
         
         if not backup_ativo:
             logger.info("  ⏸️ Backup por Email: DESATIVADO")
-            conn.close()
+            return_connection(conn)
             return False
         
         cursor.execute("SELECT valor FROM configuracoes WHERE chave = 'backup_email_destino'")
@@ -148,7 +150,7 @@ def agendar_backup_email_automatico(scheduler_instance) -> bool:
         result = cursor.fetchone()
         frequencia = result[0] if result else 'semanal'
         
-        conn.close()
+        return_connection(conn)
         
         if not email_destino:
             logger.warning("  ⚠️ Backup por Email: Email não configurado")
@@ -421,9 +423,9 @@ def obter_status_scheduler() -> dict:
     try:
         from push_reminder_cron import get_datetime_br
         agora = get_datetime_br().strftime('%d/%m/%Y %H:%M:%S')
-    except:
-        from datetime import datetime
-        agora = datetime.now().strftime('%d/%m/%Y %H:%M:%S')
+    except Exception as e:
+        logger.debug("Fallback para datetime padrão: %s", e)
+        agora = agora_br().strftime('%d/%m/%Y %H:%M:%S')
     
     status = {
         'ativo': _scheduler_started,

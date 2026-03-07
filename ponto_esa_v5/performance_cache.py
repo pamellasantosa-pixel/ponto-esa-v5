@@ -10,6 +10,9 @@ import logging
 import hashlib
 import json
 
+from database import SQL_PLACEHOLDER
+from constants import agora_br, agora_br_naive
+
 logger = logging.getLogger(__name__)
 
 # TTL padrão para cache (em segundos)
@@ -104,7 +107,7 @@ def cached_get_metricas_dashboard(data_ref: str, _execute_query: Callable) -> Di
         
         # Registros hoje
         result = _execute_query(
-            "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s",
+            f"SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = {SQL_PLACEHOLDER}",
             (data_ref,), fetch_one=True
         )
         if result:
@@ -112,7 +115,7 @@ def cached_get_metricas_dashboard(data_ref: str, _execute_query: Callable) -> Di
         
         # Usuários presentes hoje (distintos)
         result = _execute_query(
-            "SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto WHERE DATE(data_hora) = %s",
+            f"SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto WHERE DATE(data_hora) = {SQL_PLACEHOLDER}",
             (data_ref,), fetch_one=True
         )
         if result:
@@ -137,7 +140,7 @@ def cached_get_metricas_dashboard(data_ref: str, _execute_query: Callable) -> Di
         # Atestados do mês
         primeiro_dia_mes = date.today().replace(day=1).strftime("%Y-%m-%d")
         result = _execute_query(
-            "SELECT COUNT(*) FROM ausencias WHERE data_inicio >= %s AND tipo LIKE '%%Atestado%%'",
+            f"SELECT COUNT(*) FROM ausencias WHERE data_inicio >= {SQL_PLACEHOLDER} AND tipo LIKE '%%Atestado%%'",
             (primeiro_dia_mes,), fetch_one=True
         )
         if result:
@@ -161,7 +164,7 @@ def cached_get_registros_semana(data_fim: str, _execute_query: Callable) -> Dict
         for i in range(6, -1, -1):
             data_check = (data_fim_obj - timedelta(days=i)).strftime("%Y-%m-%d")
             result = _execute_query(
-                "SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = %s",
+                f"SELECT COUNT(*) FROM registros_ponto WHERE DATE(data_hora) = {SQL_PLACEHOLDER}",
                 (data_check,), fetch_one=True
             )
             datas.append((data_fim_obj - timedelta(days=i)).strftime("%d/%m"))
@@ -180,8 +183,8 @@ def cached_get_ausencias_por_tipo(data_inicio_mes: str, _execute_query: Callable
     
     try:
         result = _execute_query(
-            """SELECT tipo, COUNT(*) as total FROM ausencias 
-               WHERE data_inicio >= %s 
+            f"""SELECT tipo, COUNT(*) as total FROM ausencias 
+               WHERE data_inicio >= {SQL_PLACEHOLDER} 
                GROUP BY tipo""",
             (data_inicio_mes,), fetch_all=True
         )
@@ -200,11 +203,11 @@ def cached_get_registros_usuario(usuario: str, data_inicio: str, data_fim: str,
                                   _execute_query: Callable) -> List[tuple]:
     """Cache para registros de um usuário em um período"""
     try:
-        query = """
+        query = f"""
             SELECT id, usuario, data_hora, tipo, latitude, longitude, localizacao 
             FROM registros_ponto 
-            WHERE usuario = %s 
-            AND DATE(data_hora) BETWEEN %s AND %s 
+            WHERE usuario = {SQL_PLACEHOLDER} 
+            AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER} 
             ORDER BY data_hora
         """
         result = _execute_query(query, (usuario, data_inicio, data_fim), fetch_all=True)
@@ -220,7 +223,7 @@ def cached_get_saldo_banco_horas(usuario: str, _execute_query: Callable) -> floa
     """Cache para saldo do banco de horas de um usuário"""
     try:
         result = _execute_query(
-            "SELECT saldo_minutos FROM banco_horas WHERE usuario = %s",
+            f"SELECT saldo_minutos FROM banco_horas WHERE usuario = {SQL_PLACEHOLDER}",
             (usuario,), fetch_one=True
         )
         return result[0] if result else 0
@@ -261,16 +264,16 @@ class PerformanceMonitor:
     
     def start_timer(self, operation: str) -> datetime:
         """Inicia um timer para uma operação"""
-        return datetime.now()
+        return agora_br_naive()
     
     def end_timer(self, operation: str, start_time: datetime):
         """Finaliza o timer e registra o tempo"""
-        elapsed = (datetime.now() - start_time).total_seconds() * 1000  # ms
+        elapsed = (agora_br_naive() - start_time).total_seconds() * 1000  # ms
         
         log_entry = {
             "operation": operation,
             "time_ms": elapsed,
-            "timestamp": datetime.now().isoformat()
+            "timestamp": agora_br().isoformat()
         }
         
         st.session_state.performance_log.append(log_entry)

@@ -8,8 +8,9 @@ from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
 from ponto_esa_v5.notifications import notification_manager
-from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+from database import get_connection, return_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 import database as database_module
+from constants import agora_br_naive
 
 SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
@@ -47,7 +48,7 @@ class AjusteRegistrosSystem:
             return {}
 
     def _now(self) -> datetime:
-        return datetime.now()
+        return agora_br_naive()
 
     def _stop_job(self, solicitacao_id: int) -> None:
         notification_manager.stop_repeating_notification(
@@ -59,7 +60,7 @@ class AjusteRegistrosSystem:
         try:
             logger.debug("Verificando conexão com o banco de dados...")
             conn = self._get_connection()
-            conn.close()
+            return_connection(conn)
             logger.debug("Conexão com o banco de dados bem-sucedida.")
             return True
         except Exception as exc:
@@ -78,7 +79,7 @@ class AjusteRegistrosSystem:
             row = cursor.fetchone()
             return not row or (row[0] and row[0].lower() != "pendente")
         finally:
-            conn.close()
+            return_connection(conn)
 
     def listar_solicitacoes_usuario(self, usuario: str) -> list[Dict[str, Any]]:
         conn = self._get_connection()
@@ -112,7 +113,7 @@ class AjusteRegistrosSystem:
                 )
             return resultado
         finally:
-            conn.close()
+            return_connection(conn)
 
     def listar_solicitacoes_para_gestor(self, gestor: str) -> list[Dict[str, Any]]:
         conn = self._get_connection()
@@ -144,7 +145,7 @@ class AjusteRegistrosSystem:
                 )
             return resultado
         finally:
-            conn.close()
+            return_connection(conn)
 
     def obter_registro(self, registro_id: int) -> Optional[Dict[str, Any]]:
         conn = self._get_connection()
@@ -171,7 +172,7 @@ class AjusteRegistrosSystem:
                 "atividade": row[6],
             }
         finally:
-            conn.close()
+            return_connection(conn)
 
     # ===== Operações principais =====
     def solicitar_ajuste(
@@ -190,10 +191,10 @@ class AjusteRegistrosSystem:
             dados_json = self._dump_json(dados_solicitados)
             if database_module.USE_POSTGRESQL:
                 cursor.execute(
-                    """
+                    f"""
                     INSERT INTO solicitacoes_ajuste_ponto
                         (usuario, aprovador_solicitado, dados_solicitados, justificativa, data_solicitacao)
-                    VALUES (%s, %s, %s, %s, %s)
+                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                     RETURNING id
                     """,
                     (usuario, aprovador_solicitado, dados_json, justificativa, self._now()),
@@ -214,7 +215,7 @@ class AjusteRegistrosSystem:
             conn.rollback()
             return {"success": False, "message": f"Erro ao registrar solicitação: {exc}"}
         finally:
-            conn.close()
+            return_connection(conn)
 
         # Notificar gestor responsável
         titulo = "Solicitação de ajuste de ponto"
@@ -360,10 +361,10 @@ class AjusteRegistrosSystem:
 
                 if database_module.USE_POSTGRESQL:
                     cursor.execute(
-                        """
+                        f"""
                         INSERT INTO registros_ponto
                             (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
                         RETURNING id
                         """,
                         (
@@ -433,7 +434,7 @@ class AjusteRegistrosSystem:
             conn.rollback()
             return {"success": False, "message": f"Erro ao aplicar ajuste: {exc}"}
         finally:
-            conn.close()
+            return_connection(conn)
 
         self._stop_job(solicitacao_id)
 
@@ -497,7 +498,7 @@ class AjusteRegistrosSystem:
             conn.rollback()
             return {"success": False, "message": f"Erro ao rejeitar solicitação: {exc}"}
         finally:
-            conn.close()
+            return_connection(conn)
 
         self._stop_job(solicitacao_id)
 

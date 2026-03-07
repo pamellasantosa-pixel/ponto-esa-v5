@@ -3,10 +3,11 @@ Sistema de Horas Extras - Ponto ExSA v5.0
 Gerencia solicitações e aprovações de horas extras
 """
 
-from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+from database import get_connection, return_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 from datetime import datetime, timedelta, time
 import json
+from constants import agora_br
 try:
     from notifications import notification_manager
 except Exception:
@@ -33,7 +34,7 @@ class HorasExtrasSystem:
         """, (usuario,))
 
         result = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
 
         if not result:
             return {"deve_notificar": False, "message": "Usuário não encontrado"}
@@ -41,7 +42,7 @@ class HorasExtrasSystem:
         jornada_fim = result[0] or "17:00"
 
         # Verificar se é hora de notificar
-        agora = datetime.now().time()
+        agora = agora_br().time()
         
         # Converter para time se for string, senão usar diretamente
         if isinstance(jornada_fim, str):
@@ -71,7 +72,7 @@ class HorasExtrasSystem:
         """)
 
         aprovadores = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
 
         return [{"usuario": a[0], "nome": a[1] or a[0], "tipo": a[2]} for a in aprovadores]
 
@@ -134,7 +135,7 @@ class HorasExtrasSystem:
                     "usuario": usuario,
                     "data": data,
                     "total_horas": total_horas,
-                    "timestamp": datetime.now().isoformat(),
+                    "timestamp": agora_br().isoformat(),
                     "requires_response": True
                 }
             )
@@ -190,7 +191,7 @@ class HorasExtrasSystem:
 
         cursor.execute(query, params)
         solicitacoes = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
 
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'justificativa',
                    'aprovador_solicitado', 'status', 'data_solicitacao', 'aprovado_por',
@@ -210,7 +211,7 @@ class HorasExtrasSystem:
         """, (aprovador,))
 
         solicitacoes = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
 
         colunas = ['id', 'usuario', 'data', 'hora_inicio', 'hora_fim', 'justificativa',
                    'aprovador_solicitado', 'status', 'data_solicitacao', 'aprovado_por',
@@ -252,7 +253,7 @@ class HorasExtrasSystem:
                     UPDATE solicitacoes_horas_extras 
                     SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = {SQL_PLACEHOLDER}, observacoes = {SQL_PLACEHOLDER}
                     WHERE id = {SQL_PLACEHOLDER}
-                """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
+                """, (aprovador, agora_br().isoformat(), observacoes, solicitacao_id))
 
                 # Registrar no banco de horas
                 self._registrar_banco_horas(
@@ -304,7 +305,7 @@ class HorasExtrasSystem:
                     UPDATE solicitacoes_horas_extras 
                     SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER}, data_aprovacao = {SQL_PLACEHOLDER}, observacoes = {SQL_PLACEHOLDER}
                     WHERE id = {SQL_PLACEHOLDER}
-                """, (aprovador, datetime.now().isoformat(), observacoes, solicitacao_id))
+                """, (aprovador, agora_br().isoformat(), observacoes, solicitacao_id))
 
             notification_manager.stop_repeating_notification(f"horas_extras_{solicitacao_id}")
             return {"success": True, "message": "Solicitação rejeitada"}
@@ -354,7 +355,7 @@ class HorasExtrasSystem:
         """, (aprovador,))
 
         count = cursor.fetchone()[0]
-        conn.close()
+        return_connection(conn)
 
         return count
 
@@ -372,7 +373,7 @@ class HorasExtrasSystem:
         )
 
         result = cursor.fetchone()
-        conn.close()
+        return_connection(conn)
 
         if not result:
             return True

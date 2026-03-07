@@ -4,7 +4,7 @@ import sys
 import os
 from datetime import datetime, timedelta, date
 
-from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+from database import get_connection, return_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
 
 try:
     from calculo_horas_system import CalculoHorasSystem, format_time_duration
@@ -109,7 +109,7 @@ class BancoHorasSystem:
                 resultado.append({"usuario": usuario, "nome": nome, "saldo": 0.0})
             return resultado
         finally:
-            conn.close()
+            return_connection(conn)
 
 
 def format_saldo_display(saldo_horas):

@@ -11,7 +11,7 @@ Mostra percentuais do tempo total dedicado a cada projeto.
 import logging
 from datetime import datetime, date, timedelta
 from typing import Dict, List, Optional, Tuple
-from database import get_connection, SQL_PLACEHOLDER
+from database import get_connection, return_connection, SQL_PLACEHOLDER
 
 logger = logging.getLogger(__name__)
 
@@ -65,7 +65,7 @@ class HorasProjetoSystem:
             logger.error(f"Erro ao criar tabelas de horas por projeto: {e}")
             conn.rollback()
         finally:
-            conn.close()
+            return_connection(conn)
     
     def calcular_horas_por_projeto_periodo(
         self, 
@@ -179,7 +179,7 @@ class HorasProjetoSystem:
                 'projetos': []
             }
         finally:
-            conn.close()
+            return_connection(conn)
     
     def calcular_horas_por_projeto_mes(
         self,
@@ -334,7 +334,7 @@ class HorasProjetoSystem:
                 'funcionarios': []
             }
         finally:
-            conn.close()
+            return_connection(conn)
     
     def obter_evolucao_projeto(
         self,
@@ -409,7 +409,7 @@ class HorasProjetoSystem:
                 'evolucao': []
             }
         finally:
-            conn.close()
+            return_connection(conn)
 
 
 def format_horas_projeto(horas: float) -> str:

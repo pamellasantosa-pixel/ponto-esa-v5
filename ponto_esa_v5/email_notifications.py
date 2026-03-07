@@ -26,6 +26,7 @@ from email import encoders
 from typing import Optional, List, Dict, Tuple
 from datetime import datetime, date
 from dotenv import load_dotenv
+from constants import agora_br
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -139,20 +140,29 @@ def enviar_email(
                 )
                 msg.attach(parte)
         
-        # Conectar e enviar - Usar SSL (porta 465) ou TLS (porta 587)
+        # Conectar e enviar - Tentar TLS (587) e SSL (465) como fallback
         context = ssl.create_default_context()
         
-        if SMTP_PORT == 465:
-            # SSL direto (mais confiável em alguns servidores)
-            with smtplib.SMTP_SSL(SMTP_HOST, SMTP_PORT, context=context) as server:
+        def _send_ssl():
+            with smtplib.SMTP_SSL(SMTP_HOST, 465, context=context, timeout=30) as server:
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
-        else:
-            # STARTTLS (porta 587)
+
+        def _send_tls():
             with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=30) as server:
                 server.starttls(context=context)
                 server.login(SMTP_USER, SMTP_PASSWORD)
                 server.sendmail(EMAIL_FROM, destinatario, msg.as_string())
+
+        if SMTP_PORT == 465:
+            _send_ssl()
+        else:
+            try:
+                _send_tls()
+            except OSError as tls_err:
+                # TLS falhou (ex: Network unreachable na porta 587) — tentar SSL na 465
+                logger.warning("TLS porta %d falhou (%s), tentando SSL porta 465...", SMTP_PORT, tls_err)
+                _send_ssl()
         
         logger.info(f"Email enviado para {destinatario}: {assunto}")
         return True, "Email enviado com sucesso"
@@ -246,7 +256,7 @@ def template_lembrete_entrada(nome_usuario: str) -> Tuple[str, str]:
     </div>
     
     <p style="color: #6c757d; font-size: 13px; margin-top: 30px;">
-        Data: {datetime.now().strftime('%d/%m/%Y')}
+        Data: {agora_br().strftime('%d/%m/%Y')}
     </p>
     """
     
@@ -278,7 +288,7 @@ def template_lembrete_saida(nome_usuario: str) -> Tuple[str, str]:
     </div>
     
     <p style="color: #6c757d; font-size: 13px; margin-top: 30px;">
-        Data: {datetime.now().strftime('%d/%m/%Y')}
+        Data: {agora_br().strftime('%d/%m/%Y')}
     </p>
     """
     
@@ -311,7 +321,7 @@ def template_hora_extra_prolongada(nome_usuario: str, minutos: int) -> Tuple[str
     <div style="background-color: #f8f9fa; padding: 15px; border-radius: 8px; margin: 20px 0;">
         <p style="color: #495057; margin: 0;">
             <strong>Tempo em HE:</strong> {tempo_str}<br>
-            <strong>Horário atual:</strong> {datetime.now().strftime('%H:%M')}
+            <strong>Horário atual:</strong> {agora_br().strftime('%H:%M')}
         </p>
     </div>
     
@@ -367,7 +377,7 @@ def template_solicitacoes_pendentes_gestor(nome_gestor: str, resumo: Dict) -> Tu
     </div>
     
     <p style="color: #6c757d; font-size: 13px; margin-top: 30px;">
-        Data: {datetime.now().strftime('%d/%m/%Y às %H:%M')}
+        Data: {agora_br().strftime('%d/%m/%Y às %H:%M')}
     </p>
     """
     
@@ -400,7 +410,7 @@ def template_solicitacao_aprovada(nome_usuario: str, tipo: str, detalhes: str) -
     </div>
     
     <p style="color: #6c757d; font-size: 13px; margin-top: 30px;">
-        Data: {datetime.now().strftime('%d/%m/%Y às %H:%M')}
+        Data: {agora_br().strftime('%d/%m/%Y às %H:%M')}
     </p>
     """
     
@@ -437,7 +447,7 @@ def template_solicitacao_rejeitada(nome_usuario: str, tipo: str, motivo: str) ->
     </p>
     
     <p style="color: #6c757d; font-size: 13px; margin-top: 30px;">
-        Data: {datetime.now().strftime('%d/%m/%Y às %H:%M')}
+        Data: {agora_br().strftime('%d/%m/%Y às %H:%M')}
     </p>
     """
     

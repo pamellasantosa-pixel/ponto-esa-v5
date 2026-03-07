@@ -3,10 +3,13 @@ Sistema de Cálculo de Horas - Ponto ExSA v5.0
 Implementa regras de negócio para cálculo de horas trabalhadas
 """
 
+import logging
 import sqlite3
-from database import get_connection, SQL_PLACEHOLDER as DB_SQL_PLACEHOLDER
+from database import get_connection, return_connection, SQL_PLACEHOLDER
 from datetime import datetime, timedelta, date
 import calendar
+
+logger = logging.getLogger(__name__)
 
 
 def safe_datetime_parse(value):
@@ -23,9 +26,6 @@ def safe_datetime_parse(value):
             except ValueError:
                 continue
     return None
-
-
-SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 
 class CalculoHorasSystem:
@@ -136,11 +136,11 @@ class CalculoHorasSystem:
                 "total_registros": len(registros)
             }
         finally:
-            # Garantir fechamento da conexão mesmo em caso de exceção
+            # Garantir devolução da conexão ao pool mesmo em caso de exceção
             try:
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
 
     def calcular_horas_periodo(self, usuario, data_inicio, data_fim):
         """Calcula horas trabalhadas em um período - OTIMIZADO (uma única query)"""
@@ -261,9 +261,9 @@ class CalculoHorasSystem:
             }
         finally:
             try:
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
 
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
@@ -277,7 +277,7 @@ class CalculoHorasSystem:
             """, (usuario, data))
 
         contadores = dict(cursor.fetchall())
-        conn.close()
+        return_connection(conn)
 
         erros = []
 
@@ -316,9 +316,9 @@ class CalculoHorasSystem:
         conn = self._get_connection()
         cursor = conn.cursor()
         try:
-            cursor.execute("""
+            cursor.execute(f"""
                 SELECT COUNT(*) FROM feriados 
-                WHERE data = %s
+                WHERE data = {SQL_PLACEHOLDER}
             """, (data.strftime("%Y-%m-%d"),))
 
             eh_feriado = cursor.fetchone()[0] > 0
@@ -328,23 +328,23 @@ class CalculoHorasSystem:
             return False
         finally:
             try:
-                conn.close()
-            except Exception:
-                pass
+                return_connection(conn)
+            except Exception as e:
+                logger.debug("Erro silenciado: %s", e)
 
     def obter_feriados_periodo(self, data_inicio, data_fim):
         """Obtém lista de feriados em um período"""
         conn = self._get_connection()
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT data, nome, tipo FROM feriados 
-            WHERE data BETWEEN %s AND %s
+            WHERE data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
             ORDER BY data
         """, (data_inicio, data_fim))
 
         feriados = cursor.fetchall()
-        conn.close()
+        return_connection(conn)
 
         return [{"data": f[0], "nome": f[1], "tipo": f[2]} for f in feriados]
 
@@ -361,7 +361,7 @@ class CalculoHorasSystem:
 
         jornada = cursor.fetchone()
         if not jornada:
-            conn.close()
+            return_connection(conn)
             return {"success": False, "message": "Usuário não encontrado"}
 
         jornada_inicio = jornada[0] or "08:00"
@@ -377,7 +377,8 @@ class CalculoHorasSystem:
                     inicio_dt = datetime.strptime(jornada_inicio, "%H:%M")
             else:
                 inicio_dt = datetime.strptime("08:00", "%H:%M")
-        except:
+        except Exception as e:
+            logger.warning("Erro ao parsear jornada_inicio '%s': %s", jornada_inicio, e)
             inicio_dt = datetime.strptime("08:00", "%H:%M")
         
         try:
@@ -389,7 +390,8 @@ class CalculoHorasSystem:
                     fim_dt = datetime.strptime(jornada_fim, "%H:%M")
             else:
                 fim_dt = datetime.strptime("17:00", "%H:%M")
-        except:
+        except Exception as e:
+            logger.warning("Erro ao parsear jornada_fim '%s': %s", jornada_fim, e)
             fim_dt = datetime.strptime("17:00", "%H:%M")
         horas_previstas = (fim_dt - inicio_dt).total_seconds() / 3600
         if horas_previstas > 6:
@@ -432,7 +434,7 @@ class CalculoHorasSystem:
 
             data_atual += timedelta(days=1)
 
-        conn.close()
+        return_connection(conn)
 
         return {
             "success": True,
@@ -481,9 +483,9 @@ def verificar_se_eh_feriado(data):
     cursor = conn.cursor()
     
     try:
-        cursor.execute("""
+        cursor.execute(f"""
             SELECT nome, tipo FROM feriados 
-            WHERE data = %s
+            WHERE data = {SQL_PLACEHOLDER}
         """, (data_obj.strftime("%Y-%m-%d"),))
         
         resultado = cursor.fetchone()
@@ -501,7 +503,7 @@ def verificar_se_eh_feriado(data):
                 'tipo': None
             }
     except Exception as e:
-        print(f"Erro ao verificar feriado: {e}")
+        logger.warning("Erro ao verificar feriado: %s", e)
         return {
             'eh_feriado': False,
             'nome_feriado': None,
@@ -509,9 +511,9 @@ def verificar_se_eh_feriado(data):
         }
     finally:
         try:
-            conn.close()
-        except Exception:
-            pass
+            return_connection(conn)
+        except Exception as e:
+            logger.debug("Erro silenciado: %s", e)
 
 
 def eh_dia_com_multiplicador(data):

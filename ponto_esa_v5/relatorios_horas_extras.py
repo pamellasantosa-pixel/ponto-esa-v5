@@ -18,9 +18,9 @@ logger = logging.getLogger(__name__)
 
 # Importar conexão com banco
 try:
-    from database import get_connection, SQL_PLACEHOLDER
+    from database import get_connection, return_connection, SQL_PLACEHOLDER
 except ImportError:
-    from ponto_esa_v5.database import get_connection, SQL_PLACEHOLDER
+    from ponto_esa_v5.database import get_connection, return_connection, SQL_PLACEHOLDER
 
 
 def gerar_relatorio_horas_extras(
@@ -133,7 +133,7 @@ def gerar_relatorio_horas_extras(
                 'data_aprovacao': dt_aprov.isoformat() if dt_aprov else None
             })
         
-        conn.close()
+        return_connection(conn)
         
         return {
             'success': True,
@@ -154,7 +154,7 @@ def gerar_relatorio_horas_extras(
     except Exception as e:
         logger.error(f"Erro ao gerar relatório de horas extras: {e}")
         if conn:
-            conn.close()
+            return_connection(conn)
         return {
             'success': False,
             'message': str(e),
@@ -222,7 +222,7 @@ def gerar_relatorio_por_usuario(
                 'rejeitadas': row[6]
             })
         
-        conn.close()
+        return_connection(conn)
         
         return {
             'success': True,
@@ -233,7 +233,7 @@ def gerar_relatorio_por_usuario(
     except Exception as e:
         logger.error(f"Erro ao gerar relatório por usuário: {e}")
         if conn:
-            conn.close()
+            return_connection(conn)
         return {
             'success': False,
             'message': str(e),
@@ -313,7 +313,7 @@ def obter_estatisticas_gerais() -> Dict[str, Any]:
         """)
         total_horas = cursor.fetchone()[0]
         
-        conn.close()
+        return_connection(conn)
         
         return {
             'success': True,
@@ -326,7 +326,7 @@ def obter_estatisticas_gerais() -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Erro ao obter estatísticas: {e}")
         if conn:
-            conn.close()
+            return_connection(conn)
         return {
             'success': False,
             'message': str(e)

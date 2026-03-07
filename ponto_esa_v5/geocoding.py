@@ -5,6 +5,7 @@ Converte coordenadas GPS em endereços legíveis
 
 import streamlit as st
 import requests
+import threading
 from typing import Optional, Dict
 import logging
 import time
@@ -169,6 +170,7 @@ def exibir_localizacao_registro(latitude: float, longitude: float,
 
 # Cache local para evitar múltiplas chamadas à API durante uma sessão
 _endereco_cache = {}
+_endereco_cache_lock = threading.Lock()
 
 
 def get_endereco_cached(latitude: float, longitude: float) -> Optional[str]:
@@ -181,12 +183,15 @@ def get_endereco_cached(latitude: float, longitude: float) -> Optional[str]:
     # Arredondar para 5 casas decimais (~1m de precisão)
     key = f"{latitude:.5f},{longitude:.5f}"
     
-    if key in _endereco_cache:
-        return _endereco_cache[key]
+    with _endereco_cache_lock:
+        cached = _endereco_cache.get(key)
+    if cached is not None:
+        return cached
     
     endereco = coordenadas_para_endereco(latitude, longitude)
     if endereco:
-        _endereco_cache[key] = endereco
+        with _endereco_cache_lock:
+            _endereco_cache[key] = endereco
     
     return endereco
 

@@ -7,6 +7,7 @@ implementação principal que fica em `ponto_esa_v5.notifications`.
 
 import json
 import logging
+import threading
 
 from database import get_connection, return_connection, SQL_PLACEHOLDER
 
@@ -14,15 +15,18 @@ logger = logging.getLogger(__name__)
 
 class NotificationManager:
     def __init__(self):
+        self._lock = threading.Lock()
         self.active_notifications = {}
     
     def get_notifications(self, user_id):
-        return self.active_notifications.get(user_id, [])
+        with self._lock:
+            return list(self.active_notifications.get(user_id, []))
     
     def add_notification(self, user_id, payload):
-        if user_id not in self.active_notifications:
-            self.active_notifications[user_id] = []
-        self.active_notifications[user_id].append(payload)
+        with self._lock:
+            if user_id not in self.active_notifications:
+                self.active_notifications[user_id] = []
+            self.active_notifications[user_id].append(payload)
         
         # Persistência mínima em SQLite/PostgreSQL
         conn = get_connection()
@@ -123,7 +127,8 @@ class NotificationManager:
         return True
     # Para testes que esperam API mais rica
     def stop_all_jobs(self):
-        self.active_notifications.clear()
+        with self._lock:
+            self.active_notifications.clear()
         print("Todos os jobs de notificação foram parados.")
 
 # Instância global (singleton) do gerenciador de notificações
@@ -166,5 +171,6 @@ def mark_notification_as_read(notification_id):
 
 def stop_user_notifications(user_id):
     """Função helper para parar notificações de um usuário (no-op seguro)."""
-    notification_manager.active_notifications.pop(user_id, None)
+    with notification_manager._lock:
+        notification_manager.active_notifications.pop(user_id, None)
 

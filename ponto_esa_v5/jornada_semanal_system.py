@@ -2,7 +2,7 @@ import logging
 from copy import deepcopy
 from datetime import datetime
 
-from database import SQL_PLACEHOLDER, get_connection
+from database import SQL_PLACEHOLDER, get_connection, return_connection
 
 logger = logging.getLogger(__name__)
 
@@ -61,13 +61,16 @@ def obter_jornada_usuario(usuario: str) -> dict:
     except Exception as exc:
         logger.error("Erro ao carregar jornada semanal", exc_info=exc, extra={'usuario': usuario})
     finally:
-        conn.close()
+        return_connection(conn)
 
     return jornada
 
 
-def salvar_jornada_semanal(usuario_id, jornada_config: dict) -> bool:
-    conn = get_connection()
+def salvar_jornada_semanal(usuario_id, jornada_config: dict, conn_external=None) -> bool:
+    """Salva jornada semanal. Se conn_external for fornecido, usa a conexão existente
+    (sem commit/rollback próprio — o caller controla a transação)."""
+    owns_conn = conn_external is None
+    conn = conn_external if conn_external else get_connection()
     cursor = conn.cursor()
 
     try:
@@ -92,17 +95,22 @@ def salvar_jornada_semanal(usuario_id, jornada_config: dict) -> bool:
                 (usuario_id, dia, trabalha, inicio, fim, intervalo)
             )
 
-        conn.commit()
+        if owns_conn:
+            conn.commit()
         return True
     except Exception as exc:
-        conn.rollback()
+        if owns_conn:
+            conn.rollback()
         logger.error("Erro ao salvar jornada semanal", exc_info=exc, extra={'usuario': usuario_id})
         return False
     finally:
-        conn.close()
+        if owns_conn:
+            return_connection(conn)
 
 
-def copiar_jornada_padrao_para_dias(usuario_id, dias: list) -> bool:
+def copiar_jornada_padrao_para_dias(usuario_id, dias: list, conn_external=None) -> bool:
+    """Copia jornada padrão para dias especificados.
+    Se conn_external for fornecido, usa a conexão existente (transação do caller)."""
     jornada = obter_jornada_usuario(usuario_id)
     padrao = jornada.get('seg') or _DEFAULT_JORNADA['seg']
 
@@ -111,7 +119,7 @@ def copiar_jornada_padrao_para_dias(usuario_id, dias: list) -> bool:
             continue
         jornada[dia] = deepcopy(padrao)
 
-    return salvar_jornada_semanal(usuario_id, jornada)
+    return salvar_jornada_semanal(usuario_id, jornada, conn_external=conn_external)
 
 
 __all__ = [

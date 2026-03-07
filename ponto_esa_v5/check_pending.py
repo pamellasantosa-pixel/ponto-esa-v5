@@ -1,7 +1,11 @@
 """Verificar estrutura de tabelas no banco"""
+import os
 import psycopg2
+from dotenv import load_dotenv
 
-DATABASE_URL = "postgresql://neondb_owner:npg_4dpyuhtMZJL7@ep-spring-tree-ac2y3okx-pooler.sa-east-1.aws.neon.tech/neondb?sslmode=require"
+load_dotenv()
+
+DATABASE_URL = os.getenv('DATABASE_URL')
 
 conn = psycopg2.connect(DATABASE_URL)
 cur = conn.cursor()
@@ -41,25 +45,25 @@ print('=' * 60)
 try:
     cur.execute("SELECT COUNT(*) FROM atestado_horas WHERE status = 'pendente'")
     print(f"  atestado_horas pendentes: {cur.fetchone()[0]}")
-except:
+except Exception:
     print("  atestado_horas: erro ou tabela não existe")
 
 try:
     cur.execute("SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE status = 'pendente'")
     print(f"  solicitacoes_correcao_registro pendentes: {cur.fetchone()[0]}")
-except:
+except Exception:
     print("  solicitacoes_correcao_registro: erro ou tabela não existe")
 
 try:
     cur.execute("SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE status = 'pendente'")
     print(f"  solicitacoes_horas_extras pendentes: {cur.fetchone()[0]}")
-except:
+except Exception:
     print("  solicitacoes_horas_extras: erro ou tabela não existe")
 
 try:
     cur.execute("SELECT COUNT(*) FROM horas_extras_ativas WHERE status = 'pendente'")
     print(f"  horas_extras_ativas pendentes: {cur.fetchone()[0]}")
-except:
+except Exception:
     print("  horas_extras_ativas: erro ou tabela não existe")
 
 conn.close()

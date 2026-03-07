@@ -11,6 +11,10 @@ import gzip
 from datetime import datetime, timedelta
 import threading
 import time
+import logging
+from constants import agora_br, agora_br_naive
+
+logger = logging.getLogger(__name__)
 
 class BackupManager:
     def __init__(self, db_path="database/ponto_esa.db", backup_dir="backups"):
@@ -27,7 +31,7 @@ class BackupManager:
         Cria um backup do banco de dados
         """
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            timestamp = agora_br().strftime("%Y%m%d_%H%M%S")
             backup_filename = f"ponto_esa_backup_{timestamp}.db"
             backup_path = os.path.join(self.backup_dir, backup_filename)
             
@@ -59,7 +63,7 @@ class BackupManager:
         Registra o backup no log de auditoria
         """
         log_entry = {
-            "timestamp": datetime.now().isoformat(),
+            "timestamp": agora_br().isoformat(),
             "action": "backup_created",
             "file_path": backup_path,
             "file_size": file_size,
@@ -74,7 +78,8 @@ class BackupManager:
             try:
                 with open(log_file, 'r') as f:
                     logs = json.load(f)
-            except:
+            except Exception as e:
+                logger.debug("Erro ao ler log de backup: %s", e)
                 logs = []
         
         # Adicionar novo log
@@ -93,7 +98,7 @@ class BackupManager:
         Remove backups antigos
         """
         try:
-            cutoff_date = datetime.now() - timedelta(days=days_to_keep)
+            cutoff_date = agora_br_naive() - timedelta(days=days_to_keep)
             
             for filename in os.listdir(self.backup_dir):
                 if filename.startswith("ponto_esa_backup_") and (filename.endswith(".db") or filename.endswith(".db.gz")):
@@ -215,7 +220,7 @@ class AuditLogger:
         """
         try:
             log_entry = {
-                "timestamp": datetime.now().isoformat(),
+                "timestamp": agora_br().isoformat(),
                 "user_id": user_id,
                 "action": action,
                 "details": details or {},
@@ -229,7 +234,8 @@ class AuditLogger:
                 try:
                     with open(self.log_file, 'r') as f:
                         logs = json.load(f)
-                except:
+                except Exception as e:
+                    logger.debug("Erro ao ler log de auditoria: %s", e)
                     logs = []
             
             # Adicionar novo log

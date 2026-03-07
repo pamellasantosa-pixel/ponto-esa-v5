@@ -1,4 +1,5 @@
 import os
+import atexit
 import hashlib
 import logging
 from dotenv import load_dotenv
@@ -6,20 +7,13 @@ import sqlite3
 from contextlib import contextmanager
 import threading
 
+from constants import DB_POOL_MIN_CONN, DB_POOL_MAX_CONN, DB_CONNECT_TIMEOUT, VALID_TABLE_NAMES
+
 # Carregar variáveis de ambiente
 load_dotenv()
 
 # Logger para este módulo
 logger = logging.getLogger(__name__)
-
-# Lista de tabelas obrigatórias que devem existir no banco
-REQUIRED_TABLES = [
-    'usuarios', 'registros_ponto', 'ausencias', 'projetos',
-    'solicitacoes_horas_extras', 'atestado_horas', 'atestados_horas',
-    'uploads', 'banco_horas', 'feriados', 'jornada_semanal',
-    'Notificacoes', 'solicitacoes_ajuste_ponto', 'solicitacoes_correcao_registro',
-    'auditoria_correcoes'
-]
 
 # Configuração do banco de dados - usar PostgreSQL
 USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'true').lower() == 'true'
@@ -39,6 +33,7 @@ if USE_POSTGRESQL:
 _connection_pool = None
 _pool_lock = threading.Lock()
 _pool_connections = set()  # Rastreia conexões que vieram do pool
+_pool_conn_lock = threading.Lock()  # Protege _pool_connections
 
 
 def _get_pool():
@@ -57,16 +52,17 @@ def _get_pool():
             database_url = os.getenv('DATABASE_URL')
             if database_url:
                 try:
-                    # Pool com min 2, max 15 conexões para melhor throughput
-                    # Nota: statement_timeout removido pois não é suportado pelo Neon Pooler
                     _connection_pool = pg_pool.ThreadedConnectionPool(
-                        minconn=2,
-                        maxconn=15,
+                        minconn=DB_POOL_MIN_CONN,
+                        maxconn=DB_POOL_MAX_CONN,
                         dsn=database_url,
-                        # Configurações para conexões mais rápidas
-                        connect_timeout=10
+                        connect_timeout=DB_CONNECT_TIMEOUT,
                     )
-                    logger.info("✅ Connection pool PostgreSQL criado (2-15 conexões)")
+                    atexit.register(_shutdown_pool)
+                    logger.info(
+                        "✅ Connection pool PostgreSQL criado (%d-%d conexões)",
+                        DB_POOL_MIN_CONN, DB_POOL_MAX_CONN,
+                    )
                 except Exception as e:
                     logger.error(f"❌ Erro ao criar pool: {e}")
                     _connection_pool = None
@@ -86,7 +82,8 @@ def get_connection(db_path: str | None = None):
             try:
                 conn = pool.getconn()
                 # Rastrear conexão usando seu id
-                _pool_connections.add(id(conn))
+                with _pool_conn_lock:
+                    _pool_connections.add(id(conn))
                 return conn
             except Exception as e:
                 logger.warning(f"Pool falhou, criando conexão direta: {e}")
@@ -95,7 +92,7 @@ def get_connection(db_path: str | None = None):
         database_url = os.getenv('DATABASE_URL')
         try:
             if database_url:
-                conn = psycopg2.connect(database_url, connect_timeout=10)
+                conn = psycopg2.connect(database_url, connect_timeout=DB_CONNECT_TIMEOUT)
                 return conn
             else:
                 db_config_local = {
@@ -105,7 +102,7 @@ def get_connection(db_path: str | None = None):
                     'password': os.getenv('DB_PASSWORD', 'postgres'),
                     'port': os.getenv('DB_PORT', '5432')
                 }
-                conn = psycopg2.connect(**db_config_local, connect_timeout=10)
+                conn = psycopg2.connect(**db_config_local, connect_timeout=DB_CONNECT_TIMEOUT)
                 return conn
         except psycopg2.OperationalError as e:
             logger.error(f"Erro ao conectar no PostgreSQL: {e}")
@@ -123,9 +120,12 @@ def return_connection(conn):
     if USE_POSTGRESQL:
         pool = _get_pool()
         conn_id = id(conn)
-        if pool and conn_id in _pool_connections:
-            try:
+        with _pool_conn_lock:
+            is_pool_conn = pool and conn_id in _pool_connections
+            if is_pool_conn:
                 _pool_connections.discard(conn_id)
+        if is_pool_conn:
+            try:
                 pool.putconn(conn)
                 return
             except Exception as e:
@@ -136,6 +136,37 @@ def return_connection(conn):
         conn.close()
     except Exception as e:
         logger.debug(f"Erro ao fechar conexão fallback: {e}")
+
+
+def _shutdown_pool() -> None:
+    """Fecha todas as conexões do pool — chamado automaticamente via atexit."""
+    global _connection_pool
+    if _connection_pool is not None:
+        try:
+            _connection_pool.closeall()
+            logger.info("Connection pool PostgreSQL encerrado com sucesso.")
+        except Exception as e:
+            logger.warning("Erro ao fechar pool: %s", e)
+        finally:
+            _connection_pool = None
+            _pool_connections.clear()
+
+
+def validate_table_name(name: str) -> str:
+    """Valida nome de tabela contra whitelist para prevenir SQL injection em DDL dinâmico.
+
+    Args:
+        name: nome da tabela a validar.
+
+    Returns:
+        O nome validado (inalterado).
+
+    Raises:
+        ValueError: se o nome não estiver na whitelist.
+    """
+    if name not in VALID_TABLE_NAMES:
+        raise ValueError(f"Nome de tabela inválido: {name!r}")
+    return name
 
 
 @contextmanager
