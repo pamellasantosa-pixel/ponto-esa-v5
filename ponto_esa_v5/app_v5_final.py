@@ -2630,8 +2630,6 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     Se for None, funcionalidades relacionadas a verificação/solicitação de horas extras
     serão ignoradas de forma segura.
     """
-    from datetime import time as datetime_time
-
     st.markdown("""
     <div class="feature-card">
         <h3>🕐 Registrar Ponto</h3>
@@ -3054,23 +3052,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
             projeto = st.selectbox("📊 Projeto", obter_projetos_ativos())
 
-        # Campo de horário — essencial para registros retroativos
-        _agora_form = get_datetime_br()
-        _eh_retroativo = (data_registro < date.today())
-        if _eh_retroativo:
-            st.info(
-                "📅 **Registro retroativo** — informe o horário real "
-                "em que o evento ocorreu."
-            )
-
-        try:
-            hora_registro_input = st.time_input(
-                "🕐 Horário do Registro",
-                value=datetime_time(hour=_agora_form.hour, minute=_agora_form.minute),
-            )
-        except Exception as _te:
-            logger.warning("st.time_input falhou: %s", _te)
-            hora_registro_input = datetime_time(hour=_agora_form.hour, minute=_agora_form.minute)
+        # Horário sempre automático no momento do clique em "Registrar Ponto"
+        st.info("🕐 O horário do registro é automático no momento do envio.")
 
         atividade = st.text_area(
             "📝 Descrição da Atividade",
@@ -3152,8 +3135,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     latitude = None
                     longitude = None
 
-                # Usar o horário informado pelo usuário (campo time_input)
-                hora_str = hora_registro_input.strftime("%H:%M:%S")
+                # Horário automático no exato momento do clique em registrar
+                hora_str = get_datetime_br().strftime("%H:%M:%S")
                 data_hora_registro = registrar_ponto(
                     st.session_state.usuario,
                     tipo_registro,
