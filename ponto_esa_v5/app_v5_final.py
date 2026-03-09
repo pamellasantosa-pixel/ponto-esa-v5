@@ -2328,7 +2328,7 @@ def tela_funcionario():
             if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push"):
                 topic = registrar_subscription(st.session_state.usuario)
                 st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
-                st.info("🔄 Recarregue a página para ver as instruções completas")
+                st.rerun()
 
         st.markdown("---")
 
@@ -3005,6 +3005,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     st.success(f"Push ativado. Inscreva-se no tópico: {topic}")
                     st.markdown(f"**Tópico:** `{topic}`")
                     st.markdown(f"**URL de inscrição:** https://ntfy.sh/{topic}")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao ativar push: {e}")
         with col_b:
@@ -3013,6 +3014,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                     from push_scheduler import desativar_subscription
                     desativar_subscription(st.session_state.usuario)
                     st.info("Push desativado para seu usuário.")
+                    st.rerun()
                 except Exception as e:
                     st.error(f"Erro ao desativar push: {e}")
 
@@ -5369,7 +5371,7 @@ def tela_gestor():
             if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push_gestor"):
                 topic = registrar_subscription(st.session_state.usuario)
                 st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
-                st.info("🔄 Recarregue a página para ver as instruções completas")
+                st.rerun()
 
         st.markdown("---")
 
