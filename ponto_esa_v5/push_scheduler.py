@@ -59,6 +59,17 @@ def _ph(count: int = 1) -> str:
     return ", ".join([SQL_PLACEHOLDER] * count)
 
 
+def _is_ativo_enabled(value) -> bool:
+    """Normaliza o campo `ativo` (bool/int/str) para booleano."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return int(value) == 1
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "t", "true", "y", "yes", "on"}
+    return False
+
+
 # ---------------------------------------------------------------------------
 # Funções de tópico
 # ---------------------------------------------------------------------------
@@ -136,7 +147,7 @@ def enviar_lembrete_ponto(hora: int, minuto: int, mensagem: str, emoji: str) -> 
                 SELECT DISTINCT usuario, horario_entrada, horario_almoco_saida,
                        horario_almoco_retorno, horario_saida
                 FROM push_subscriptions
-                WHERE ativo = TRUE
+                WHERE CAST(ativo AS TEXT) IN ('1', 't', 'true', 'TRUE')
             """)
             usuarios = cursor.fetchall()
             cursor.close()
@@ -269,12 +280,24 @@ def registrar_subscription(usuario: str) -> str:
     try:
         with _db() as conn:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                INSERT INTO push_subscriptions (usuario, topic, ativo)
-                VALUES ({_ph(3)})
-                ON CONFLICT (usuario)
-                DO UPDATE SET ativo = TRUE, topic = {SQL_PLACEHOLDER}
-            """, (usuario, topic, True, topic))
+            try:
+                # Caminho preferencial para schemas com `ativo` BOOLEAN
+                cursor.execute(f"""
+                    INSERT INTO push_subscriptions (usuario, topic, ativo)
+                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, TRUE)
+                    ON CONFLICT (usuario)
+                    DO UPDATE SET ativo = TRUE, topic = {SQL_PLACEHOLDER}
+                """, (usuario, topic, topic))
+            except Exception as type_err:
+                # Fallback para schemas legados com `ativo` INTEGER (0/1)
+                logger.warning("[Push] Fallback de tipo para coluna ativo (INTEGER): %s", type_err)
+                conn.rollback()
+                cursor.execute(f"""
+                    INSERT INTO push_subscriptions (usuario, topic, ativo)
+                    VALUES ({_ph(3)})
+                    ON CONFLICT (usuario)
+                    DO UPDATE SET ativo = {SQL_PLACEHOLDER}, topic = {SQL_PLACEHOLDER}
+                """, (usuario, topic, 1, 1, topic))
             conn.commit()
             cursor.close()
         logger.info("[Push] Usuário %s registrado com topic: %s", usuario, topic)
@@ -289,10 +312,18 @@ def desativar_subscription(usuario: str) -> None:
     try:
         with _db() as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE push_subscriptions SET ativo = FALSE WHERE usuario = {SQL_PLACEHOLDER}",
-                (usuario,),
-            )
+            try:
+                cursor.execute(
+                    f"UPDATE push_subscriptions SET ativo = FALSE WHERE usuario = {SQL_PLACEHOLDER}",
+                    (usuario,),
+                )
+            except Exception as type_err:
+                logger.warning("[Push] Fallback de tipo ao desativar push (INTEGER): %s", type_err)
+                conn.rollback()
+                cursor.execute(
+                    f"UPDATE push_subscriptions SET ativo = 0 WHERE usuario = {SQL_PLACEHOLDER}",
+                    (usuario,),
+                )
             conn.commit()
             cursor.close()
         logger.info("[Push] Push desativado para %s", usuario)
@@ -316,7 +347,7 @@ def verificar_subscription(usuario: str) -> tuple:
             result = cursor.fetchone()
             cursor.close()
             if result:
-                return result[0], result[1]
+                return result[0], _is_ativo_enabled(result[1])
     except Exception as e:
         log_db_error(__name__, "verificar_subscription", e)
 
@@ -407,7 +438,7 @@ def listar_subscriptions_ativas() -> list:
             )
             rows = cursor.fetchall()
             cursor.close()
-            return [{"usuario": r[0], "topic": r[1], "ativo": bool(r[2])} for r in rows]
+            return [{"usuario": r[0], "topic": r[1], "ativo": _is_ativo_enabled(r[2])} for r in rows]
     except Exception as e:
         log_db_error(__name__, "listar_subscriptions_ativas", e)
         return []
