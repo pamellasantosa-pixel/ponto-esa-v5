@@ -2630,6 +2630,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     Se for None, funcionalidades relacionadas a verificação/solicitação de horas extras
     serão ignoradas de forma segura.
     """
+    from datetime import time as datetime_time
+
     st.markdown("""
     <div class="feature-card">
         <h3>🕐 Registrar Ponto</h3>
@@ -3064,11 +3066,11 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         try:
             hora_registro_input = st.time_input(
                 "🕐 Horário do Registro",
-                value=time(hour=_agora_form.hour, minute=_agora_form.minute),
+                value=datetime_time(hour=_agora_form.hour, minute=_agora_form.minute),
             )
         except Exception as _te:
             logger.warning("st.time_input falhou: %s", _te)
-            hora_registro_input = time(hour=_agora_form.hour, minute=_agora_form.minute)
+            hora_registro_input = datetime_time(hour=_agora_form.hour, minute=_agora_form.minute)
 
         atividade = st.text_area(
             "📝 Descrição da Atividade",
