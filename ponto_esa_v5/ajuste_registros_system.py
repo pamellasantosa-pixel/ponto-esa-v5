@@ -50,6 +50,313 @@ class AjusteRegistrosSystem:
     def _now(self) -> datetime:
         return agora_br_naive()
 
+    def _parse_data_hora(self, data_str: str, hora_str: str) -> datetime:
+        # Suporta HH:MM e HH:MM:SS para manter compatibilidade.
+        try:
+            return datetime.strptime(f"{data_str} {hora_str}", "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return datetime.strptime(f"{data_str} {hora_str}", "%Y-%m-%d %H:%M")
+
+    def _normalizar_tipo(self, tipo: Any) -> str:
+        valor = str(tipo or "").strip().lower()
+        if valor in {"início", "inicio", "entrada"}:
+            return "inicio"
+        if valor in {"fim", "saída", "saida"}:
+            return "fim"
+        return valor
+
+    def _obter_entrada_saida_dia_cursor(self, cursor: Any, usuario: str, data_ref: str) -> tuple[Optional[str], Optional[str]]:
+        cursor.execute(
+            f"""
+            SELECT data_hora, tipo
+            FROM registros_ponto
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+            ORDER BY data_hora ASC
+            """,
+            (usuario, data_ref),
+        )
+        rows = cursor.fetchall()
+        primeiro_inicio = None
+        ultimo_fim = None
+        for data_hora, tipo in rows:
+            dt = data_hora if isinstance(data_hora, datetime) else None
+            if not dt:
+                try:
+                    dt = datetime.fromisoformat(str(data_hora))
+                except Exception:
+                    try:
+                        dt = datetime.strptime(str(data_hora), "%Y-%m-%d %H:%M:%S")
+                    except Exception:
+                        dt = None
+            if not dt:
+                continue
+
+            tipo_norm = self._normalizar_tipo(tipo)
+            if tipo_norm == "inicio" and primeiro_inicio is None:
+                primeiro_inicio = dt
+            elif tipo_norm == "fim":
+                ultimo_fim = dt
+
+        entrada = primeiro_inicio.strftime("%H:%M") if primeiro_inicio else None
+        saida = ultimo_fim.strftime("%H:%M") if ultimo_fim else None
+        return entrada, saida
+
+    def _registrar_auditoria_alteracao_cursor(
+        self,
+        cursor: Any,
+        usuario_afetado: str,
+        data_registro: str,
+        entrada_original: Optional[str],
+        saida_original: Optional[str],
+        entrada_corrigida: Optional[str],
+        saida_corrigida: Optional[str],
+        tipo_alteracao: str,
+        realizado_por: str,
+        justificativa: Optional[str] = None,
+        detalhes: Optional[str] = None,
+    ) -> None:
+        cursor.execute(
+            f"""
+            INSERT INTO auditoria_alteracoes_ponto
+            (usuario_afetado, data_registro, entrada_original, saida_original,
+             entrada_corrigida, saida_corrigida, tipo_alteracao, realizado_por,
+             data_alteracao, justificativa, detalhes)
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                    {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                    {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+            """,
+            (
+                usuario_afetado,
+                data_registro,
+                entrada_original,
+                saida_original,
+                entrada_corrigida,
+                saida_corrigida,
+                tipo_alteracao,
+                realizado_por,
+                self._now(),
+                justificativa,
+                detalhes,
+            ),
+        )
+
+    def _aplicar_complemento_jornada(
+        self,
+        cursor: Any,
+        usuario: str,
+        dados_para_aplicar: Dict[str, Any],
+        gestor: str,
+        observacoes: Optional[str],
+    ) -> Dict[str, Any]:
+        data_ref = dados_para_aplicar.get("data_referencia") or dados_para_aplicar.get("data")
+        hora_inicio = dados_para_aplicar.get("hora_inicio_solicitada") or dados_para_aplicar.get("hora_inicio")
+        hora_saida = dados_para_aplicar.get("hora_saida_solicitada") or dados_para_aplicar.get("hora_saida")
+        if not data_ref or not hora_inicio or not hora_saida:
+            return {"success": False, "message": "Data, hora de início e hora de saída são obrigatórias."}
+
+        dt_inicio = self._parse_data_hora(data_ref, hora_inicio)
+        dt_saida = self._parse_data_hora(data_ref, hora_saida)
+        if dt_saida <= dt_inicio:
+            return {"success": False, "message": "Hora de saída deve ser maior que hora de início."}
+
+        modalidade_base = dados_para_aplicar.get("modalidade")
+        projeto_base = dados_para_aplicar.get("projeto")
+        atividade_base = dados_para_aplicar.get("atividade")
+
+        cursor.execute(
+            f"""
+            SELECT id, tipo, modalidade, projeto, atividade
+            FROM registros_ponto
+            WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+            ORDER BY data_hora ASC
+            """,
+            (usuario, data_ref),
+        )
+        registros_dia = cursor.fetchall()
+        affected_ids = []
+
+        if len(registros_dia) == 0:
+            for data_hora, tipo in ((dt_inicio, "inicio"), (dt_saida, "fim")):
+                if database_module.USE_POSTGRESQL:
+                    cursor.execute(
+                        f"""
+                        INSERT INTO registros_ponto
+                            (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        RETURNING id
+                        """,
+                        (
+                            usuario,
+                            data_hora,
+                            tipo,
+                            modalidade_base,
+                            projeto_base,
+                            atividade_base,
+                            "Registro criado via ajuste aprovado",
+                        ),
+                    )
+                    affected_ids.append(cursor.fetchone()[0])
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO registros_ponto
+                            (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            usuario,
+                            data_hora,
+                            tipo,
+                            modalidade_base,
+                            projeto_base,
+                            atividade_base,
+                            "Registro criado via ajuste aprovado",
+                        ),
+                    )
+                    affected_ids.append(cursor.lastrowid)
+        elif len(registros_dia) == 1:
+            reg_id, tipo_existente, mod_existente, proj_existente, atividade_existente = registros_dia[0]
+            tipo_norm = self._normalizar_tipo(tipo_existente)
+            modalidade_base = mod_existente or modalidade_base
+            projeto_base = proj_existente or projeto_base
+            atividade_base = atividade_existente or atividade_base
+
+            if tipo_norm == "inicio":
+                cursor.execute(
+                    f"""
+                    UPDATE registros_ponto
+                    SET data_hora = {SQL_PLACEHOLDER}, tipo = 'inicio', modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                    WHERE id = {SQL_PLACEHOLDER}
+                    """,
+                    (dt_inicio, modalidade_base, projeto_base, reg_id),
+                )
+                affected_ids.append(reg_id)
+                novo_tipo = "fim"
+                novo_dt = dt_saida
+            elif tipo_norm == "fim":
+                cursor.execute(
+                    f"""
+                    UPDATE registros_ponto
+                    SET data_hora = {SQL_PLACEHOLDER}, tipo = 'fim', modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                    WHERE id = {SQL_PLACEHOLDER}
+                    """,
+                    (dt_saida, modalidade_base, projeto_base, reg_id),
+                )
+                affected_ids.append(reg_id)
+                novo_tipo = "inicio"
+                novo_dt = dt_inicio
+            else:
+                novo_tipo = None
+                novo_dt = None
+
+            if novo_tipo:
+                if database_module.USE_POSTGRESQL:
+                    cursor.execute(
+                        f"""
+                        INSERT INTO registros_ponto
+                            (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        RETURNING id
+                        """,
+                        (
+                            usuario,
+                            novo_dt,
+                            novo_tipo,
+                            modalidade_base,
+                            projeto_base,
+                            atividade_base,
+                            "Registro criado via ajuste aprovado",
+                        ),
+                    )
+                    affected_ids.append(cursor.fetchone()[0])
+                else:
+                    cursor.execute(
+                        """
+                        INSERT INTO registros_ponto
+                            (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                        """,
+                        (
+                            usuario,
+                            novo_dt,
+                            novo_tipo,
+                            modalidade_base,
+                            projeto_base,
+                            atividade_base,
+                            "Registro criado via ajuste aprovado",
+                        ),
+                    )
+                    affected_ids.append(cursor.lastrowid)
+            else:
+                # Tipo único inesperado: cria ambos para garantir par válido.
+                for data_hora, tipo in ((dt_inicio, "inicio"), (dt_saida, "fim")):
+                    cursor.execute(
+                        f"""
+                        INSERT INTO registros_ponto
+                            (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        """,
+                        (
+                            usuario,
+                            data_hora,
+                            tipo,
+                            modalidade_base,
+                            projeto_base,
+                            atividade_base,
+                            "Registro criado via ajuste aprovado",
+                        ),
+                    )
+        else:
+            inicio_id = None
+            fim_id = None
+            for reg in registros_dia:
+                reg_id, tipo_existente, _, _, _ = reg
+                tipo_norm = self._normalizar_tipo(tipo_existente)
+                if tipo_norm == "inicio" and inicio_id is None:
+                    inicio_id = reg_id
+                if tipo_norm == "fim":
+                    fim_id = reg_id
+
+            if inicio_id is None:
+                inicio_id = registros_dia[0][0]
+            if fim_id is None:
+                fim_id = registros_dia[-1][0]
+
+            cursor.execute(
+                f"""
+                UPDATE registros_ponto
+                SET data_hora = {SQL_PLACEHOLDER}, tipo = 'inicio'
+                WHERE id = {SQL_PLACEHOLDER}
+                """,
+                (dt_inicio, inicio_id),
+            )
+            cursor.execute(
+                f"""
+                UPDATE registros_ponto
+                SET data_hora = {SQL_PLACEHOLDER}, tipo = 'fim'
+                WHERE id = {SQL_PLACEHOLDER}
+                """,
+                (dt_saida, fim_id),
+            )
+            affected_ids.extend([inicio_id, fim_id])
+
+        for reg_id in affected_ids:
+            cursor.execute(
+                f"""
+                INSERT INTO auditoria_correcoes
+                    (registro_id, gestor, justificativa, data_correcao)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                """,
+                (
+                    reg_id,
+                    gestor,
+                    observacoes or "Complemento de jornada aprovado",
+                    self._now(),
+                ),
+            )
+
+        return {"success": True}
+
     def _stop_job(self, solicitacao_id: int) -> None:
         notification_manager.stop_repeating_notification(
             f"ajuste_registro_{solicitacao_id}"
@@ -281,8 +588,22 @@ class AjusteRegistrosSystem:
             dados_para_aplicar = {**dados_originais, **(dados_confirmados or {})}
 
             acao = dados_para_aplicar.get("acao")
-            if acao not in {"corrigir", "criar"}:
+            if acao not in {"corrigir", "criar", "complementar_jornada"}:
                 return {"success": False, "message": "Tipo de ajuste inválido."}
+
+            data_auditoria = None
+            if acao == "corrigir":
+                data_auditoria = dados_para_aplicar.get("nova_data")
+            elif acao == "criar":
+                data_auditoria = dados_para_aplicar.get("data")
+            elif acao == "complementar_jornada":
+                data_auditoria = dados_para_aplicar.get("data_referencia") or dados_para_aplicar.get("data")
+
+            entrada_original = saida_original = None
+            if data_auditoria:
+                entrada_original, saida_original = self._obter_entrada_saida_dia_cursor(
+                    cursor, usuario, str(data_auditoria)
+                )
 
             if acao == "corrigir":
                 registro_id = dados_para_aplicar.get("registro_id")
@@ -409,6 +730,35 @@ class AjusteRegistrosSystem:
                         observacoes or "Registro criado via ajuste aprovado",
                         self._now(),
                     ),
+                )
+
+            elif acao == "complementar_jornada":
+                resultado_complemento = self._aplicar_complemento_jornada(
+                    cursor=cursor,
+                    usuario=usuario,
+                    dados_para_aplicar=dados_para_aplicar,
+                    gestor=gestor,
+                    observacoes=observacoes,
+                )
+                if not resultado_complemento.get("success"):
+                    return resultado_complemento
+
+            if data_auditoria:
+                entrada_corrigida, saida_corrigida = self._obter_entrada_saida_dia_cursor(
+                    cursor, usuario, str(data_auditoria)
+                )
+                self._registrar_auditoria_alteracao_cursor(
+                    cursor=cursor,
+                    usuario_afetado=usuario,
+                    data_registro=str(data_auditoria),
+                    entrada_original=entrada_original,
+                    saida_original=saida_original,
+                    entrada_corrigida=entrada_corrigida,
+                    saida_corrigida=saida_corrigida,
+                    tipo_alteracao=f"ajuste_{acao}",
+                    realizado_por=gestor,
+                    justificativa=observacoes,
+                    detalhes=f"Solicitação #{solicitacao_id} aplicada",
                 )
 
             # Atualizar status da solicitação

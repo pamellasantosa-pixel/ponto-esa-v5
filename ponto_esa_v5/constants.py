@@ -115,6 +115,7 @@ VALID_TABLE_NAMES = frozenset({
     "Notificacoes", "solicitacoes_ajuste_ponto",
     "solicitacoes_correcao_registro", "configuracoes",
     "auditoria_correcoes", "horas_extras_ativas",
+    "auditoria_alteracoes_ponto", "pendencias_ponto_ignoradas",
     "push_subscriptions", "push_notifications_log",
     "config_lembretes_push", "db_migrations",
 })

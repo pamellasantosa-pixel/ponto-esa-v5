@@ -501,7 +501,7 @@ def _init_db_tables(conn):
         CREATE TABLE IF NOT EXISTS solicitacoes_correcao_registro (
             id SERIAL PRIMARY KEY,
             usuario TEXT NOT NULL,
-            registro_id INTEGER NOT NULL,
+            registro_id INTEGER,
             data_hora_original TIMESTAMP NOT NULL,
             data_hora_nova TIMESTAMP,
             tipo_original TEXT,
@@ -510,6 +510,10 @@ def _init_db_tables(conn):
             modalidade_nova TEXT,
             projeto_original TEXT,
             projeto_novo TEXT,
+            tipo_solicitacao TEXT DEFAULT 'ajuste_registro',
+            data_referencia DATE,
+            hora_inicio_solicitada TEXT,
+            hora_saida_solicitada TEXT,
             justificativa TEXT NOT NULL,
             status TEXT DEFAULT 'pendente',
             data_solicitacao TIMESTAMP DEFAULT NOW(),
@@ -660,6 +664,42 @@ def _init_db_tables(conn):
         )
     '''))
 
+    # Tabela de auditoria completa das alterações de ponto
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS auditoria_alteracoes_ponto (
+            id SERIAL PRIMARY KEY,
+            usuario_afetado TEXT NOT NULL,
+            data_registro DATE NOT NULL,
+            entrada_original TEXT,
+            saida_original TEXT,
+            entrada_corrigida TEXT,
+            saida_corrigida TEXT,
+            tipo_alteracao TEXT NOT NULL,
+            realizado_por TEXT NOT NULL,
+            data_alteracao TIMESTAMP DEFAULT NOW(),
+            justificativa TEXT,
+            detalhes TEXT
+        )
+    '''))
+
+    # Tabela para ignorar pendências de ponto no painel do gestor/RH
+    c.execute(adapt_sql_for_postgresql('''
+        CREATE TABLE IF NOT EXISTS pendencias_ponto_ignoradas (
+            id SERIAL PRIMARY KEY,
+            usuario TEXT NOT NULL,
+            data_referencia DATE NOT NULL,
+            tipo_inconsistencia TEXT NOT NULL,
+            ignorado_por TEXT NOT NULL,
+            motivo TEXT,
+            data_ignoracao TIMESTAMP DEFAULT NOW()
+        )
+    '''))
+
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_pendencia_ignorada_unica ON pendencias_ponto_ignoradas (usuario, data_referencia, tipo_inconsistencia)")
+    except Exception as e:
+        logger.debug(f"Índice idx_pendencia_ignorada_unica: {e}")
+
     # Tabela horas_extras_ativas para gerenciar solicitações de horas extras
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS horas_extras_ativas (
@@ -682,6 +722,29 @@ def _init_db_tables(conn):
         c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_hora_nova TIMESTAMP")
     except Exception as e:
         logger.debug(f"Migração solicitacoes_correcao_registro.data_hora_nova: {e}")
+
+    # Compatibilidade: suporte a solicitações de complemento de jornada
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS tipo_solicitacao TEXT DEFAULT 'ajuste_registro'")
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.tipo_solicitacao: {e}")
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_referencia DATE")
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.data_referencia: {e}")
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS hora_inicio_solicitada TEXT")
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.hora_inicio_solicitada: {e}")
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS hora_saida_solicitada TEXT")
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.hora_saida_solicitada: {e}")
+    # No PostgreSQL removemos NOT NULL para permitir solicitações sem registro pré-existente.
+    try:
+        c.execute("ALTER TABLE solicitacoes_correcao_registro ALTER COLUMN registro_id DROP NOT NULL")
+    except Exception as e:
+        logger.debug(f"Migração solicitacoes_correcao_registro.registro_id nullable: {e}")
 
     # ============================================
     # TABELA PARA PUSH NOTIFICATIONS (Web Push)

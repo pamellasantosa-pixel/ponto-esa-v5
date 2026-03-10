@@ -251,6 +251,80 @@ def ensure_time(value, default=time(8, 0)):
     return default
 
 
+def normalizar_tipo_ponto(tipo):
+    valor = str(tipo or "").strip().lower()
+    if valor in ("início", "inicio", "entrada"):
+        return "inicio"
+    if valor in ("fim", "saída", "saida"):
+        return "fim"
+    return valor
+
+
+def obter_entrada_saida_dia_cursor(cursor, usuario, data_referencia):
+    """Retorna (entrada, saida, horas) para um dia com base nos registros existentes."""
+    cursor.execute(f"""
+        SELECT data_hora, tipo
+        FROM registros_ponto
+        WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+        ORDER BY data_hora ASC
+    """, (usuario, data_referencia))
+    rows = cursor.fetchall()
+
+    primeiro_inicio = None
+    ultimo_fim = None
+    for data_hora, tipo in rows:
+        dt = safe_datetime_parse(data_hora)
+        if not dt:
+            continue
+        tipo_norm = normalizar_tipo_ponto(tipo)
+        if tipo_norm == "inicio" and primeiro_inicio is None:
+            primeiro_inicio = dt
+        elif tipo_norm == "fim":
+            ultimo_fim = dt
+
+    entrada = primeiro_inicio.strftime("%H:%M") if primeiro_inicio else None
+    saida = ultimo_fim.strftime("%H:%M") if ultimo_fim else None
+    horas = None
+    if primeiro_inicio and ultimo_fim and ultimo_fim > primeiro_inicio:
+        horas = round((ultimo_fim - primeiro_inicio).total_seconds() / 3600, 2)
+    return entrada, saida, horas
+
+
+def registrar_auditoria_alteracao_ponto_cursor(
+    cursor,
+    usuario_afetado,
+    data_registro,
+    entrada_original,
+    saida_original,
+    entrada_corrigida,
+    saida_corrigida,
+    tipo_alteracao,
+    realizado_por,
+    justificativa=None,
+    detalhes=None,
+):
+    cursor.execute(f"""
+        INSERT INTO auditoria_alteracoes_ponto
+        (usuario_afetado, data_registro, entrada_original, saida_original,
+         entrada_corrigida, saida_corrigida, tipo_alteracao, realizado_por,
+         data_alteracao, justificativa, detalhes)
+        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                CURRENT_TIMESTAMP, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+    """, (
+        usuario_afetado,
+        data_registro,
+        entrada_original,
+        saida_original,
+        entrada_corrigida,
+        saida_corrigida,
+        tipo_alteracao,
+        realizado_por,
+        justificativa,
+        detalhes,
+    ))
+
+
 # Importar sistemas desenvolvidos
 
 # Configuração da página
@@ -4546,68 +4620,51 @@ def solicitar_correcao_registro_interface():
     with tab1:
         st.subheader("📝 Solicitar Correção")
 
-        # Selecionar data
         data_corrigir = st.date_input(
             "📅 Data do Registro a Corrigir",
             value=date.today(),
             max_value=date.today()
         )
 
-        # Buscar registros do usuário nessa data
-        registros = buscar_registros_dia(
-            st.session_state.usuario, 
-            data_corrigir.strftime("%Y-%m-%d")
-        )
+        usuario_logado = st.session_state.usuario
+        data_ref_str = data_corrigir.strftime("%Y-%m-%d")
+        registros = buscar_registros_dia(usuario_logado, data_ref_str)
 
-        if registros:
-            registro_opcoes = [
-                f"{r['data_hora']} - {r['tipo']}" for r in registros
-            ]
-            
-            registro_selecionado = st.selectbox(
-                "⏰ Selecione o Registro",
-                registro_opcoes
-            )
-            
+        if len(registros) > 1:
+            registro_opcoes = [f"{r['data_hora']} - {r['tipo']}" for r in registros]
+            registro_selecionado = st.selectbox("⏰ Selecione o Registro", registro_opcoes)
             idx = registro_opcoes.index(registro_selecionado)
             registro = registros[idx]
 
             with st.form("solicitar_correcao"):
                 st.markdown("### 📝 Dados Atuais")
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
                     st.info(f"**Data/Hora:** {registro['data_hora']}")
                     st.info(f"**Tipo:** {registro['tipo']}")
-                
+
                 with col2:
                     st.info(f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
                     st.info(f"**Projeto:** {registro['projeto'] or 'N/A'}")
 
                 st.markdown("### ✏️ Correção Solicitada")
-                
                 col1, col2 = st.columns(2)
-                
+
                 with col1:
-                    # Converter data_hora para datetime se for string
                     if isinstance(registro['data_hora'], str):
-                        data_hora_obj = datetime.strptime(registro['data_hora'], "%Y-%m-%d %H:%M:%S")
+                        data_hora_obj = safe_datetime_parse(registro['data_hora'])
                     else:
                         data_hora_obj = registro['data_hora']
-                    
-                    nova_data = st.date_input(
-                        "📅 Nova Data",
-                        value=data_hora_obj.date()
-                    )
-                    
-                    # Campo de texto livre para hora e minuto
+                    data_hora_obj = data_hora_obj or datetime.combine(data_corrigir, time(8, 0))
+
+                    nova_data = st.date_input("📅 Nova Data", value=data_hora_obj.date())
                     nova_hora_input = st.text_input(
                         "🕐 Nova Hora (HH:MM)",
                         value=data_hora_obj.strftime("%H:%M"),
                         help="Digite no formato HH:MM (ex: 08:30, 14:45)"
                     )
-                    
-                    # Mapear tipos do banco para as opções do selectbox
+
                     tipo_mapeamento = {
                         'Início': 'inicio',
                         'Intermediário': 'intermediario',
@@ -4616,18 +4673,11 @@ def solicitar_correcao_registro_interface():
                         'intermediario': 'intermediario',
                         'fim': 'fim'
                     }
-                    
                     tipo_atual = tipo_mapeamento.get(registro['tipo'], 'inicio')
                     tipos_opcoes = ["inicio", "intermediario", "fim"]
-                    
-                    novo_tipo = st.selectbox(
-                        "📋 Novo Tipo",
-                        tipos_opcoes,
-                        index=tipos_opcoes.index(tipo_atual)
-                    )
+                    novo_tipo = st.selectbox("📋 Novo Tipo", tipos_opcoes, index=tipos_opcoes.index(tipo_atual))
 
                 with col2:
-                    # Mapear modalidades do banco para as opções
                     modalidade_mapeamento = {
                         'Presencial': 'presencial',
                         'Home Office': 'home_office',
@@ -4638,16 +4688,14 @@ def solicitar_correcao_registro_interface():
                         None: '',
                         '': ''
                     }
-                    
                     modalidade_atual = modalidade_mapeamento.get(registro['modalidade'], '')
                     modalidades_opcoes = ["", "presencial", "home_office", "campo"]
-                    
                     nova_modalidade = st.selectbox(
                         "🏢 Nova Modalidade",
                         modalidades_opcoes,
                         index=modalidades_opcoes.index(modalidade_atual)
                     )
-                    
+
                     projetos = obter_projetos_ativos()
                     novo_projeto = st.selectbox(
                         "📊 Novo Projeto",
@@ -4661,31 +4709,30 @@ def solicitar_correcao_registro_interface():
                     help="Campo obrigatório"
                 )
 
-                submitted = st.form_submit_button(
-                    "✅ Enviar Solicitação", 
-                    use_container_width=True
-                )
-
+                submitted = st.form_submit_button("✅ Enviar Solicitação", use_container_width=True)
                 if submitted:
                     if not justificativa.strip():
                         st.error("❌ A justificativa é obrigatória")
                     else:
-                        # Validar formato de hora
                         try:
-                            hora_valida = datetime.strptime(nova_hora_input, "%H:%M").time()
+                            datetime.strptime(nova_hora_input, "%H:%M")
                             nova_data_hora = f"{nova_data.strftime('%Y-%m-%d')} {nova_hora_input}:00"
-                            
-                            # Salvar solicitação no banco
-                            if REFACTORING_ENABLED:
-                                query = f"""
+                            conn = get_connection()
+                            try:
+                                cursor = conn.cursor()
+                                cursor.execute(f"""
                                     INSERT INTO solicitacoes_correcao_registro
-                                    (usuario, registro_id, data_hora_original, data_hora_nova, 
+                                    (usuario, registro_id, data_hora_original, data_hora_nova,
                                      tipo_original, tipo_novo, modalidade_original, modalidade_nova,
-                                     projeto_original, projeto_novo, justificativa, status)
-                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'pendente')
-                                """
-                                execute_update(query, (
-                                    st.session_state.usuario,
+                                     projeto_original, projeto_novo, tipo_solicitacao,
+                                     data_referencia, hora_inicio_solicitada, hora_saida_solicitada,
+                                     justificativa, status)
+                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'ajuste_registro',
+                                            {SQL_PLACEHOLDER}, NULL, NULL, {SQL_PLACEHOLDER}, 'pendente')
+                                """, (
+                                    usuario_logado,
                                     registro['id'],
                                     registro['data_hora'],
                                     nova_data_hora,
@@ -4695,89 +4742,149 @@ def solicitar_correcao_registro_interface():
                                     nova_modalidade if nova_modalidade else None,
                                     registro['projeto'],
                                     novo_projeto if novo_projeto else None,
-                                    justificativa
+                                    nova_data.strftime("%Y-%m-%d"),
+                                    justificativa.strip(),
                                 ))
-                                log_security_event("CORRECAO_REGISTRO_REQUESTED", usuario=st.session_state.usuario, context={"registro_id": registro['id'], "data_solicacao": nova_data_hora})
-                            else:
-                                conn = get_connection()
-                                try:
-                                    cursor = conn.cursor()
+                                conn.commit()
+                            finally:
+                                _return_conn(conn)
 
-                                    cursor.execute(f"""
-                                        INSERT INTO solicitacoes_correcao_registro
-                                        (usuario, registro_id, data_hora_original, data_hora_nova, 
-                                         tipo_original, tipo_novo, modalidade_original, modalidade_nova,
-                                         projeto_original, projeto_novo, justificativa, status)
-                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'pendente')
-                                    """, (
-                                        st.session_state.usuario,
-                                        registro['id'],
-                                        registro['data_hora'],
-                                        nova_data_hora,
-                                        registro['tipo'],
-                                        novo_tipo,
-                                        registro['modalidade'],
-                                        nova_modalidade if nova_modalidade else None,
-                                        registro['projeto'],
-                                        novo_projeto if novo_projeto else None,
-                                        justificativa
-                                    ))
-
-                                    conn.commit()
-                                finally:
-                                    _return_conn(conn)
-                            
+                            log_security_event(
+                                "CORRECAO_REGISTRO_REQUESTED",
+                                usuario=usuario_logado,
+                                context={"registro_id": registro['id'], "data_solicacao": nova_data_hora}
+                            )
                             st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
                             st.rerun()
-                            
                         except ValueError:
                             st.error("❌ Formato de hora inválido. Use HH:MM (ex: 08:30)")
+                        except Exception as e:
+                            st.error(f"❌ Erro ao enviar solicitação: {str(e)}")
+
         else:
-            st.info(f"📋 Nenhum registro encontrado para {data_corrigir.strftime('%d/%m/%Y')}")
+            unico_registro = registros[0] if len(registros) == 1 else None
+            if unico_registro:
+                st.warning("⚠️ Este dia possui apenas um registro. Informe início e saída para solicitar complemento.")
+            else:
+                st.info("📋 Nenhum registro encontrado no dia. Você pode solicitar a criação de início e saída.")
+
+            default_inicio = time(8, 0)
+            default_saida = time(17, 0)
+            if unico_registro:
+                dt_unico = safe_datetime_parse(unico_registro.get('data_hora'))
+                tipo_unico = str(unico_registro.get('tipo') or '').strip().lower()
+                if dt_unico:
+                    if tipo_unico in ('início', 'inicio', 'entrada'):
+                        default_inicio = dt_unico.time().replace(second=0, microsecond=0)
+                    elif tipo_unico in ('fim', 'saída', 'saida'):
+                        default_saida = dt_unico.time().replace(second=0, microsecond=0)
+
+            with st.form("solicitar_correcao_complemento"):
+                st.markdown("### 🧩 Complemento de Jornada")
+                col_h1, col_h2 = st.columns(2)
+                with col_h1:
+                    hora_inicio = st.time_input("🕐 Hora de início", value=default_inicio)
+                with col_h2:
+                    hora_saida = st.time_input("🕕 Hora de saída", value=default_saida)
+
+                justificativa = st.text_area(
+                    "📝 Justificativa da Correção *",
+                    placeholder="Explique por que precisa completar/criar os registros deste dia...",
+                    help="Campo obrigatório"
+                )
+
+                submitted_comp = st.form_submit_button("✅ Enviar Solicitação", use_container_width=True)
+                if submitted_comp:
+                    if not justificativa.strip():
+                        st.error("❌ A justificativa é obrigatória")
+                    else:
+                        dt_inicio = datetime.combine(data_corrigir, hora_inicio)
+                        dt_saida = datetime.combine(data_corrigir, hora_saida)
+                        if dt_saida <= dt_inicio:
+                            st.error("❌ A hora de saída deve ser maior que a hora de início")
+                        else:
+                            registro_id_ref = unico_registro['id'] if unico_registro else 0
+                            data_hora_original = unico_registro['data_hora'] if unico_registro else datetime.combine(data_corrigir, time(0, 0))
+                            tipo_original = unico_registro['tipo'] if unico_registro else None
+                            modalidade_original = unico_registro['modalidade'] if unico_registro else None
+                            projeto_original = unico_registro['projeto'] if unico_registro else None
+
+                            conn = get_connection()
+                            try:
+                                cursor = conn.cursor()
+                                cursor.execute(f"""
+                                    INSERT INTO solicitacoes_correcao_registro
+                                    (usuario, registro_id, data_hora_original, data_hora_nova,
+                                     tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                     projeto_original, projeto_novo, tipo_solicitacao,
+                                     data_referencia, hora_inicio_solicitada, hora_saida_solicitada,
+                                     justificativa, status)
+                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'complemento_jornada',
+                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'pendente')
+                                """, (
+                                    usuario_logado,
+                                    registro_id_ref,
+                                    data_hora_original,
+                                    dt_inicio,
+                                    tipo_original,
+                                    'inicio_e_fim',
+                                    modalidade_original,
+                                    modalidade_original,
+                                    projeto_original,
+                                    projeto_original,
+                                    data_ref_str,
+                                    hora_inicio.strftime("%H:%M"),
+                                    hora_saida.strftime("%H:%M"),
+                                    justificativa.strip(),
+                                ))
+                                conn.commit()
+                            finally:
+                                _return_conn(conn)
+
+                            log_security_event(
+                                "CORRECAO_REGISTRO_COMPLEMENTO_REQUESTED",
+                                usuario=usuario_logado,
+                                context={
+                                    "data_referencia": data_ref_str,
+                                    "hora_inicio": hora_inicio.strftime("%H:%M"),
+                                    "hora_saida": hora_saida.strftime("%H:%M"),
+                                }
+                            )
+                            st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
+                            st.rerun()
 
     with tab2:
         st.subheader("📋 Minhas Solicitações de Correção")
         
-        # Buscar solicitações do usuário
         solicitacoes = None
-        
-        if REFACTORING_ENABLED:
-            try:
-                query = f"""
-                    SELECT id, registro_id, data_hora_original, data_hora_nova,
-                           tipo_original, tipo_novo, justificativa, status,
-                           data_solicitacao, aprovado_por, data_aprovacao, observacoes
-                    FROM solicitacoes_correcao_registro
-                    WHERE usuario = {SQL_PLACEHOLDER}
-                    ORDER BY data_solicitacao DESC
-                    LIMIT 50
-                """
-                solicitacoes = execute_query(query, (st.session_state.usuario,))
-            except Exception as e:
-                log_error("Erro ao buscar solicitações de correção", e, {"usuario": st.session_state.usuario})
-                solicitacoes = []
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                cursor.execute(f"""
-                    SELECT id, registro_id, data_hora_original, data_hora_nova,
-                           tipo_original, tipo_novo, justificativa, status,
-                           data_solicitacao, aprovado_por, data_aprovacao, observacoes
-                    FROM solicitacoes_correcao_registro
-                    WHERE usuario = {SQL_PLACEHOLDER}
-                    ORDER BY data_solicitacao DESC
-                    LIMIT 50
-                """, (st.session_state.usuario,))
-
-                solicitacoes = cursor.fetchall()
-            finally:
-                _return_conn(conn)
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                SELECT id, registro_id, data_hora_original, data_hora_nova,
+                       tipo_original, tipo_novo, justificativa, status,
+                       data_solicitacao, aprovado_por, data_aprovacao, observacoes,
+                       COALESCE(tipo_solicitacao, 'ajuste_registro'), data_referencia,
+                       hora_inicio_solicitada, hora_saida_solicitada
+                FROM solicitacoes_correcao_registro
+                WHERE usuario = {SQL_PLACEHOLDER}
+                ORDER BY data_solicitacao DESC
+                LIMIT 50
+            """, (st.session_state.usuario,))
+            solicitacoes = cursor.fetchall()
+        except Exception as e:
+            log_error("Erro ao buscar solicitações de correção", e, {"usuario": st.session_state.usuario})
+            solicitacoes = []
+        finally:
+            _return_conn(conn)
         
         if solicitacoes:
             for sol in solicitacoes:
-                sol_id, reg_id, data_orig, data_nova, tipo_orig, tipo_novo, just, status, data_sol, aprov_por, data_aprov, obs = sol
+                (sol_id, reg_id, data_orig, data_nova, tipo_orig, tipo_novo, just, status,
+                 data_sol, aprov_por, data_aprov, obs, tipo_solicitacao, data_referencia,
+                 hora_inicio_sol, hora_saida_sol) = sol
                 
                 status_emoji = {
                     'pendente': '⏳',
@@ -4785,18 +4892,28 @@ def solicitar_correcao_registro_interface():
                     'rejeitado': '❌'
                 }.get(status, '❓')
                 
-                with st.expander(f"{status_emoji} {data_orig} → {data_nova} - {status.upper()}"):
+                if tipo_solicitacao == 'complemento_jornada':
+                    titulo = f"{status_emoji} {data_referencia} - Complemento de Jornada - {status.upper()}"
+                else:
+                    titulo = f"{status_emoji} {data_orig} → {data_nova} - {status.upper()}"
+
+                with st.expander(titulo):
                     col1, col2 = st.columns(2)
-                    
+
                     with col1:
                         st.write("**Dados Originais:**")
                         st.write(f"- Data/Hora: {data_orig}")
                         st.write(f"- Tipo: {tipo_orig}")
-                    
+
                     with col2:
                         st.write("**Correção Solicitada:**")
-                        st.write(f"- Nova Data/Hora: {data_nova}")
-                        st.write(f"- Novo Tipo: {tipo_novo}")
+                        if tipo_solicitacao == 'complemento_jornada':
+                            st.write(f"- Data: {data_referencia}")
+                            st.write(f"- Hora início: {hora_inicio_sol}")
+                            st.write(f"- Hora saída: {hora_saida_sol}")
+                        else:
+                            st.write(f"- Nova Data/Hora: {data_nova}")
+                            st.write(f"- Novo Tipo: {tipo_novo}")
                     
                     st.write(f"**Justificativa:** {just}")
                     st.write(f"**Solicitado em:** {data_sol}")
@@ -4821,18 +4938,37 @@ def corrigir_registros_interface():
 
     # Selecionar funcionário
     usuarios = obter_usuarios_ativos()
+    opcoes_usuarios = [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios]
+
+    usuario_prefill = st.session_state.get("pendencia_usuario_prefill")
+    data_prefill = st.session_state.get("pendencia_data_prefill")
+
+    idx_padrao = 0
+    if usuario_prefill:
+        for i, opc in enumerate(opcoes_usuarios):
+            if f"({usuario_prefill})" in opc:
+                idx_padrao = i
+                break
+
     usuario_selecionado = st.selectbox(
         "👤 Selecione o Funcionário",
-        [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios]
+        opcoes_usuarios,
+        index=idx_padrao
     )
 
     if usuario_selecionado:
         usuario = usuario_selecionado.split('(')[-1].replace(')', '')
 
         # Selecionar data
+        data_default = date.today()
+        if data_prefill:
+            dt_pref = safe_datetime_parse(data_prefill)
+            if dt_pref:
+                data_default = dt_pref.date()
+
         data_corrigir = st.date_input(
             "📅 Data do Registro",
-            value=date.today(),
+            value=data_default,
             max_value=date.today()
         )
 
@@ -4920,6 +5056,224 @@ def corrigir_registros_interface():
         else:
             st.info(
                 f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
+
+
+def pendencias_ponto_interface():
+    """Painel de inconsistências de ponto para gestores/RH."""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>⚠️ PENDÊNCIAS DE PONTO</h3>
+        <p>Identifique inconsistências nos registros e tome ações rápidas</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        data_inicio = st.date_input("Data inicial", value=date.today() - timedelta(days=7), key="pend_ponto_ini")
+    with col2:
+        data_fim = st.date_input("Data final", value=date.today(), key="pend_ponto_fim")
+    with col3:
+        usuarios_ativos = obter_usuarios_ativos()
+        opcoes = ["Todos"] + [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios_ativos]
+        filtro_usuario = st.selectbox("Funcionário", opcoes, key="pend_ponto_usr")
+
+    if data_inicio > data_fim:
+        st.error("❌ Data inicial não pode ser maior que a data final")
+        return
+
+    usuario_filtrado = None
+    if filtro_usuario != "Todos":
+        usuario_filtrado = filtro_usuario.split("(")[-1].replace(")", "")
+
+    usuarios_mapa = {u["usuario"]: u.get("nome_completo") or u["usuario"] for u in usuarios_ativos}
+    usuarios_considerados = [usuario_filtrado] if usuario_filtrado else sorted(usuarios_mapa.keys())
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+
+        cursor.execute(f"""
+            SELECT usuario, data_referencia, tipo_inconsistencia
+            FROM pendencias_ponto_ignoradas
+            WHERE DATE(data_referencia) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")))
+        ignoradas = {
+            (row[0], str(row[1]), row[2]) for row in cursor.fetchall()
+            if row[0] in usuarios_considerados
+        }
+
+        if usuario_filtrado:
+            cursor.execute(f"""
+                SELECT usuario, DATE(data_hora), data_hora, tipo
+                FROM registros_ponto
+                WHERE usuario = {SQL_PLACEHOLDER}
+                  AND DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+                ORDER BY usuario, data_hora
+            """, (usuario_filtrado, data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")))
+        else:
+            cursor.execute(f"""
+                SELECT usuario, DATE(data_hora), data_hora, tipo
+                FROM registros_ponto
+                WHERE DATE(data_hora) BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+                ORDER BY usuario, data_hora
+            """, (data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")))
+        registros_raw = cursor.fetchall()
+    finally:
+        _return_conn(conn)
+
+    registros_por_dia = {}
+    for usuario, data_ref, data_hora, tipo in registros_raw:
+        if usuario not in usuarios_considerados:
+            continue
+        chave = (usuario, str(data_ref))
+        registros_por_dia.setdefault(chave, []).append((data_hora, tipo))
+
+    pendencias = []
+    total_dias = (data_fim - data_inicio).days + 1
+    for usuario in usuarios_considerados:
+        for i in range(total_dias):
+            dia = data_inicio + timedelta(days=i)
+            dia_str = dia.strftime("%Y-%m-%d")
+            key = (usuario, dia_str)
+            registros = registros_por_dia.get(key, [])
+
+            if not registros:
+                tipo_inc = "dia_sem_registro"
+                if (usuario, dia_str, tipo_inc) not in ignoradas:
+                    pendencias.append({
+                        "usuario": usuario,
+                        "nome": usuarios_mapa.get(usuario, usuario),
+                        "data": dia_str,
+                        "tipo": "Dia sem nenhum registro",
+                        "tipo_key": tipo_inc,
+                        "horas": None,
+                    })
+                continue
+
+            qtd_inicio = 0
+            qtd_fim = 0
+            primeiro_inicio = None
+            ultimo_fim = None
+            for data_hora, tipo in sorted(registros, key=lambda x: safe_datetime_parse(x[0])):
+                dt = safe_datetime_parse(data_hora)
+                tipo_norm = normalizar_tipo_ponto(tipo)
+                if tipo_norm == "inicio":
+                    qtd_inicio += 1
+                    if primeiro_inicio is None:
+                        primeiro_inicio = dt
+                elif tipo_norm == "fim":
+                    qtd_fim += 1
+                    ultimo_fim = dt
+
+            horas = None
+            if primeiro_inicio and ultimo_fim and ultimo_fim > primeiro_inicio:
+                horas = round((ultimo_fim - primeiro_inicio).total_seconds() / 3600, 2)
+
+            if qtd_inicio > qtd_fim:
+                tipo_inc = "entrada_sem_saida"
+                if (usuario, dia_str, tipo_inc) not in ignoradas:
+                    pendencias.append({
+                        "usuario": usuario,
+                        "nome": usuarios_mapa.get(usuario, usuario),
+                        "data": dia_str,
+                        "tipo": "Entrada registrada sem saída",
+                        "tipo_key": tipo_inc,
+                        "horas": horas,
+                    })
+            elif qtd_fim > qtd_inicio:
+                tipo_inc = "saida_sem_entrada"
+                if (usuario, dia_str, tipo_inc) not in ignoradas:
+                    pendencias.append({
+                        "usuario": usuario,
+                        "nome": usuarios_mapa.get(usuario, usuario),
+                        "data": dia_str,
+                        "tipo": "Saída registrada sem entrada",
+                        "tipo_key": tipo_inc,
+                        "horas": horas,
+                    })
+
+            if horas is not None and horas > 12:
+                tipo_inc = "horas_muito_altas"
+                if (usuario, dia_str, tipo_inc) not in ignoradas:
+                    pendencias.append({
+                        "usuario": usuario,
+                        "nome": usuarios_mapa.get(usuario, usuario),
+                        "data": dia_str,
+                        "tipo": "Horas trabalhadas muito altas (>12h)",
+                        "tipo_key": tipo_inc,
+                        "horas": horas,
+                    })
+
+    if not pendencias:
+        st.success("✅ Nenhuma pendência encontrada no período")
+        return
+
+    df = pd.DataFrame([
+        {
+            "Funcionário": p["nome"],
+            "Data": p["data"],
+            "Tipo de inconsistência": p["tipo"],
+            "Horas registradas": p["horas"] if p["horas"] is not None else "-",
+            "Ação": "Selecionar abaixo",
+        }
+        for p in pendencias
+    ])
+    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.caption(f"Total de inconsistências encontradas: {len(pendencias)}")
+
+    st.markdown("### Ações")
+    for idx, pend in enumerate(pendencias, start=1):
+        titulo = f"{idx}. {pend['nome']} | {pend['data']} | {pend['tipo']}"
+        with st.expander(titulo):
+            col_a, col_b, col_c = st.columns(3)
+
+            with col_a:
+                if st.button("📨 Solicitar correção", key=f"acao_solicitar_{idx}"):
+                    try:
+                        from push_scheduler import enviar_mensagem_direta
+                        msg = (
+                            f"Identificamos uma pendência de ponto em {pend['data']}: {pend['tipo']}. "
+                            "Por favor, acesse a tela de Solicitar Correção de Registro e regularize o dia."
+                        )
+                        ok = enviar_mensagem_direta(st.session_state.usuario, pend["usuario"], msg)
+                        if ok:
+                            st.success("✅ Solicitação enviada ao funcionário")
+                        else:
+                            st.warning("⚠️ Não foi possível enviar mensagem automática")
+                    except Exception as e:
+                        st.error(f"❌ Erro ao solicitar correção: {str(e)}")
+
+            with col_b:
+                if st.button("🔧 Corrigir registro", key=f"acao_corrigir_{idx}"):
+                    st.session_state.pendencia_usuario_prefill = pend["usuario"]
+                    st.session_state.pendencia_data_prefill = pend["data"]
+                    st.session_state.ir_para_corrigir_registros = True
+                    st.rerun()
+
+            with col_c:
+                if st.button("🙈 Ignorar", key=f"acao_ignorar_{idx}"):
+                    conn = get_connection()
+                    try:
+                        cursor = conn.cursor()
+                        cursor.execute(f"""
+                            INSERT INTO pendencias_ponto_ignoradas
+                            (usuario, data_referencia, tipo_inconsistencia, ignorado_por, motivo)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        """, (
+                            pend["usuario"],
+                            pend["data"],
+                            pend["tipo_key"],
+                            st.session_state.usuario,
+                            "Ignorado no painel de pendências",
+                        ))
+                        conn.commit()
+                        st.success("✅ Pendência ignorada")
+                        st.rerun()
+                    except Exception as e:
+                        conn.rollback()
+                        st.error(f"❌ Erro ao ignorar pendência: {str(e)}")
+                    finally:
+                        _return_conn(conn)
 
 
 def meus_registros_interface(calculo_horas_system):
@@ -5272,6 +5626,7 @@ def tela_gestor():
         opcoes_menu = [
             "📊 Dashboard",
             "👥 Todos os Registros",
+            "⚠️ Pendências de Ponto",
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
             "📈 Relatórios",
@@ -5379,11 +5734,21 @@ def tela_gestor():
                 del st.session_state[key]
             st.rerun()
 
+    if st.session_state.get('ir_para_corrigir_registros'):
+        del st.session_state.ir_para_corrigir_registros
+        for i, opt in enumerate(opcoes_menu):
+            if opt.startswith("🔧 Corrigir Registros"):
+                opcao = opt
+                st.session_state.menu_gestor_index = i
+                break
+
     # Conteúdo baseado na opção
     if opcao == "📊 Dashboard":
         dashboard_gestor(banco_horas_system, calculo_horas_system)
     elif opcao.startswith("👥 Todos os Registros"):
         todos_registros_interface(calculo_horas_system)
+    elif opcao.startswith("⚠️ Pendências de Ponto"):
+        pendencias_ponto_interface()
     elif opcao.startswith("✅ Aprovar Atestados"):
         aprovar_atestados_interface(atestado_system)
     elif opcao.startswith("🕐 Aprovar Horas Extras"):
@@ -6348,53 +6713,43 @@ def aprovar_correcoes_registros_interface():
     with tab1:
         st.markdown("### ⏳ Correções Aguardando Aprovação")
 
-        # Buscar correções pendentes
         pendentes = None
-        
-        if REFACTORING_ENABLED:
-            try:
-                query_pendentes = """
-                    SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
-                           c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
-                           c.projeto_original, c.projeto_novo, c.justificativa, 
-                           c.data_solicitacao, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'pendente'
-                    ORDER BY c.data_solicitacao DESC
-                """
-                pendentes = execute_query(query_pendentes)
-            except Exception as e:
-                log_error("Erro ao buscar correções de registros pendentes", e, {"status": "pendente"})
-                pendentes = []
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                cursor.execute("""
-                    SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
-                           c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
-                           c.projeto_original, c.projeto_novo, c.justificativa, 
-                           c.data_solicitacao, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'pendente'
-                    ORDER BY c.data_solicitacao DESC
-                """)
-                pendentes = cursor.fetchall()
-            finally:
-                _return_conn(conn)
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                       c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                       c.projeto_original, c.projeto_novo, c.justificativa,
+                       c.data_solicitacao, u.nome_completo,
+                       COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                       c.hora_inicio_solicitada, c.hora_saida_solicitada
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+            """)
+            pendentes = cursor.fetchall()
+        finally:
+            _return_conn(conn)
 
         if pendentes:
             st.info(f"📋 {len(pendentes)} solicitação(ões) aguardando aprovação")
 
             for correcao in pendentes:
-                (correcao_id, usuario, registro_id, dt_original, dt_nova, 
+                (correcao_id, usuario, registro_id, dt_original, dt_nova,
                  tipo_orig, tipo_novo, mod_orig, mod_nova, proj_orig, proj_novo,
-                 justificativa, data_solicitacao, nome_completo) = correcao
+                 justificativa, data_solicitacao, nome_completo,
+                 tipo_solicitacao, data_referencia, hora_inicio_sol, hora_saida_sol) = correcao
 
-                with st.expander(f"⏳ {nome_completo or usuario} - {safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')}"):
+                if tipo_solicitacao == 'complemento_jornada':
+                    titulo = f"⏳ {nome_completo or usuario} - {data_referencia} (Complemento de Jornada)"
+                else:
+                    dt_base = safe_datetime_parse(dt_original)
+                    titulo_data = dt_base.strftime('%d/%m/%Y %H:%M') if dt_base else str(dt_original)
+                    titulo = f"⏳ {nome_completo or usuario} - {titulo_data}"
+
+                with st.expander(titulo):
                     col1, col2 = st.columns([2, 1])
 
                     with col1:
@@ -6403,24 +6758,25 @@ def aprovar_correcoes_registros_interface():
                         
                         st.markdown("---")
                         st.markdown("### 🔄 Alterações Solicitadas")
-                        
-                        # Data/Hora
-                        if dt_original != dt_nova:
-                            dt_orig_fmt = safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')
-                            dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
-                            st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
-                        
-                        # Tipo
-                        if tipo_orig != tipo_novo:
-                            st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
-                        
-                        # Modalidade
-                        if mod_orig != mod_nova:
-                            st.markdown(f"**Modalidade:** `{mod_orig or 'N/A'}` → `{mod_nova or 'N/A'}`")
-                        
-                        # Projeto
-                        if proj_orig != proj_novo:
-                            st.markdown(f"**Projeto:** `{proj_orig or 'N/A'}` → `{proj_novo or 'N/A'}`")
+                        if tipo_solicitacao == 'complemento_jornada':
+                            st.markdown(f"**Data:** `{data_referencia}`")
+                            st.markdown(f"**Hora de início solicitada:** `{hora_inicio_sol}`")
+                            st.markdown(f"**Hora de saída solicitada:** `{hora_saida_sol}`")
+                            if dt_original:
+                                st.markdown(f"**Registro original existente:** `{dt_original}` ({tipo_orig or 'N/A'})")
+                        else:
+                            if dt_original != dt_nova:
+                                dt_orig_dt = safe_datetime_parse(dt_original)
+                                dt_nova_dt = safe_datetime_parse(dt_nova)
+                                dt_orig_fmt = dt_orig_dt.strftime('%d/%m/%Y %H:%M') if dt_orig_dt else str(dt_original)
+                                dt_nova_fmt = dt_nova_dt.strftime('%d/%m/%Y %H:%M') if dt_nova_dt else str(dt_nova)
+                                st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                            if tipo_orig != tipo_novo:
+                                st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
+                            if mod_orig != mod_nova:
+                                st.markdown(f"**Modalidade:** `{mod_orig or 'N/A'}` → `{mod_nova or 'N/A'}`")
+                            if proj_orig != proj_novo:
+                                st.markdown(f"**Projeto:** `{proj_orig or 'N/A'}` → `{proj_novo or 'N/A'}`")
                         
                         st.markdown("---")
                         st.markdown("**Justificativa:**")
@@ -6445,50 +6801,221 @@ def aprovar_correcoes_registros_interface():
                         with col_a:
                             if st.button("✅ Aprovar", key=f"aprovar_corr_{correcao_id}", use_container_width=True, type="primary"):
                                 try:
-                                    if REFACTORING_ENABLED:
-                                        # Atualizar registro original com novos dados
-                                        query_update_registro = f"""
-                                            UPDATE registros_ponto 
-                                            SET data_hora = {SQL_PLACEHOLDER}, tipo = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
-                                            WHERE id = {SQL_PLACEHOLDER}
-                                        """
-                                        execute_update(query_update_registro, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
-                                        
-                                        # Marcar correção como aprovada
-                                        query_update_correcao = f"""
-                                            UPDATE solicitacoes_correcao_registro
-                                            SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, 
-                                                data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
-                                            WHERE id = {SQL_PLACEHOLDER}
-                                        """
-                                        execute_update(query_update_correcao, (st.session_state.usuario, observacoes, correcao_id))
-                                        
-                                        log_security_event("CORRECAO_REGISTRO_APPROVED", usuario=st.session_state.usuario, context={"correcao_id": correcao_id, "funcionario": usuario, "registro_id": registro_id})
-                                    else:
-                                        conn = get_connection()
-                                        try:
-                                            cursor = conn.cursor()
+                                    conn = get_connection()
+                                    try:
+                                        cursor = conn.cursor()
+                                        affected_ids = []
 
-                                            # Atualizar registro original com novos dados
+                                        data_alvo_auditoria = None
+                                        if tipo_solicitacao == 'complemento_jornada' and data_referencia:
+                                            data_alvo_auditoria = str(data_referencia)
+                                        else:
+                                            dt_aud = safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_original)
+                                            if dt_aud:
+                                                data_alvo_auditoria = dt_aud.strftime("%Y-%m-%d")
+
+                                        entrada_orig = saida_orig = None
+                                        if data_alvo_auditoria:
+                                            entrada_orig, saida_orig, _ = obter_entrada_saida_dia_cursor(
+                                                cursor, usuario, data_alvo_auditoria
+                                            )
+
+                                        if tipo_solicitacao == 'complemento_jornada':
+                                            if not data_referencia or not hora_inicio_sol or not hora_saida_sol:
+                                                raise ValueError("Solicitação de complemento inválida: campos obrigatórios ausentes")
+
+                                            dt_inicio_aprovado = datetime.strptime(f"{data_referencia} {hora_inicio_sol}", "%Y-%m-%d %H:%M")
+                                            dt_saida_aprovado = datetime.strptime(f"{data_referencia} {hora_saida_sol}", "%Y-%m-%d %H:%M")
+                                            if dt_saida_aprovado <= dt_inicio_aprovado:
+                                                raise ValueError("Hora de saída deve ser maior que hora de início")
+
                                             cursor.execute(f"""
-                                                UPDATE registros_ponto 
+                                                SELECT id, data_hora, tipo, modalidade, projeto, atividade
+                                                FROM registros_ponto
+                                                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                                                ORDER BY data_hora ASC
+                                            """, (usuario, data_referencia))
+                                            registros_dia = cursor.fetchall()
+
+                                            modalidade_base = mod_nova or mod_orig
+                                            projeto_base = proj_novo or proj_orig
+                                            atividade_base = None
+
+                                            if len(registros_dia) == 0:
+                                                cursor.execute(f"""
+                                                    INSERT INTO registros_ponto
+                                                    (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'inicio', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                """, (
+                                                    usuario,
+                                                    dt_inicio_aprovado,
+                                                    modalidade_base,
+                                                    projeto_base,
+                                                    atividade_base,
+                                                    "Registro criado via aprovação de complemento"
+                                                ))
+                                                cursor.execute(f"""
+                                                    INSERT INTO registros_ponto
+                                                    (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'fim', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                """, (
+                                                    usuario,
+                                                    dt_saida_aprovado,
+                                                    modalidade_base,
+                                                    projeto_base,
+                                                    atividade_base,
+                                                    "Registro criado via aprovação de complemento"
+                                                ))
+                                            elif len(registros_dia) == 1:
+                                                reg_id, _, tipo_existente, mod_existente, proj_existente, atividade_existente = registros_dia[0]
+                                                tipo_existente = str(tipo_existente or '').strip().lower()
+                                                modalidade_base = mod_existente or modalidade_base
+                                                projeto_base = proj_existente or projeto_base
+                                                atividade_base = atividade_existente
+
+                                                if tipo_existente in ('início', 'inicio', 'entrada'):
+                                                    cursor.execute(f"""
+                                                        UPDATE registros_ponto
+                                                        SET data_hora = {SQL_PLACEHOLDER}, tipo = 'inicio', modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                                                        WHERE id = {SQL_PLACEHOLDER}
+                                                    """, (dt_inicio_aprovado, modalidade_base, projeto_base, reg_id))
+                                                    affected_ids.append(reg_id)
+                                                    cursor.execute(f"""
+                                                        INSERT INTO registros_ponto
+                                                        (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'fim', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                    """, (
+                                                        usuario,
+                                                        dt_saida_aprovado,
+                                                        modalidade_base,
+                                                        projeto_base,
+                                                        atividade_base,
+                                                        "Registro criado via aprovação de complemento"
+                                                    ))
+                                                elif tipo_existente in ('fim', 'saída', 'saida'):
+                                                    cursor.execute(f"""
+                                                        UPDATE registros_ponto
+                                                        SET data_hora = {SQL_PLACEHOLDER}, tipo = 'fim', modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+                                                        WHERE id = {SQL_PLACEHOLDER}
+                                                    """, (dt_saida_aprovado, modalidade_base, projeto_base, reg_id))
+                                                    affected_ids.append(reg_id)
+                                                    cursor.execute(f"""
+                                                        INSERT INTO registros_ponto
+                                                        (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'inicio', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                    """, (
+                                                        usuario,
+                                                        dt_inicio_aprovado,
+                                                        modalidade_base,
+                                                        projeto_base,
+                                                        atividade_base,
+                                                        "Registro criado via aprovação de complemento"
+                                                    ))
+                                                else:
+                                                    cursor.execute(f"""
+                                                        INSERT INTO registros_ponto
+                                                        (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'inicio', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                    """, (
+                                                        usuario,
+                                                        dt_inicio_aprovado,
+                                                        modalidade_base,
+                                                        projeto_base,
+                                                        atividade_base,
+                                                        "Registro criado via aprovação de complemento"
+                                                    ))
+                                                    cursor.execute(f"""
+                                                        INSERT INTO registros_ponto
+                                                        (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao)
+                                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'fim', {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                    """, (
+                                                        usuario,
+                                                        dt_saida_aprovado,
+                                                        modalidade_base,
+                                                        projeto_base,
+                                                        atividade_base,
+                                                        "Registro criado via aprovação de complemento"
+                                                    ))
+                                            else:
+                                                # Se já houver múltiplos registros, ajusta apenas o primeiro início e o último fim.
+                                                inicio_id = None
+                                                fim_id = None
+                                                for reg in registros_dia:
+                                                    reg_tipo = str(reg[2] or '').strip().lower()
+                                                    if reg_tipo in ('início', 'inicio', 'entrada') and inicio_id is None:
+                                                        inicio_id = reg[0]
+                                                    if reg_tipo in ('fim', 'saída', 'saida'):
+                                                        fim_id = reg[0]
+
+                                                if inicio_id is None:
+                                                    inicio_id = registros_dia[0][0]
+                                                if fim_id is None:
+                                                    fim_id = registros_dia[-1][0]
+
+                                                cursor.execute(f"""
+                                                    UPDATE registros_ponto
+                                                    SET data_hora = {SQL_PLACEHOLDER}, tipo = 'inicio'
+                                                    WHERE id = {SQL_PLACEHOLDER}
+                                                """, (dt_inicio_aprovado, inicio_id))
+                                                cursor.execute(f"""
+                                                    UPDATE registros_ponto
+                                                    SET data_hora = {SQL_PLACEHOLDER}, tipo = 'fim'
+                                                    WHERE id = {SQL_PLACEHOLDER}
+                                                """, (dt_saida_aprovado, fim_id))
+                                                affected_ids.extend([inicio_id, fim_id])
+
+                                            # Recalcular após a correção aprovada (sem alterar a regra atual de cálculo)
+                                            try:
+                                                CalculoHorasSystem().calcular_horas_dia(usuario, data_referencia)
+                                                BancoHorasSystem().calcular_banco_horas(usuario, data_referencia, data_referencia)
+                                            except Exception as recalc_err:
+                                                logger.warning(f"Falha no recálculo pós-aprovação da correção {correcao_id}: {recalc_err}")
+                                        else:
+                                            cursor.execute(f"""
+                                                UPDATE registros_ponto
                                                 SET data_hora = {SQL_PLACEHOLDER}, tipo = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
                                                 WHERE id = {SQL_PLACEHOLDER}
                                             """, (dt_nova, tipo_novo, mod_nova, proj_novo, registro_id))
 
-                                            # Marcar correção como aprovada
-                                            cursor.execute(f"""
-                                                UPDATE solicitacoes_correcao_registro
-                                                SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER}, 
-                                                    data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
-                                                WHERE id = {SQL_PLACEHOLDER}
-                                            """, (st.session_state.usuario, observacoes, correcao_id))
+                                        cursor.execute(f"""
+                                            UPDATE solicitacoes_correcao_registro
+                                            SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER},
+                                                data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
+                                            WHERE id = {SQL_PLACEHOLDER}
+                                        """, (st.session_state.usuario, observacoes, correcao_id))
 
-                                            conn.commit()
-                                        finally:
-                                            _return_conn(conn)
+                                        if data_alvo_auditoria:
+                                            entrada_corr, saida_corr, _ = obter_entrada_saida_dia_cursor(
+                                                cursor, usuario, data_alvo_auditoria
+                                            )
+                                            registrar_auditoria_alteracao_ponto_cursor(
+                                                cursor,
+                                                usuario_afetado=usuario,
+                                                data_registro=data_alvo_auditoria,
+                                                entrada_original=entrada_orig,
+                                                saida_original=saida_orig,
+                                                entrada_corrigida=entrada_corr,
+                                                saida_corrigida=saida_corr,
+                                                tipo_alteracao=(
+                                                    "aprovacao_complemento_jornada"
+                                                    if tipo_solicitacao == 'complemento_jornada'
+                                                    else "aprovacao_correcao_registro"
+                                                ),
+                                                realizado_por=st.session_state.usuario,
+                                                justificativa=justificativa,
+                                                detalhes=observacoes,
+                                            )
+
+                                        conn.commit()
+                                    finally:
+                                        _return_conn(conn)
                                     
                                     st.success("✅ Correção aprovada e registro atualizado!")
+                                    log_security_event(
+                                        "CORRECAO_REGISTRO_APPROVED",
+                                        usuario=st.session_state.usuario,
+                                        context={"correcao_id": correcao_id, "funcionario": usuario, "registro_id": registro_id, "tipo": tipo_solicitacao}
+                                    )
                                     st.rerun()
                                     
                                 except Exception as e:
@@ -6515,30 +7042,19 @@ def aprovar_correcoes_registros_interface():
                                         st.error("❌ Motivo é obrigatório!")
                                     else:
                                         try:
-                                            if REFACTORING_ENABLED:
-                                                query_reject = f"""
+                                            conn = get_connection()
+                                            try:
+                                                cursor = conn.cursor()
+                                                cursor.execute(f"""
                                                     UPDATE solicitacoes_correcao_registro
                                                     SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER},
-                                                        data_aprovacao = CURRENT_TIMESTAMP, observacoes = %s
+                                                        data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
                                                     WHERE id = {SQL_PLACEHOLDER}
-                                                """
-                                                execute_update(query_reject, (st.session_state.usuario, motivo, correcao_id))
-                                                log_security_event("CORRECAO_REGISTRO_REJECTED", usuario=st.session_state.usuario, context={"correcao_id": correcao_id, "funcionario": usuario, "motivo": motivo})
-                                            else:
-                                                conn = get_connection()
-                                                try:
-                                                    cursor = conn.cursor()
-
-                                                    cursor.execute(f"""
-                                                        UPDATE solicitacoes_correcao_registro
-                                                        SET status = 'rejeitado', aprovado_por = {SQL_PLACEHOLDER},
-                                                            data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
-                                                        WHERE id = {SQL_PLACEHOLDER}
-                                                    """, (st.session_state.usuario, motivo, correcao_id))
-
-                                                    conn.commit()
-                                                finally:
-                                                    _return_conn(conn)
+                                                """, (st.session_state.usuario, motivo, correcao_id))
+                                                conn.commit()
+                                            finally:
+                                                _return_conn(conn)
+                                            log_security_event("CORRECAO_REGISTRO_REJECTED", usuario=st.session_state.usuario, context={"correcao_id": correcao_id, "funcionario": usuario, "motivo": motivo})
                                             
                                             st.success("❌ Correção rejeitada")
                                             del st.session_state[f'confirm_reject_corr_{correcao_id}']
@@ -6558,63 +7074,57 @@ def aprovar_correcoes_registros_interface():
         st.markdown("### ✅ Correções Aprovadas")
         
         aprovadas = None
-        
-        if REFACTORING_ENABLED:
-            try:
-                query_aprovadas = """
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                           c.tipo_original, c.tipo_novo, c.data_solicitacao, 
-                           c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'aprovado'
-                    ORDER BY c.data_aprovacao DESC
-                    LIMIT 50
-                """
-                aprovadas = execute_query(query_aprovadas)
-            except Exception as e:
-                log_error("Erro ao buscar correções de registros aprovadas", e, {"status": "aprovado"})
-                aprovadas = []
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                cursor.execute("""
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                           c.tipo_original, c.tipo_novo, c.data_solicitacao, 
-                           c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'aprovado'
-                    ORDER BY c.data_aprovacao DESC
-                    LIMIT 50
-                """)
-                aprovadas = cursor.fetchall()
-            finally:
-                _return_conn(conn)
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.tipo_original, c.tipo_novo, c.data_solicitacao,
+                       c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo,
+                       COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                       c.hora_inicio_solicitada, c.hora_saida_solicitada
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'aprovado'
+                ORDER BY c.data_aprovacao DESC
+                LIMIT 50
+            """)
+            aprovadas = cursor.fetchall()
+        finally:
+            _return_conn(conn)
         
         if aprovadas:
             st.info(f"✅ {len(aprovadas)} correção(ões) aprovada(s)")
             
             for correcao in aprovadas:
                 (correcao_id, usuario, dt_original, dt_nova, tipo_orig, tipo_novo,
-                 data_solicitacao, data_aprovacao, aprovado_por, observacoes, nome_completo) = correcao
-                
-                with st.expander(f"✅ {nome_completo or usuario} - {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y')}"):
+                 data_solicitacao, data_aprovacao, aprovado_por, observacoes, nome_completo,
+                 tipo_solicitacao, data_referencia, hora_inicio_sol, hora_saida_sol) = correcao
+
+                dt_aprov = safe_datetime_parse(data_aprovacao)
+                dt_aprov_titulo = dt_aprov.strftime('%d/%m/%Y') if dt_aprov else str(data_aprovacao)
+                with st.expander(f"✅ {nome_completo or usuario} - {dt_aprov_titulo}"):
                     col1, col2 = st.columns(2)
                     
                     with col1:
                         st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                        dt_orig_fmt = safe_datetime_parse(dt_original).strftime('%d/%m/%Y %H:%M')
-                        dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
-                        st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
-                        if tipo_orig != tipo_novo:
-                            st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
+                        if tipo_solicitacao == 'complemento_jornada':
+                            st.markdown(f"**Tipo de solicitação:** Complemento de jornada")
+                            st.markdown(f"**Data:** `{data_referencia}`")
+                            st.markdown(f"**Horas aprovadas:** `{hora_inicio_sol}` às `{hora_saida_sol}`")
+                        else:
+                            dt_orig_dt = safe_datetime_parse(dt_original)
+                            dt_nova_dt = safe_datetime_parse(dt_nova)
+                            dt_orig_fmt = dt_orig_dt.strftime('%d/%m/%Y %H:%M') if dt_orig_dt else str(dt_original)
+                            dt_nova_fmt = dt_nova_dt.strftime('%d/%m/%Y %H:%M') if dt_nova_dt else str(dt_nova)
+                            st.markdown(f"**Data/Hora:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                            if tipo_orig != tipo_novo:
+                                st.markdown(f"**Tipo:** `{tipo_orig}` → `{tipo_novo}`")
                     
                     with col2:
                         st.markdown(f"**Aprovado por:** {aprovado_por}")
-                        st.markdown(f"**Data aprovação:** {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y %H:%M')}")
+                        dt_aprov_fmt = dt_aprov.strftime('%d/%m/%Y %H:%M') if dt_aprov else str(data_aprovacao)
+                        st.markdown(f"**Data aprovação:** {dt_aprov_fmt}")
                         if observacoes:
                             st.markdown(f"**Observações:** {observacoes}")
         else:
@@ -6624,53 +7134,41 @@ def aprovar_correcoes_registros_interface():
         st.markdown("### ❌ Correções Rejeitadas")
         
         rejeitadas = None
-        
-        if REFACTORING_ENABLED:
-            try:
-                query_rejeitadas = """
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                           c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
-                           c.observacoes, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'rejeitado'
-                    ORDER BY c.data_aprovacao DESC
-                    LIMIT 50
-                """
-                rejeitadas = execute_query(query_rejeitadas)
-            except Exception as e:
-                log_error("Erro ao buscar correções de registros rejeitadas", e, {"status": "rejeitado"})
-                rejeitadas = []
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                cursor.execute("""
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                           c.data_solicitacao, c.data_aprovacao, c.aprovado_por, 
-                           c.observacoes, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'rejeitado'
-                    ORDER BY c.data_aprovacao DESC
-                    LIMIT 50
-                """)
-                rejeitadas = cursor.fetchall()
-            finally:
-                _return_conn(conn)
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            cursor.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.data_solicitacao, c.data_aprovacao, c.aprovado_por,
+                       c.observacoes, u.nome_completo, COALESCE(c.tipo_solicitacao, 'ajuste_registro'),
+                       c.data_referencia
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'rejeitado'
+                ORDER BY c.data_aprovacao DESC
+                LIMIT 50
+            """)
+            rejeitadas = cursor.fetchall()
+        finally:
+            _return_conn(conn)
         
         if rejeitadas:
             st.warning(f"❌ {len(rejeitadas)} correção(ões) rejeitada(s)")
             
             for correcao in rejeitadas:
                 (correcao_id, usuario, dt_original, dt_nova, data_solicitacao,
-                 data_rejeicao, rejeitado_por, motivo, nome_completo) = correcao
-                
-                with st.expander(f"❌ {nome_completo or usuario} - {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y')}"):
+                 data_rejeicao, rejeitado_por, motivo, nome_completo, tipo_solicitacao,
+                 data_referencia) = correcao
+
+                dt_rej = safe_datetime_parse(data_rejeicao)
+                dt_rej_titulo = dt_rej.strftime('%d/%m/%Y') if dt_rej else str(data_rejeicao)
+                with st.expander(f"❌ {nome_completo or usuario} - {dt_rej_titulo}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
+                    if tipo_solicitacao == 'complemento_jornada':
+                        st.markdown(f"**Tipo de solicitação:** Complemento de jornada ({data_referencia})")
                     st.markdown(f"**Rejeitado por:** {rejeitado_por}")
-                    st.markdown(f"**Data rejeição:** {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y %H:%M')}")
+                    dt_rej_fmt = dt_rej.strftime('%d/%m/%Y %H:%M') if dt_rej else str(data_rejeicao)
+                    st.markdown(f"**Data rejeição:** {dt_rej_fmt}")
                     st.markdown(f"**Motivo:** {motivo}")
         else:
             st.info("📋 Nenhuma correção rejeitada")
@@ -10710,68 +11208,83 @@ def buscar_registros_dia(usuario, data):
 
 def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor):
     """Corrige um registro de ponto existente"""
-    if REFACTORING_ENABLED:
-        try:
-            # Verificar se o registro existe
-            check_query = f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}"
-            result = execute_query(check_query, (registro_id,), fetch_one=True)
-            if not result:
-                return {"success": False, "message": "Registro não encontrado"}
+    conn = get_connection()
+    cursor = conn.cursor()
 
-            # Atualizar registro
-            update_query = f"""
-                UPDATE registros_ponto 
-                SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
-                WHERE id = {SQL_PLACEHOLDER}
-            """
-            execute_update(update_query, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
+    try:
+        cursor.execute(
+            f"SELECT usuario, data_hora FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}",
+            (registro_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {"success": False, "message": "Registro não encontrado"}
 
-            # Registrar auditoria da correção
-            audit_query = f"""
-                INSERT INTO auditoria_correcoes 
-                (registro_id, gestor, justificativa, data_correcao)
-                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
-            """
-            execute_update(audit_query, (registro_id, gestor, justificativa))
+        usuario_afetado, data_hora_antiga = row
+        data_antiga = safe_datetime_parse(data_hora_antiga).strftime("%Y-%m-%d")
 
-            log_security_event("RECORD_CORRECTION", usuario=gestor, context={"registro_id": registro_id, "tipo": novo_tipo})
-            return {"success": True, "message": "Registro corrigido com sucesso"}
-        except Exception as e:
-            log_error("Erro ao corrigir registro", e, {"registro_id": registro_id, "gestor": gestor})
-            return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
-    else:
-        # Fallback original
-        conn = get_connection()
-        cursor = conn.cursor()
+        nova_data_hora_dt = safe_datetime_parse(nova_data_hora)
+        if not nova_data_hora_dt:
+            return {"success": False, "message": "Nova data/hora inválida"}
+        data_nova = nova_data_hora_dt.strftime("%Y-%m-%d")
 
-        try:
-            # Verificar se o registro existe
-            cursor.execute(
-                f"SELECT id FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
-            if not cursor.fetchone():
-                return {"success": False, "message": "Registro não encontrado"}
+        entrada_orig_ant, saida_orig_ant, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_antiga)
+        entrada_orig_nova, saida_orig_nova, _ = (None, None, None)
+        if data_nova != data_antiga:
+            entrada_orig_nova, saida_orig_nova, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_nova)
 
-            # Atualizar registro
-            cursor.execute(f"""
-                UPDATE registros_ponto 
-                SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
-                WHERE id = {SQL_PLACEHOLDER}
-            """, (novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, registro_id))
+        cursor.execute(f"""
+            UPDATE registros_ponto
+            SET tipo = {SQL_PLACEHOLDER}, data_hora = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
+            WHERE id = {SQL_PLACEHOLDER}
+        """, (novo_tipo, nova_data_hora_dt, nova_modalidade, novo_projeto, registro_id))
 
-            # Registrar auditoria da correção
-            cursor.execute(f"""
-                INSERT INTO auditoria_correcoes 
-                (registro_id, gestor, justificativa, data_correcao)
-                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
-            """, (registro_id, gestor, justificativa))
+        cursor.execute(f"""
+            INSERT INTO auditoria_correcoes
+            (registro_id, gestor, justificativa, data_correcao)
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+        """, (registro_id, gestor, justificativa))
 
-            conn.commit()
-            return {"success": True, "message": "Registro corrigido com sucesso"}
-        except Exception as e:
-            conn.rollback()
-            return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
-        finally:
-            _return_conn(conn)
+        entrada_corr_ant, saida_corr_ant, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_antiga)
+        registrar_auditoria_alteracao_ponto_cursor(
+            cursor,
+            usuario_afetado=usuario_afetado,
+            data_registro=data_antiga,
+            entrada_original=entrada_orig_ant,
+            saida_original=saida_orig_ant,
+            entrada_corrigida=entrada_corr_ant,
+            saida_corrigida=saida_corr_ant,
+            tipo_alteracao="correcao_registro_manual",
+            realizado_por=gestor,
+            justificativa=justificativa,
+            detalhes=f"Registro ID {registro_id} ajustado para tipo {novo_tipo}",
+        )
+
+        if data_nova != data_antiga:
+            entrada_corr_nova, saida_corr_nova, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_nova)
+            registrar_auditoria_alteracao_ponto_cursor(
+                cursor,
+                usuario_afetado=usuario_afetado,
+                data_registro=data_nova,
+                entrada_original=entrada_orig_nova,
+                saida_original=saida_orig_nova,
+                entrada_corrigida=entrada_corr_nova,
+                saida_corrigida=saida_corr_nova,
+                tipo_alteracao="correcao_registro_manual",
+                realizado_por=gestor,
+                justificativa=justificativa,
+                detalhes=f"Registro ID {registro_id} movido para nova data",
+            )
+
+        conn.commit()
+        log_security_event("RECORD_CORRECTION", usuario=gestor, context={"registro_id": registro_id, "tipo": novo_tipo})
+        return {"success": True, "message": "Registro corrigido com sucesso"}
+    except Exception as e:
+        conn.rollback()
+        log_error("Erro ao corrigir registro", e, {"registro_id": registro_id, "gestor": gestor})
+        return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
+    finally:
+        _return_conn(conn)
 
 
 # Função principal

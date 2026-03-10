@@ -261,12 +261,48 @@ def init_db_postgresql():
         )
     ''')
 
+    # Tabela de auditoria completa das alterações de ponto
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS auditoria_alteracoes_ponto (
+            id SERIAL PRIMARY KEY,
+            usuario_afetado VARCHAR(255) NOT NULL,
+            data_registro DATE NOT NULL,
+            entrada_original VARCHAR(20),
+            saida_original VARCHAR(20),
+            entrada_corrigida VARCHAR(20),
+            saida_corrigida VARCHAR(20),
+            tipo_alteracao VARCHAR(100) NOT NULL,
+            realizado_por VARCHAR(255) NOT NULL,
+            data_alteracao TIMESTAMP DEFAULT NOW(),
+            justificativa TEXT,
+            detalhes TEXT
+        )
+    ''')
+
+    # Tabela para ignorar pendências de ponto
+    c.execute('''
+        CREATE TABLE IF NOT EXISTS pendencias_ponto_ignoradas (
+            id SERIAL PRIMARY KEY,
+            usuario VARCHAR(255) NOT NULL,
+            data_referencia DATE NOT NULL,
+            tipo_inconsistencia VARCHAR(100) NOT NULL,
+            ignorado_por VARCHAR(255) NOT NULL,
+            motivo TEXT,
+            data_ignoracao TIMESTAMP DEFAULT NOW()
+        )
+    ''')
+
+    c.execute('''
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_pendencia_ignorada_unica
+        ON pendencias_ponto_ignoradas(usuario, data_referencia, tipo_inconsistencia)
+    ''')
+
     # Tabela solicitacoes_correcao_registro
     c.execute('''
         CREATE TABLE IF NOT EXISTS solicitacoes_correcao_registro (
             id SERIAL PRIMARY KEY,
             usuario VARCHAR(255) NOT NULL,
-            registro_id INTEGER NOT NULL,
+            registro_id INTEGER,
             data_hora_original TIMESTAMP NOT NULL,
             data_hora_nova TIMESTAMP NOT NULL,
             tipo_original VARCHAR(50),
@@ -275,6 +311,10 @@ def init_db_postgresql():
             modalidade_nova VARCHAR(50),
             projeto_original VARCHAR(255),
             projeto_novo VARCHAR(255),
+            tipo_solicitacao VARCHAR(50) DEFAULT 'ajuste_registro',
+            data_referencia DATE,
+            hora_inicio_solicitada VARCHAR(20),
+            hora_saida_solicitada VARCHAR(20),
             justificativa TEXT NOT NULL,
             status VARCHAR(50) DEFAULT 'pendente',
             data_solicitacao TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
