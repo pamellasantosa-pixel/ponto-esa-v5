@@ -42,6 +42,24 @@ _pool_connections = set()  # Rastreia conexões que vieram do pool
 _pool_conn_lock = threading.Lock()  # Protege _pool_connections
 
 
+def _is_postgres_connection_usable(conn) -> bool:
+    """Valida rapidamente se a conexão PostgreSQL ainda está utilizável."""
+    if conn is None:
+        return False
+    try:
+        if getattr(conn, "closed", 1):
+            return False
+        cur = conn.cursor()
+        try:
+            cur.execute("SELECT 1")
+            cur.fetchone()
+            return True
+        finally:
+            cur.close()
+    except Exception:
+        return False
+
+
 def _get_pool():
     """Retorna o pool de conexões singleton (thread-safe)"""
     global _connection_pool
@@ -90,14 +108,26 @@ def get_connection(db_path: str | None = None):
         # Tentar usar pool primeiro
         pool = _get_pool()
         if pool:
-            try:
-                conn = pool.getconn()
-                # Rastrear conexão usando seu id
-                with _pool_conn_lock:
-                    _pool_connections.add(id(conn))
-                return conn
-            except Exception as e:
-                logger.warning(f"Pool falhou, criando conexão direta: {e}")
+            for tentativa in range(2):
+                try:
+                    conn = pool.getconn()
+                    if _is_postgres_connection_usable(conn):
+                        # Rastrear conexão usando seu id
+                        with _pool_conn_lock:
+                            _pool_connections.add(id(conn))
+                        return conn
+
+                    logger.warning("Conexão do pool inválida; descartando e tentando novamente (%d/2)", tentativa + 1)
+                    try:
+                        pool.putconn(conn, close=True)
+                    except Exception:
+                        try:
+                            conn.close()
+                        except Exception:
+                            pass
+                except Exception as e:
+                    logger.warning(f"Pool falhou, criando conexão direta: {e}")
+                    break
         
         # Fallback: conexão direta (caso pool falhe)
         database_url = os.getenv('DATABASE_URL')
@@ -137,7 +167,11 @@ def return_connection(conn):
                 _pool_connections.discard(conn_id)
         if is_pool_conn:
             try:
-                pool.putconn(conn)
+                # Não devolver conexão já fechada/quebrada ao pool.
+                if _is_postgres_connection_usable(conn):
+                    pool.putconn(conn)
+                else:
+                    pool.putconn(conn, close=True)
                 return
             except Exception as e:
                 logger.warning(f"Erro ao devolver conexão ao pool: {e}")

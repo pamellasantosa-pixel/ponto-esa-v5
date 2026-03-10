@@ -748,31 +748,48 @@ def verificar_login(usuario, senha):
             return verify_and_upgrade(plain, hashed, user)
         return False
 
-    try:
+    def _exec_login_once():
         if REFACTORING_ENABLED:
-            row = execute_query(
+            row_local = execute_query(
                 f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
                 (usuario,),
                 fetch_one=True
             )
-            if row and _check_password(senha, row[0], usuario):
+            if row_local and _check_password(senha, row_local[0], usuario):
                 log_security_event("LOGIN", usuario=usuario, severity="INFO")
-                return (row[1], row[2])
+                return (row_local[1], row_local[2])
             return None
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-                cursor.execute(
-                    f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
-                    (usuario,))
-                row = cursor.fetchone()
-                if row and _check_password(senha, row[0], usuario):
-                    return (row[1], row[2])
-                return None
-            finally:
-                _return_conn(conn)
+
+        conn_local = get_connection()
+        try:
+            cursor = conn_local.cursor()
+            cursor.execute(
+                f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
+                (usuario,))
+            row_local = cursor.fetchone()
+            if row_local and _check_password(senha, row_local[0], usuario):
+                return (row_local[1], row_local[2])
+            return None
+        finally:
+            _return_conn(conn_local)
+
+    try:
+        return _exec_login_once()
     except Exception as login_err:
+        erro_txt = str(login_err).lower()
+        transient_db_error = (
+            "ssl connection has been closed unexpectedly" in erro_txt
+            or "server closed the connection unexpectedly" in erro_txt
+            or "terminating connection" in erro_txt
+        )
+        if transient_db_error:
+            logger.warning("Falha transitória no login de %s; tentando reconexão", usuario)
+            try:
+                return _exec_login_once()
+            except Exception as retry_err:
+                logger.error("Erro ao verificar login para %s após retry: %s", usuario, retry_err, exc_info=True)
+                return None
+
         logger.error("Erro ao verificar login para %s: %s", usuario, login_err, exc_info=True)
         return None
 
