@@ -28,12 +28,8 @@ def _cleanup_test_data():
     cursor = conn.cursor()
     try:
         cursor.execute(
-            f"DELETE FROM usuarios WHERE usuario IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})",
-            (TEST_USERS["colaborador"], TEST_USERS["gestor"]),
-        )
-        cursor.execute(
-            f"DELETE FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER}",
-            (TEST_USERS["colaborador"],),
+            f"DELETE FROM auditoria_correcoes WHERE gestor = {SQL_PLACEHOLDER}",
+            (TEST_USERS["gestor"],),
         )
         cursor.execute(
             f"DELETE FROM solicitacoes_ajuste_ponto WHERE usuario = {SQL_PLACEHOLDER}",
@@ -42,6 +38,14 @@ def _cleanup_test_data():
         cursor.execute(
             f"DELETE FROM solicitacoes_ajuste_ponto WHERE aprovador_solicitado = {SQL_PLACEHOLDER}",
             (TEST_USERS["gestor"],),
+        )
+        cursor.execute(
+            f"DELETE FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER}",
+            (TEST_USERS["colaborador"],),
+        )
+        cursor.execute(
+            f"DELETE FROM usuarios WHERE usuario IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})",
+            (TEST_USERS["colaborador"], TEST_USERS["gestor"]),
         )
         conn.commit()
     finally:

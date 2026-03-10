@@ -667,13 +667,12 @@ def verificar_login(usuario, senha):
         _has_password_utils = False
 
     def _check_password(plain, hashed, user):
-        """Verifica senha: tenta password_utils, fallback para SHA256."""
+        """Verifica senha via password_utils."""
         if not hashed:
             return False
         if _has_password_utils:
             return verify_and_upgrade(plain, hashed, user)
-        # Fallback: comparação SHA256 direta
-        return hashlib.sha256(plain.encode()).hexdigest() == hashed
+        return False
 
     try:
         if REFACTORING_ENABLED:

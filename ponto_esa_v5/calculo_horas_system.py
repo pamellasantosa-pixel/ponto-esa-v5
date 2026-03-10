@@ -35,7 +35,13 @@ class CalculoHorasSystem:
         Args:
             db_path (str|None): Caminho para um banco SQLite local para testes. Se None, usa get_connection().
         """
+        global SQL_PLACEHOLDER
         self._test_db_path = db_path
+        if self._test_db_path:
+            # Em testes com SQLite local, força placeholder compatível neste módulo.
+            SQL_PLACEHOLDER = "?"
+        else:
+            SQL_PLACEHOLDER = __import__("database").SQL_PLACEHOLDER
 
     def _get_connection(self):
         """Retorna conexão: usa banco de testes (SQLite) se configurado, senão usa get_connection()."""
@@ -197,15 +203,17 @@ class CalculoHorasSystem:
                     dt = safe_datetime_parse(data_hora)
                     if dt is None:
                         continue
-                        
-                    if tipo == "Início":
+
+                    tipo_norm = str(tipo).strip().lower()
+
+                    if tipo_norm in ("início", "inicio", "entrada"):
                         if primeiro_inicio is None:
                             primeiro_inicio = dt
-                    elif tipo == "Fim":
+                    elif tipo_norm in ("fim", "saída", "saida"):
                         ultimo_fim = dt
-                    elif tipo in ("Início Almoço", "Saída"):
+                    elif tipo_norm in ("início almoço", "inicio almoço", "saída almoço", "saida almoço", "saida_almoco"):
                         intervalos.append(("inicio_intervalo", dt))
-                    elif tipo in ("Fim Almoço", "Retorno"):
+                    elif tipo_norm in ("fim almoço", "retorno", "retorno almoço", "retorno_almoco"):
                         intervalos.append(("fim_intervalo", dt))
                 
                 # Calcular tempo

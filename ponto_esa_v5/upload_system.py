@@ -23,8 +23,13 @@ SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 
 class UploadSystem:
     def __init__(self, upload_dir="uploads", db_path: str | None = None):
+        global SQL_PLACEHOLDER
         self.upload_dir = upload_dir
         self._test_db_path = db_path
+        if self._test_db_path:
+            SQL_PLACEHOLDER = "?"
+        else:
+            SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
         self.max_file_size = 10 * 1024 * 1024  # 10MB
         self.allowed_extensions = {
             'pdf', 'doc', 'docx', 'jpg', 'jpeg', 'png', 'gif', 'txt', 'rtf'
@@ -86,12 +91,14 @@ class UploadSystem:
                 hash_arquivo TEXT NOT NULL,
                 relacionado_a TEXT,
                 relacionado_id INTEGER,
+                conteudo BLOB,
                 data_upload TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 status TEXT DEFAULT 'ativo'
             )
         '''
-        # Adaptar SQL para PostgreSQL se necessário
-        sql = adapt_sql_for_postgresql(sql)
+        # Em banco de teste SQLite local não converter SQL para dialeto PostgreSQL.
+        if not getattr(self, '_test_db_path', None):
+            sql = adapt_sql_for_postgresql(sql)
         cursor.execute(sql)
         conn.commit()
         return_connection(conn)
@@ -243,7 +250,7 @@ class UploadSystem:
                 params = (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id)
                 query = f"INSERT INTO uploads (usuario, nome_original, nome_arquivo, tipo_arquivo, tamanho, caminho, hash_arquivo, relacionado_a, relacionado_id) VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})"
 
-            if database_module.USE_POSTGRESQL:
+            if database_module.USE_POSTGRESQL and not self._test_db_path:
                 # Em PostgreSQL, usar RETURNING id para obter o id inserido
                 query = query + " RETURNING id"
                 cursor.execute(query, params)

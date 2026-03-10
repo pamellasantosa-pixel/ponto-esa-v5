@@ -11,8 +11,13 @@ from dotenv import load_dotenv
 # Carregar variáveis de ambiente
 load_dotenv()
 
-# Configuração do banco de dados
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'false').lower() == 'true'
+# Configuração do banco de dados.
+# Mantém compatibilidade com variável explícita e inferência por DATABASE_URL.
+_use_pg_env = os.getenv('USE_POSTGRESQL')
+if _use_pg_env is None:
+    USE_POSTGRESQL = bool(os.getenv('DATABASE_URL'))
+else:
+    USE_POSTGRESQL = _use_pg_env.lower() == 'true'
 
 # Placeholder para queries SQL (PostgreSQL usa %s, SQLite usa ?)
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"

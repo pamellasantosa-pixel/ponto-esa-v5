@@ -15,8 +15,14 @@ load_dotenv()
 # Logger para este módulo
 logger = logging.getLogger(__name__)
 
-# Configuração do banco de dados - usar PostgreSQL
-USE_POSTGRESQL = os.getenv('USE_POSTGRESQL', 'true').lower() == 'true'
+# Configuração do banco de dados.
+# Regra: USE_POSTGRESQL explícito tem prioridade; se ausente, usa PostgreSQL
+# apenas quando DATABASE_URL estiver configurada.
+_use_pg_env = os.getenv('USE_POSTGRESQL')
+if _use_pg_env is None:
+    USE_POSTGRESQL = bool(os.getenv('DATABASE_URL'))
+else:
+    USE_POSTGRESQL = _use_pg_env.lower() == 'true'
 SQL_PLACEHOLDER = "%s" if USE_POSTGRESQL else "?"
 
 # Importar psycopg2 se necessário
@@ -75,6 +81,11 @@ def get_connection(db_path: str | None = None):
     
     OTIMIZADO: Usa connection pool para PostgreSQL (evita overhead de TCP handshake).
     """
+    # Override explícito para cenários de teste/local com SQLite.
+    if db_path:
+        os.makedirs(os.path.dirname(db_path) or 'database', exist_ok=True)
+        return sqlite3.connect(db_path)
+
     if USE_POSTGRESQL:
         # Tentar usar pool primeiro
         pool = _get_pool()

@@ -7,5 +7,5 @@ try:
     except Exception:
         __all__ = [name for name in globals() if not name.startswith('_')]
 except Exception as exc:
-    def __getattr__(name):
-        raise ImportError(f"O shim de ajuste_registros_system não pode carregar o módulo interno: {exc}")
+    def __getattr__(name, _exc=exc):
+        raise ImportError(f"O shim de ajuste_registros_system não pode carregar o módulo interno: {_exc}")

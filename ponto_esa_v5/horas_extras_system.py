@@ -20,21 +20,87 @@ SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
 class HorasExtrasSystem:
     def __init__(self, db_path: str | None = None):
         """Inicializa o sistema de horas extras. Se `db_path` for fornecido, será usado para conectar diretamente ao SQLite (em testes)."""
+        global SQL_PLACEHOLDER
         self.db_path = db_path
+        if self.db_path:
+            SQL_PLACEHOLDER = "?"
+            self._ensure_sqlite_schema()
+        else:
+            SQL_PLACEHOLDER = DB_SQL_PLACEHOLDER
+
+    def _ensure_sqlite_schema(self):
+        """Cria schema mínimo necessário quando usando SQLite local em testes."""
+        conn = get_connection(self.db_path)
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS solicitacoes_horas_extras (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    hora_inicio TEXT NOT NULL,
+                    hora_fim TEXT NOT NULL,
+                    justificativa TEXT NOT NULL,
+                    aprovador_solicitado TEXT NOT NULL,
+                    status TEXT DEFAULT 'pendente',
+                    data_solicitacao TEXT DEFAULT CURRENT_TIMESTAMP,
+                    aprovado_por TEXT,
+                    data_aprovacao TEXT,
+                    observacoes TEXT
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS banco_horas (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario TEXT NOT NULL,
+                    data TEXT NOT NULL,
+                    tipo TEXT NOT NULL,
+                    descricao TEXT NOT NULL,
+                    credito REAL DEFAULT 0,
+                    debito REAL DEFAULT 0,
+                    saldo_anterior REAL DEFAULT 0,
+                    saldo_atual REAL DEFAULT 0,
+                    data_registro TEXT DEFAULT CURRENT_TIMESTAMP,
+                    relacionado_id INTEGER,
+                    relacionado_tabela TEXT
+                )
+                """
+            )
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS usuarios (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    usuario TEXT UNIQUE NOT NULL,
+                    senha TEXT,
+                    tipo TEXT,
+                    nome_completo TEXT,
+                    ativo INTEGER DEFAULT 1,
+                    jornada_fim_previsto TEXT DEFAULT '17:00'
+                )
+                """
+            )
+            conn.commit()
+        finally:
+            return_connection(conn)
         
     def verificar_fim_jornada(self, usuario):
         """Verifica se o usuário chegou no horário de fim da jornada prevista"""
         conn = get_connection(self.db_path)
         cursor = conn.cursor()
-
-        # Buscar jornada prevista do usuário
-        cursor.execute(f"""
-            SELECT jornada_fim_previsto FROM usuarios 
-            WHERE usuario = {SQL_PLACEHOLDER} AND ativo = 1
-        """, (usuario,))
-
-        result = cursor.fetchone()
-        return_connection(conn)
+        try:
+            # Buscar jornada prevista do usuário
+            cursor.execute(f"""
+                SELECT jornada_fim_previsto FROM usuarios 
+                WHERE usuario = {SQL_PLACEHOLDER} AND ativo = 1
+            """, (usuario,))
+            result = cursor.fetchone()
+        except Exception:
+            return {"deve_notificar": False, "message": "Usuário não encontrado"}
+        finally:
+            return_connection(conn)
 
         if not result:
             return {"deve_notificar": False, "message": "Usuário não encontrado"}
@@ -124,21 +190,24 @@ class HorasExtrasSystem:
 
                 solicitacao_id = cursor.lastrowid
 
-            # Enviar notificação para o aprovador
-            notification_manager.add_notification(
-                aprovador_solicitado,
-                {
-                    "type": "horas_extras_solicitacao",
-                    "title": "Nova solicitação de horas extras",
-                    "message": f"{usuario} solicitou aprovação de {total_horas:.1f}h extras em {data}",
-                    "solicitacao_id": solicitacao_id,
-                    "usuario": usuario,
-                    "data": data,
-                    "total_horas": total_horas,
-                    "timestamp": agora_br().isoformat(),
-                    "requires_response": True
-                }
-            )
+            # Enviar notificação para o aprovador sem bloquear o fluxo principal.
+            try:
+                notification_manager.add_notification(
+                    aprovador_solicitado,
+                    {
+                        "type": "horas_extras_solicitacao",
+                        "title": "Nova solicitação de horas extras",
+                        "message": f"{usuario} solicitou aprovação de {total_horas:.1f}h extras em {data}",
+                        "solicitacao_id": solicitacao_id,
+                        "usuario": usuario,
+                        "data": data,
+                        "total_horas": total_horas,
+                        "timestamp": agora_br().isoformat(),
+                        "requires_response": True
+                    }
+                )
+            except Exception:
+                pass
 
             # Iniciar lembrete contínuo para o aprovador selecionado
             job_id = f"horas_extras_{solicitacao_id}"
@@ -158,12 +227,15 @@ class HorasExtrasSystem:
             }
 
             # Mantém lembretes recorrentes até aprovação ou rejeição
-            notification_manager.start_repeating_notification(
-                job_id,
-                aprovador_solicitado,
-                reminder_payload,
-                stop_condition=stop_condition
-            )
+            try:
+                notification_manager.start_repeating_notification(
+                    job_id,
+                    aprovador_solicitado,
+                    reminder_payload,
+                    stop_condition=stop_condition
+                )
+            except Exception:
+                pass
 
             return {
                 "success": True,
@@ -315,8 +387,21 @@ class HorasExtrasSystem:
 
     def _calcular_horas_extras(self, hora_inicio, hora_fim):
         """Calcula o total de horas extras"""
-        inicio = datetime.strptime(hora_inicio, "%H:%M")
-        fim = datetime.strptime(hora_fim, "%H:%M")
+        def _to_datetime(value):
+            if isinstance(value, datetime):
+                return value
+            if isinstance(value, time):
+                return datetime.combine(datetime.today().date(), value)
+            if isinstance(value, str):
+                for fmt in ("%H:%M", "%H:%M:%S"):
+                    try:
+                        return datetime.strptime(value, fmt)
+                    except ValueError:
+                        continue
+            raise ValueError(f"Formato de hora inválido: {value!r}")
+
+        inicio = _to_datetime(hora_inicio)
+        fim = _to_datetime(hora_fim)
 
         if fim <= inicio:
             fim += timedelta(days=1)

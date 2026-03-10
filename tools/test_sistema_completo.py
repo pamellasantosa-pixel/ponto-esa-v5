@@ -77,6 +77,17 @@ def limpar_dados_teste():
     cursor = conn.cursor()
     
     try:
+        # Limpar dependências para evitar violações de FK na remoção de registros.
+        cursor.execute(f"DELETE FROM auditoria_correcoes WHERE gestor IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})",
+                      ('teste_gestor', 'teste_admin'))
+
+        if USE_POSTGRESQL:
+            cursor.execute("DELETE FROM solicitacoes_ajuste_ponto WHERE usuario LIKE %s", ('%teste%',))
+            cursor.execute("DELETE FROM solicitacoes_horas_extras WHERE usuario LIKE %s", ('%teste%',))
+        else:
+            cursor.execute("DELETE FROM solicitacoes_ajuste_ponto WHERE usuario LIKE ?", ('%teste%',))
+            cursor.execute("DELETE FROM solicitacoes_horas_extras WHERE usuario LIKE ?", ('%teste%',))
+
         # Remover usuários de teste
         cursor.execute(f"DELETE FROM usuarios WHERE usuario IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})",
                       ('teste_func', 'teste_gestor', 'teste_admin'))
@@ -84,14 +95,6 @@ def limpar_dados_teste():
         # Remover registros de teste
         cursor.execute(f"DELETE FROM registros_ponto WHERE usuario IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})",
                       ('teste_func', 'teste_gestor'))
-        
-        # Remover solicitações de teste
-        if USE_POSTGRESQL:
-            cursor.execute("DELETE FROM solicitacoes_ajuste_ponto WHERE usuario LIKE %s", ('%teste%',))
-            cursor.execute("DELETE FROM solicitacoes_horas_extras WHERE usuario LIKE %s", ('%teste%',))
-        else:
-            cursor.execute("DELETE FROM solicitacoes_ajuste_ponto WHERE usuario LIKE ?", ('%teste%',))
-            cursor.execute("DELETE FROM solicitacoes_horas_extras WHERE usuario LIKE ?", ('%teste%',))
         
         conn.commit()
         print("✅ Dados de teste anteriores removidos")
