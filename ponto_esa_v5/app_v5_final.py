@@ -70,7 +70,11 @@ except ImportError:
     # Fallbacks for error_handler functions
     import logging as _logging_fb
     def log_error(msg, *args, **kwargs):
-        _logging_fb.getLogger("fallback").error(msg, *args)
+        # Avoid %-format crashes when callers pass exception/context objects as extra args.
+        if args or kwargs:
+            _logging_fb.getLogger("fallback").error("%s | args=%s | kwargs=%s", msg, args, kwargs)
+        else:
+            _logging_fb.getLogger("fallback").error(msg)
     def log_security_event(event, **kwargs):
         _logging_fb.getLogger("security").info("[SECURITY] %s %s", event, kwargs)
     REFACTORING_ENABLED = False
@@ -90,6 +94,27 @@ import pytz  # Para gerenciar fusos horários
 from app_logger import get_logger, log_user_action
 from constants import agora_br, agora_br_naive, hoje_br
 logger = get_logger(__name__)
+
+
+def _is_missing_column_error(exc):
+    """Detecta erro de coluna ausente em bancos com schema legado."""
+    msg = str(exc).lower()
+    return "column" in msg and "does not exist" in msg
+
+
+def _execute_select_with_legacy_fallback(cursor, query, params, legacy_query=None, legacy_suffix=()):
+    """Executa SELECT com fallback para schema antigo quando colunas novas não existem."""
+    try:
+        cursor.execute(query, params)
+        return cursor.fetchall()
+    except Exception as exc:
+        if legacy_query and _is_missing_column_error(exc):
+            cursor.execute(legacy_query, params)
+            rows = cursor.fetchall()
+            if legacy_suffix:
+                return [tuple(row) + tuple(legacy_suffix) for row in rows]
+            return rows
+        raise
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -4737,31 +4762,56 @@ def solicitar_correcao_registro_interface():
                             conn = get_connection()
                             try:
                                 cursor = conn.cursor()
-                                cursor.execute(f"""
-                                    INSERT INTO solicitacoes_correcao_registro
-                                    (usuario, registro_id, data_hora_original, data_hora_nova,
-                                     tipo_original, tipo_novo, modalidade_original, modalidade_nova,
-                                     projeto_original, projeto_novo, tipo_solicitacao,
-                                     data_referencia, hora_inicio_solicitada, hora_saida_solicitada,
-                                     justificativa, status)
-                                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
-                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
-                                            {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'ajuste_registro',
-                                            {SQL_PLACEHOLDER}, NULL, NULL, {SQL_PLACEHOLDER}, 'pendente')
-                                """, (
-                                    usuario_logado,
-                                    registro['id'],
-                                    registro['data_hora'],
-                                    nova_data_hora,
-                                    registro['tipo'],
-                                    novo_tipo,
-                                    registro['modalidade'],
-                                    nova_modalidade if nova_modalidade else None,
-                                    registro['projeto'],
-                                    novo_projeto if novo_projeto else None,
-                                    nova_data.strftime("%Y-%m-%d"),
-                                    justificativa.strip(),
-                                ))
+                                try:
+                                    cursor.execute(f"""
+                                        INSERT INTO solicitacoes_correcao_registro
+                                        (usuario, registro_id, data_hora_original, data_hora_nova,
+                                         tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                         projeto_original, projeto_novo, tipo_solicitacao,
+                                         data_referencia, hora_inicio_solicitada, hora_saida_solicitada,
+                                         justificativa, status)
+                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'ajuste_registro',
+                                                {SQL_PLACEHOLDER}, NULL, NULL, {SQL_PLACEHOLDER}, 'pendente')
+                                    """, (
+                                        usuario_logado,
+                                        registro['id'],
+                                        registro['data_hora'],
+                                        nova_data_hora,
+                                        registro['tipo'],
+                                        novo_tipo,
+                                        registro['modalidade'],
+                                        nova_modalidade if nova_modalidade else None,
+                                        registro['projeto'],
+                                        novo_projeto if novo_projeto else None,
+                                        nova_data.strftime("%Y-%m-%d"),
+                                        justificativa.strip(),
+                                    ))
+                                except Exception as insert_exc:
+                                    if not _is_missing_column_error(insert_exc):
+                                        raise
+                                    cursor.execute(f"""
+                                        INSERT INTO solicitacoes_correcao_registro
+                                        (usuario, registro_id, data_hora_original, data_hora_nova,
+                                         tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                         projeto_original, projeto_novo, justificativa, status)
+                                        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'pendente')
+                                    """, (
+                                        usuario_logado,
+                                        registro['id'],
+                                        registro['data_hora'],
+                                        nova_data_hora,
+                                        registro['tipo'],
+                                        novo_tipo,
+                                        registro['modalidade'],
+                                        nova_modalidade if nova_modalidade else None,
+                                        registro['projeto'],
+                                        novo_projeto if novo_projeto else None,
+                                        justificativa.strip(),
+                                    ))
                                 conn.commit()
                             finally:
                                 _return_conn(conn)
@@ -4857,6 +4907,12 @@ def solicitar_correcao_registro_interface():
                                     justificativa.strip(),
                                 ))
                                 conn.commit()
+                            except Exception as e:
+                                if _is_missing_column_error(e):
+                                    st.error("❌ O banco de produção ainda não foi migrado para complemento de jornada. Contate o suporte.")
+                                    log_error("Schema desatualizado para complemento de jornada", e, {"usuario": usuario_logado})
+                                    return
+                                raise
                             finally:
                                 _return_conn(conn)
 
@@ -4879,18 +4935,31 @@ def solicitar_correcao_registro_interface():
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT id, registro_id, data_hora_original, data_hora_nova,
-                       tipo_original, tipo_novo, justificativa, status,
-                       data_solicitacao, aprovado_por, data_aprovacao, observacoes,
-                       COALESCE(tipo_solicitacao, 'ajuste_registro'), data_referencia,
-                       hora_inicio_solicitada, hora_saida_solicitada
-                FROM solicitacoes_correcao_registro
-                WHERE usuario = {SQL_PLACEHOLDER}
-                ORDER BY data_solicitacao DESC
-                LIMIT 50
-            """, (st.session_state.usuario,))
-            solicitacoes = cursor.fetchall()
+            solicitacoes = _execute_select_with_legacy_fallback(
+                cursor,
+                f"""
+                    SELECT id, registro_id, data_hora_original, data_hora_nova,
+                           tipo_original, tipo_novo, justificativa, status,
+                           data_solicitacao, aprovado_por, data_aprovacao, observacoes,
+                           COALESCE(tipo_solicitacao, 'ajuste_registro'), data_referencia,
+                           hora_inicio_solicitada, hora_saida_solicitada
+                    FROM solicitacoes_correcao_registro
+                    WHERE usuario = {SQL_PLACEHOLDER}
+                    ORDER BY data_solicitacao DESC
+                    LIMIT 50
+                """,
+                (st.session_state.usuario,),
+                legacy_query=f"""
+                    SELECT id, registro_id, data_hora_original, data_hora_nova,
+                           tipo_original, tipo_novo, justificativa, status,
+                           data_solicitacao, aprovado_por, data_aprovacao, observacoes
+                    FROM solicitacoes_correcao_registro
+                    WHERE usuario = {SQL_PLACEHOLDER}
+                    ORDER BY data_solicitacao DESC
+                    LIMIT 50
+                """,
+                legacy_suffix=('ajuste_registro', None, None, None),
+            )
         except Exception as e:
             log_error("Erro ao buscar solicitações de correção", e, {"usuario": st.session_state.usuario})
             solicitacoes = []
@@ -6734,19 +6803,33 @@ def aprovar_correcoes_registros_interface():
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
-                       c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
-                       c.projeto_original, c.projeto_novo, c.justificativa,
-                       c.data_solicitacao, u.nome_completo,
-                       COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
-                       c.hora_inicio_solicitada, c.hora_saida_solicitada
-                FROM solicitacoes_correcao_registro c
-                LEFT JOIN usuarios u ON c.usuario = u.usuario
-                WHERE c.status = 'pendente'
-                ORDER BY c.data_solicitacao DESC
-            """)
-            pendentes = cursor.fetchall()
+            pendentes = _execute_select_with_legacy_fallback(
+                cursor,
+                """
+                    SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                           c.projeto_original, c.projeto_novo, c.justificativa,
+                           c.data_solicitacao, u.nome_completo,
+                           COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                           c.hora_inicio_solicitada, c.hora_saida_solicitada
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'pendente'
+                    ORDER BY c.data_solicitacao DESC
+                """,
+                (),
+                legacy_query="""
+                    SELECT c.id, c.usuario, c.registro_id, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.modalidade_original, c.modalidade_nova,
+                           c.projeto_original, c.projeto_novo, c.justificativa,
+                           c.data_solicitacao, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'pendente'
+                    ORDER BY c.data_solicitacao DESC
+                """,
+                legacy_suffix=('ajuste_registro', None, None, None),
+            )
         finally:
             _return_conn(conn)
 
@@ -7094,19 +7177,33 @@ def aprovar_correcoes_registros_interface():
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                       c.tipo_original, c.tipo_novo, c.data_solicitacao,
-                       c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo,
-                       COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
-                       c.hora_inicio_solicitada, c.hora_saida_solicitada
-                FROM solicitacoes_correcao_registro c
-                LEFT JOIN usuarios u ON c.usuario = u.usuario
-                WHERE c.status = 'aprovado'
-                ORDER BY c.data_aprovacao DESC
-                LIMIT 50
-            """)
-            aprovadas = cursor.fetchall()
+            aprovadas = _execute_select_with_legacy_fallback(
+                cursor,
+                """
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.data_solicitacao,
+                           c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo,
+                           COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                           c.hora_inicio_solicitada, c.hora_saida_solicitada
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'aprovado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """,
+                (),
+                legacy_query="""
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.tipo_original, c.tipo_novo, c.data_solicitacao,
+                           c.data_aprovacao, c.aprovado_por, c.observacoes, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'aprovado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """,
+                legacy_suffix=('ajuste_registro', None, None, None),
+            )
         finally:
             _return_conn(conn)
         
@@ -7154,18 +7251,32 @@ def aprovar_correcoes_registros_interface():
         conn = get_connection()
         try:
             cursor = conn.cursor()
-            cursor.execute("""
-                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                       c.data_solicitacao, c.data_aprovacao, c.aprovado_por,
-                       c.observacoes, u.nome_completo, COALESCE(c.tipo_solicitacao, 'ajuste_registro'),
-                       c.data_referencia
-                FROM solicitacoes_correcao_registro c
-                LEFT JOIN usuarios u ON c.usuario = u.usuario
-                WHERE c.status = 'rejeitado'
-                ORDER BY c.data_aprovacao DESC
-                LIMIT 50
-            """)
-            rejeitadas = cursor.fetchall()
+            rejeitadas = _execute_select_with_legacy_fallback(
+                cursor,
+                """
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.data_solicitacao, c.data_aprovacao, c.aprovado_por,
+                           c.observacoes, u.nome_completo, COALESCE(c.tipo_solicitacao, 'ajuste_registro'),
+                           c.data_referencia
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'rejeitado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """,
+                (),
+                legacy_query="""
+                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.data_solicitacao, c.data_aprovacao, c.aprovado_por,
+                           c.observacoes, u.nome_completo
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'rejeitado'
+                    ORDER BY c.data_aprovacao DESC
+                    LIMIT 50
+                """,
+                legacy_suffix=('ajuste_registro', None),
+            )
         finally:
             _return_conn(conn)
         
