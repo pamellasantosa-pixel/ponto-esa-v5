@@ -70,6 +70,32 @@ def _is_ativo_enabled(value) -> bool:
     return False
 
 
+def _header_latin1_safe(value: str) -> str:
+    """Converte texto para formato seguro em headers HTTP (latin-1)."""
+    if value is None:
+        return ""
+    return str(value).encode("latin-1", "ignore").decode("latin-1").strip()
+
+
+def _ativo_bool_column(cursor) -> bool:
+    """Retorna True quando push_subscriptions.ativo é BOOLEAN."""
+    try:
+        cursor.execute(
+            """
+            SELECT data_type
+            FROM information_schema.columns
+            WHERE table_name = 'push_subscriptions'
+              AND column_name = 'ativo'
+            LIMIT 1
+            """
+        )
+        row = cursor.fetchone()
+        return bool(row and row[0] == "boolean")
+    except Exception:
+        # Fallback seguro para schema legado.
+        return False
+
+
 # ---------------------------------------------------------------------------
 # Funções de tópico
 # ---------------------------------------------------------------------------
@@ -111,11 +137,14 @@ def enviar_notificacao(usuario: str, titulo: str, mensagem: str, emoji: str = "�
     url = f"{NTFY_URL}/{topic}"
 
     try:
+        # Header HTTP não aceita emoji em latin-1; emoji vai no corpo.
+        title_header = _header_latin1_safe(titulo) or "Notificacao"
+        body_text = f"{emoji} {mensagem}" if emoji else mensagem
         response = requests.post(
             url,
-            data=mensagem.encode("utf-8"),
+            data=body_text.encode("utf-8"),
             headers={
-                "Title": f"{emoji} {titulo}",
+                "Title": title_header,
                 "Priority": "high",
                 "Tags": "clock,calendar",
                 "Click": os.getenv("APP_URL", "https://ponto-exsa.onrender.com"),
@@ -129,7 +158,7 @@ def enviar_notificacao(usuario: str, titulo: str, mensagem: str, emoji: str = "�
         logger.error("[Push] Erro ao enviar para %s: HTTP %s", usuario, response.status_code)
         return False
 
-    except requests.RequestException as e:
+    except Exception as e:
         logger.error("[Push] Exceção ao enviar para %s: %s", usuario, e)
         return False
 
@@ -280,24 +309,19 @@ def registrar_subscription(usuario: str) -> str:
     try:
         with _db() as conn:
             cursor = conn.cursor()
-            try:
-                # Caminho preferencial para schemas com `ativo` BOOLEAN
-                cursor.execute(f"""
-                    INSERT INTO push_subscriptions (usuario, topic, ativo)
-                    VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, TRUE)
-                    ON CONFLICT (usuario)
-                    DO UPDATE SET ativo = TRUE, topic = {SQL_PLACEHOLDER}
-                """, (usuario, topic, topic))
-            except Exception as type_err:
-                # Fallback para schemas legados com `ativo` INTEGER (0/1)
-                logger.warning("[Push] Fallback de tipo para coluna ativo (INTEGER): %s", type_err)
-                conn.rollback()
-                cursor.execute(f"""
-                    INSERT INTO push_subscriptions (usuario, topic, ativo)
-                    VALUES ({_ph(3)})
-                    ON CONFLICT (usuario)
-                    DO UPDATE SET ativo = {SQL_PLACEHOLDER}, topic = {SQL_PLACEHOLDER}
-                """, (usuario, topic, 1, 1, topic))
+            ativo_on = True if _ativo_bool_column(cursor) else 1
+
+            # Não depende de constraint UNIQUE(usuario):
+            # 1) Atualiza assinatura existente; 2) se não houver, insere.
+            cursor.execute(
+                f"UPDATE push_subscriptions SET topic = {SQL_PLACEHOLDER}, ativo = {SQL_PLACEHOLDER} WHERE usuario = {SQL_PLACEHOLDER}",
+                (topic, ativo_on, usuario),
+            )
+            if cursor.rowcount == 0:
+                cursor.execute(
+                    f"INSERT INTO push_subscriptions (usuario, topic, ativo) VALUES ({_ph(3)})",
+                    (usuario, topic, ativo_on),
+                )
             conn.commit()
             cursor.close()
         logger.info("[Push] Usuário %s registrado com topic: %s", usuario, topic)
@@ -312,18 +336,11 @@ def desativar_subscription(usuario: str) -> None:
     try:
         with _db() as conn:
             cursor = conn.cursor()
-            try:
-                cursor.execute(
-                    f"UPDATE push_subscriptions SET ativo = FALSE WHERE usuario = {SQL_PLACEHOLDER}",
-                    (usuario,),
-                )
-            except Exception as type_err:
-                logger.warning("[Push] Fallback de tipo ao desativar push (INTEGER): %s", type_err)
-                conn.rollback()
-                cursor.execute(
-                    f"UPDATE push_subscriptions SET ativo = 0 WHERE usuario = {SQL_PLACEHOLDER}",
-                    (usuario,),
-                )
+            ativo_off = False if _ativo_bool_column(cursor) else 0
+            cursor.execute(
+                f"UPDATE push_subscriptions SET ativo = {SQL_PLACEHOLDER} WHERE usuario = {SQL_PLACEHOLDER}",
+                (ativo_off, usuario),
+            )
             conn.commit()
             cursor.close()
         logger.info("[Push] Push desativado para %s", usuario)
@@ -666,7 +683,7 @@ def verificar_aniversarios() -> None:
             aniversariantes = cursor.fetchall()
 
             if aniversariantes:
-                cursor.execute("SELECT DISTINCT usuario FROM push_subscriptions WHERE ativo = TRUE")
+                cursor.execute("SELECT DISTINCT usuario FROM push_subscriptions WHERE CAST(ativo AS TEXT) IN ('1', 't', 'true', 'TRUE')")
                 usuarios_ativos = cursor.fetchall()
 
                 for aniv_usuario, nome, _data_nasc in aniversariantes:
@@ -711,7 +728,7 @@ def verificar_inconsistencias_ponto() -> None:
                     (usuario,),
                 )
                 result = cursor.fetchone()
-                if result and result[0]:
+                if result and _is_ativo_enabled(result[0]):
                     enviar_notificacao(
                         usuario,
                         "⚠️ Registro Pendente",
@@ -735,7 +752,7 @@ def verificar_inconsistencias_ponto() -> None:
                     (usuario,),
                 )
                 result = cursor.fetchone()
-                if result and result[0]:
+                if result and _is_ativo_enabled(result[0]):
                     enviar_notificacao(
                         usuario,
                         "⚠️ Registro Incompleto",
@@ -766,7 +783,7 @@ def notificar_gestor_solicitacao(gestor: str, tipo: str, solicitante: str, descr
             result = cursor.fetchone()
             cursor.close()
 
-        if result and result[0]:
+        if result and _is_ativo_enabled(result[0]):
             emojis = {"hora_extra": "🕐", "atestado": "📋", "correcao": "🔧", "ferias": "🏖️"}
             emoji = emojis.get(tipo, "📢")
             enviar_notificacao(
@@ -794,7 +811,8 @@ def enviar_resumo_pendencias_gestor() -> None:
                 SELECT p.usuario
                 FROM push_subscriptions p
                 JOIN usuarios u ON p.usuario = u.usuario
-                WHERE p.ativo = TRUE AND u.tipo = 'gestor'
+                                WHERE CAST(p.ativo AS TEXT) IN ('1', 't', 'true', 'TRUE')
+                                    AND u.tipo = 'gestor'
             """)
             gestores = cursor.fetchall()
 
