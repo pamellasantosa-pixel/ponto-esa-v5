@@ -336,10 +336,24 @@ def registrar_subscription(usuario: str) -> str:
                 (topic, ativo_on, usuario),
             )
             if cursor.rowcount == 0:
-                cursor.execute(
-                    f"INSERT INTO push_subscriptions (usuario, topic, ativo) VALUES ({_ph(3)})",
-                    (usuario, topic, ativo_on),
-                )
+                endpoint_ntfy = f"ntfy://{topic}"
+                try:
+                    cursor.execute(
+                        f"INSERT INTO push_subscriptions (usuario, topic, ativo) VALUES ({_ph(3)})",
+                        (usuario, topic, ativo_on),
+                    )
+                except Exception as insert_exc:
+                    # Compatibilidade com schema legado (webpush) que exige endpoint/p256dh/auth NOT NULL.
+                    conn.rollback()
+                    cursor = conn.cursor()
+                    cursor.execute(
+                        f"""
+                            INSERT INTO push_subscriptions
+                            (usuario, endpoint, p256dh, auth, ativo, topic)
+                            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                        """,
+                        (usuario, endpoint_ntfy, "ntfy", "ntfy", ativo_on, topic),
+                    )
             conn.commit()
             cursor.close()
         logger.info("[Push] Usuário %s registrado com topic: %s", usuario, topic)

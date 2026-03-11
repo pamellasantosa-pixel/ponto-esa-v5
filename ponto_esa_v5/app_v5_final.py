@@ -130,6 +130,24 @@ def _parse_hhmm_or_raise(value: str, field_name: str) -> time:
     except Exception as exc:
         raise ValueError(f"{field_name} invalido. Use HH:MM (ex: 08:15)") from exc
 
+
+def _try_upgrade_correcao_schema(conn) -> bool:
+    """Tenta atualizar schema legado de solicitacoes_correcao_registro em runtime."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS tipo_solicitacao TEXT DEFAULT 'ajuste_registro'")
+        cursor.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS data_referencia DATE")
+        cursor.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS hora_inicio_solicitada TEXT")
+        cursor.execute("ALTER TABLE solicitacoes_correcao_registro ADD COLUMN IF NOT EXISTS hora_saida_solicitada TEXT")
+        conn.commit()
+        return True
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        return False
+
 # Carregar variáveis de ambiente
 load_dotenv()
 
@@ -4971,10 +4989,46 @@ def solicitar_correcao_registro_interface():
                             except Exception as e:
                                 if _is_missing_column_error(e):
                                     conn.rollback()
-                                    st.error("❌ O banco de produção ainda não foi migrado para complemento de jornada. Contate o suporte.")
-                                    log_error("Schema desatualizado para complemento de jornada", e, {"usuario": usuario_logado})
-                                    return
-                                raise
+                                    if _try_upgrade_correcao_schema(conn):
+                                        try:
+                                            cursor = conn.cursor()
+                                            cursor.execute(f"""
+                                                INSERT INTO solicitacoes_correcao_registro
+                                                (usuario, registro_id, data_hora_original, data_hora_nova,
+                                                 tipo_original, tipo_novo, modalidade_original, modalidade_nova,
+                                                 projeto_original, projeto_novo, tipo_solicitacao,
+                                                 data_referencia, hora_inicio_solicitada, hora_saida_solicitada,
+                                                 justificativa, status)
+                                                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                        {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+                                                        {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'complemento_jornada',
+                                                        {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, 'pendente')
+                                            """, (
+                                                usuario_logado,
+                                                registro_id_ref,
+                                                data_hora_original,
+                                                dt_inicio,
+                                                tipo_original,
+                                                'inicio_e_fim',
+                                                modalidade_original,
+                                                modalidade_original,
+                                                projeto_original,
+                                                projeto_original,
+                                                data_ref_str,
+                                                hora_inicio.strftime("%H:%M"),
+                                                hora_saida.strftime("%H:%M"),
+                                                justificativa.strip(),
+                                            ))
+                                            conn.commit()
+                                        except Exception as retry_exc:
+                                            log_error("Erro ao reenviar complemento apos migracao", retry_exc, {"usuario": usuario_logado})
+                                            raise
+                                    else:
+                                        st.error("❌ O banco de produção ainda não foi migrado para complemento de jornada. Contate o suporte.")
+                                        log_error("Schema desatualizado para complemento de jornada", e, {"usuario": usuario_logado})
+                                        return
+                                else:
+                                    raise
                             finally:
                                 _return_conn(conn)
 
@@ -5366,6 +5420,10 @@ def pendencias_ponto_interface():
         }
         for p in pendencias
     ])
+    # Evita mistura float/str no Arrow (Streamlit) quando há valor numérico e '-'.
+    df["Horas registradas"] = df["Horas registradas"].apply(
+        lambda v: "-" if v in (None, "") else str(v)
+    )
     st.dataframe(df, use_container_width=True, hide_index=True)
     st.caption(f"Total de inconsistências encontradas: {len(pendencias)}")
 
