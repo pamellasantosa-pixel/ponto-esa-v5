@@ -43,6 +43,7 @@ logger = logging.getLogger(__name__)
 # Importar módulos do sistema
 try:
     from database import get_connection, return_connection, SQL_PLACEHOLDER
+    from push_scheduler import enviar_notificacao as enviar_notificacao_ntfy
     from push_notifications import (
         push_system,
         notificar_esqueceu_entrada,
@@ -56,6 +57,15 @@ try:
 except ImportError as e:
     logger.error(f"Erro ao importar módulos: {e}")
     sys.exit(1)
+
+
+def _enviar_ntfy_usuario(usuario: str, titulo: str, mensagem: str, emoji: str = "🔔") -> int:
+    """Envia lembrete via ntfy para um usuario e retorna 1 quando enviado."""
+    try:
+        return 1 if enviar_notificacao_ntfy(usuario, titulo, mensagem, emoji) else 0
+    except Exception as e:
+        logger.error("Erro ao enviar ntfy para %s: %s", usuario, e)
+        return 0
 
 
 def get_datetime_br() -> datetime:
@@ -376,8 +386,13 @@ def job_lembrete_entrada() -> Dict:
                 continue
             
             # Enviar lembrete
-            enviados, total = notificar_esqueceu_entrada(user['usuario'])
-            
+            enviados = _enviar_ntfy_usuario(
+                user['usuario'],
+                "Lembrete de Entrada",
+                "Bom dia! Nao esqueça de registrar sua entrada.",
+                "🌅",
+            )
+
             if enviados > 0:
                 resultados['lembretes_enviados'] += 1
                 resultados['usuarios_notificados'].append(user['usuario'])
@@ -445,8 +460,13 @@ def job_lembrete_saida() -> Dict:
                 continue
             
             # Enviar lembrete
-            enviados, total = notificar_esqueceu_saida(user['usuario'])
-            
+            enviados = _enviar_ntfy_usuario(
+                user['usuario'],
+                "Lembrete de Saida",
+                "Nao esqueça de registrar sua saida de hoje.",
+                "🏠",
+            )
+
             if enviados > 0:
                 resultados['lembretes_enviados'] += 1
                 resultados['usuarios_notificados'].append(user['usuario'])
@@ -497,14 +517,24 @@ def job_alerta_hora_extra() -> Dict:
             # Enviar alerta nos marcos de 60 e 90 minutos
             # (Na prática, verificar se está próximo desses valores)
             if ALERTA_60_MIN - 5 <= minutos <= ALERTA_60_MIN + 5:
-                enviados, total = notificar_fim_hora_extra(usuario, minutos)
+                enviados = _enviar_ntfy_usuario(
+                    usuario,
+                    "Alerta de Hora Extra",
+                    f"Voce esta em hora extra ha {minutos} minutos. Avalie se ja pode encerrar.",
+                    "⏱️",
+                )
                 if enviados > 0:
                     resultados['alertas_enviados'] += 1
                     resultados['usuarios_alertados'].append(usuario)
                     logger.info(f"Alerta de 1h de HE enviado para: {usuario}")
             
             elif ALERTA_90_MIN - 5 <= minutos <= ALERTA_90_MIN + 5:
-                enviados, total = notificar_fim_hora_extra(usuario, minutos)
+                enviados = _enviar_ntfy_usuario(
+                    usuario,
+                    "Alerta de Hora Extra",
+                    f"Voce esta em hora extra ha {minutos} minutos. Lembre-se de finalizar quando terminar.",
+                    "⚠️",
+                )
                 if enviados > 0:
                     resultados['alertas_enviados'] += 1
                     resultados['usuarios_alertados'].append(usuario)

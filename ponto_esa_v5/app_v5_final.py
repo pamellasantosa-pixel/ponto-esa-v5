@@ -109,12 +109,26 @@ def _execute_select_with_legacy_fallback(cursor, query, params, legacy_query=Non
         return cursor.fetchall()
     except Exception as exc:
         if legacy_query and _is_missing_column_error(exc):
+            # PostgreSQL aborta a transacao apos erro; limpar estado antes do fallback.
+            try:
+                if getattr(cursor, "connection", None):
+                    cursor.connection.rollback()
+            except Exception:
+                pass
             cursor.execute(legacy_query, params)
             rows = cursor.fetchall()
             if legacy_suffix:
                 return [tuple(row) + tuple(legacy_suffix) for row in rows]
             return rows
         raise
+
+
+def _parse_hhmm_or_raise(value: str, field_name: str) -> time:
+    """Converte texto HH:MM para time com mensagem amigavel."""
+    try:
+        return datetime.strptime(str(value).strip(), "%H:%M").time()
+    except Exception as exc:
+        raise ValueError(f"{field_name} invalido. Use HH:MM (ex: 08:15)") from exc
 
 # Carregar variáveis de ambiente
 load_dotenv()
@@ -865,8 +879,31 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
 
     # Usar placeholder correto baseado no tipo de banco
     placeholders = ', '.join([SQL_PLACEHOLDER] * 9)
+
+    tipo_norm = str(tipo or '').strip().lower()
+    tipo_alvo = None
+    if tipo_norm in ('inicio', 'início', 'entrada'):
+        tipo_alvo = 'inicio'
+    elif tipo_norm in ('fim', 'saida', 'saída'):
+        tipo_alvo = 'fim'
     
     if REFACTORING_ENABLED:
+        if tipo_alvo:
+            data_ref = data_hora_registro.strftime("%Y-%m-%d")
+            q_tipos = ('início', 'inicio', 'entrada') if tipo_alvo == 'inicio' else ('fim', 'saída', 'saida')
+            existe = execute_query(
+                f"""
+                    SELECT COUNT(*)
+                    FROM registros_ponto
+                    WHERE usuario = {SQL_PLACEHOLDER}
+                      AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                      AND LOWER(tipo) IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                """,
+                (usuario, data_ref, q_tipos[0], q_tipos[1], q_tipos[2])
+            )
+            if existe and existe[0][0] > 0:
+                raise ValueError(f"Ja existe registro de '{tipo_alvo}' para este dia. Apenas intermediario pode repetir.")
+
         success = execute_update(
             f'''
                 INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
@@ -884,6 +921,22 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
         conn = conn_external if conn_external else get_connection()
         try:
             cursor = conn.cursor()
+            if tipo_alvo:
+                data_ref = data_hora_registro.strftime("%Y-%m-%d")
+                q_tipos = ('início', 'inicio', 'entrada') if tipo_alvo == 'inicio' else ('fim', 'saída', 'saida')
+                cursor.execute(
+                    f"""
+                        SELECT COUNT(*)
+                        FROM registros_ponto
+                        WHERE usuario = {SQL_PLACEHOLDER}
+                          AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                          AND LOWER(tipo) IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                    """,
+                    (usuario, data_ref, q_tipos[0], q_tipos[1], q_tipos[2])
+                )
+                if (cursor.fetchone() or [0])[0] > 0:
+                    raise ValueError(f"Ja existe registro de '{tipo_alvo}' para este dia. Apenas intermediario pode repetir.")
+
             cursor.execute(f'''
                 INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
                 VALUES ({placeholders})
@@ -4791,6 +4844,7 @@ def solicitar_correcao_registro_interface():
                                 except Exception as insert_exc:
                                     if not _is_missing_column_error(insert_exc):
                                         raise
+                                    conn.rollback()
                                     cursor.execute(f"""
                                         INSERT INTO solicitacoes_correcao_registro
                                         (usuario, registro_id, data_hora_original, data_hora_nova,
@@ -4850,9 +4904,9 @@ def solicitar_correcao_registro_interface():
                 st.markdown("### 🧩 Complemento de Jornada")
                 col_h1, col_h2 = st.columns(2)
                 with col_h1:
-                    hora_inicio = st.time_input("🕐 Hora de início", value=default_inicio)
+                    hora_inicio_txt = st.text_input("🕐 Hora de início (HH:MM)", value=default_inicio.strftime("%H:%M"))
                 with col_h2:
-                    hora_saida = st.time_input("🕕 Hora de saída", value=default_saida)
+                    hora_saida_txt = st.text_input("🕕 Hora de saída (HH:MM)", value=default_saida.strftime("%H:%M"))
 
                 justificativa = st.text_area(
                     "📝 Justificativa da Correção *",
@@ -4865,6 +4919,13 @@ def solicitar_correcao_registro_interface():
                     if not justificativa.strip():
                         st.error("❌ A justificativa é obrigatória")
                     else:
+                        try:
+                            hora_inicio = _parse_hhmm_or_raise(hora_inicio_txt, "Hora de inicio")
+                            hora_saida = _parse_hhmm_or_raise(hora_saida_txt, "Hora de saida")
+                        except ValueError as hora_err:
+                            st.error(f"❌ {hora_err}")
+                            return
+
                         dt_inicio = datetime.combine(data_corrigir, hora_inicio)
                         dt_saida = datetime.combine(data_corrigir, hora_saida)
                         if dt_saida <= dt_inicio:
@@ -4909,6 +4970,7 @@ def solicitar_correcao_registro_interface():
                                 conn.commit()
                             except Exception as e:
                                 if _is_missing_column_error(e):
+                                    conn.rollback()
                                     st.error("❌ O banco de produção ainda não foi migrado para complemento de jornada. Contate o suporte.")
                                     log_error("Schema desatualizado para complemento de jornada", e, {"usuario": usuario_logado})
                                     return
@@ -7071,6 +7133,42 @@ def aprovar_correcoes_registros_interface():
                                             except Exception as recalc_err:
                                                 logger.warning(f"Falha no recálculo pós-aprovação da correção {correcao_id}: {recalc_err}")
                                         else:
+                                            tipo_novo_norm = str(tipo_novo or '').strip().lower()
+                                            if tipo_novo_norm in ('início', 'inicio', 'entrada', 'fim', 'saída', 'saida'):
+                                                dt_ref_novo = safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_original)
+                                                if dt_ref_novo is not None:
+                                                    data_ref_novo = dt_ref_novo.strftime("%Y-%m-%d")
+                                                    if tipo_novo_norm in ('início', 'inicio', 'entrada'):
+                                                        tipos_check = ('início', 'inicio', 'entrada')
+                                                        tipo_label = 'inicio'
+                                                    else:
+                                                        tipos_check = ('fim', 'saída', 'saida')
+                                                        tipo_label = 'fim'
+
+                                                    cursor.execute(
+                                                        f"""
+                                                            SELECT COUNT(*)
+                                                            FROM registros_ponto
+                                                            WHERE usuario = {SQL_PLACEHOLDER}
+                                                              AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                                                              AND id <> {SQL_PLACEHOLDER}
+                                                              AND LOWER(tipo) IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
+                                                        """,
+                                                        (
+                                                            usuario,
+                                                            data_ref_novo,
+                                                            registro_id,
+                                                            tipos_check[0],
+                                                            tipos_check[1],
+                                                            tipos_check[2],
+                                                        ),
+                                                    )
+                                                    if (cursor.fetchone() or [0])[0] > 0:
+                                                        raise ValueError(
+                                                            f"Nao e permitido aprovar mais de um registro '{tipo_label}' no mesmo dia. "
+                                                            "Apenas intermediario pode se repetir."
+                                                        )
+
                                             cursor.execute(f"""
                                                 UPDATE registros_ponto
                                                 SET data_hora = {SQL_PLACEHOLDER}, tipo = {SQL_PLACEHOLDER}, modalidade = {SQL_PLACEHOLDER}, projeto = {SQL_PLACEHOLDER}
@@ -11240,14 +11338,28 @@ def exibir_alerta_fim_jornada_avancado():
             """, unsafe_allow_html=True)
             
             col1, col2 = st.columns([1, 1])
+            ja_finalizou_hoje = False
+            try:
+                hoje_str = date.today().strftime("%Y-%m-%d")
+                regs_hoje = buscar_registros_dia(st.session_state.usuario, hoje_str)
+                ja_finalizou_hoje = any(
+                    str(r.get('tipo') or '').strip().lower() in ('fim', 'saída', 'saida')
+                    for r in regs_hoje
+                )
+            except Exception as e:
+                logger.debug("Erro ao verificar fim de expediente no alerta: %s", e)
+
             with col1:
                 if st.button("✅ Vou Finalizar", use_container_width=True, key="btn_vai_finalizar"):
                     st.success("Tudo bem! Trabalhe um ótimo dia 🎉")
             with col2:
-                if st.button("⏱️ Vou Fazer Hora Extra", type="primary", use_container_width=True, key="btn_vai_fazer_he"):
-                    st.session_state.solicitar_horas_extras = True
-                    st.session_state.vai_fazer_hora_extra = True
-                    st.rerun()
+                if ja_finalizou_hoje:
+                    st.button("⏱️ Vou Fazer Hora Extra", disabled=True, use_container_width=True, key="btn_vai_fazer_he_disabled")
+                else:
+                    if st.button("⏱️ Vou Fazer Hora Extra", type="primary", use_container_width=True, key="btn_vai_fazer_he"):
+                        st.session_state.solicitar_horas_extras = True
+                        st.session_state.vai_fazer_hora_extra = True
+                        st.rerun()
     
     except ImportError:
         # Fallback: usar sistema antigo se jornada_semanal_calculo_system não estiver disponível

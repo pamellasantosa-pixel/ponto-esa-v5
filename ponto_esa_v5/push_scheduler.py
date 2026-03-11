@@ -238,17 +238,35 @@ def criar_tabela_subscriptions() -> None:
             """)
 
             for col, default in [
+                ("topic", "NULL"),
                 ("horario_entrada", "'07:50'"),
                 ("horario_almoco_saida", "'12:00'"),
                 ("horario_almoco_retorno", "'13:00'"),
                 ("horario_saida", "'16:50'"),
             ]:
                 try:
-                    cursor.execute(
-                        f"ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS {col} VARCHAR(5) DEFAULT {default}"
-                    )
+                    if col == "topic":
+                        cursor.execute(
+                            "ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS topic VARCHAR(100)"
+                        )
+                    else:
+                        cursor.execute(
+                            f"ALTER TABLE push_subscriptions ADD COLUMN IF NOT EXISTS {col} VARCHAR(5) DEFAULT {default}"
+                        )
                 except Exception as e:
                     logger.debug("Erro silenciado: %s", e)
+
+            # Backfill de topic para linhas legadas sem essa coluna preenchida.
+            try:
+                cursor.execute("SELECT DISTINCT usuario FROM push_subscriptions WHERE topic IS NULL OR topic = ''")
+                usuarios_sem_topic = [r[0] for r in cursor.fetchall() if r and r[0]]
+                for usuario in usuarios_sem_topic:
+                    cursor.execute(
+                        f"UPDATE push_subscriptions SET topic = {SQL_PLACEHOLDER} WHERE usuario = {SQL_PLACEHOLDER} AND (topic IS NULL OR topic = '')",
+                        (get_topic_for_user(usuario), usuario),
+                    )
+            except Exception as e:
+                logger.debug("Erro no backfill de topic: %s", e)
 
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS avisos_gestor (
@@ -355,6 +373,7 @@ def verificar_subscription(usuario: str) -> tuple:
         Tupla ``(topic, ativo)`` — ``(None, False)`` se não encontrado.
     """
     try:
+        criar_tabela_subscriptions()
         with _db() as conn:
             cursor = conn.cursor()
             cursor.execute(
