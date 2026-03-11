@@ -4918,6 +4918,9 @@ def solicitar_correcao_registro_interface():
                     elif tipo_unico in ('fim', 'saída', 'saida'):
                         default_saida = dt_unico.time().replace(second=0, microsecond=0)
 
+            modalidade_original = unico_registro['modalidade'] if unico_registro else None
+            projeto_original = unico_registro['projeto'] if unico_registro else None
+
             with st.form("solicitar_correcao_complemento"):
                 st.markdown("### 🧩 Complemento de Jornada")
                 col_h1, col_h2 = st.columns(2)
@@ -4925,6 +4928,33 @@ def solicitar_correcao_registro_interface():
                     hora_inicio_txt = st.text_input("🕐 Hora de início (HH:MM)", value=default_inicio.strftime("%H:%M"))
                 with col_h2:
                     hora_saida_txt = st.text_input("🕕 Hora de saída (HH:MM)", value=default_saida.strftime("%H:%M"))
+
+                col_m1, col_m2 = st.columns(2)
+                modalidades_comp = ["presencial", "home_office", "campo"]
+                modalidade_default = (
+                    str(modalidade_original or "").strip().lower()
+                    if unico_registro else ""
+                )
+                if modalidade_default not in modalidades_comp:
+                    modalidade_default = "presencial"
+
+                projetos_comp = obter_projetos_ativos()
+                projeto_default = projeto_original if unico_registro else None
+                if not projeto_default and projetos_comp:
+                    projeto_default = projetos_comp[0]
+
+                with col_m1:
+                    modalidade_complemento = st.selectbox(
+                        "🏢 Modalidade de trabalho *",
+                        modalidades_comp,
+                        index=modalidades_comp.index(modalidade_default),
+                    )
+                with col_m2:
+                    projeto_complemento = st.selectbox(
+                        "📊 Projeto *",
+                        projetos_comp if projetos_comp else [""],
+                        index=(projetos_comp.index(projeto_default) if (projetos_comp and projeto_default in projetos_comp) else 0),
+                    )
 
                 justificativa = st.text_area(
                     "📝 Justificativa da Correção *",
@@ -4936,6 +4966,8 @@ def solicitar_correcao_registro_interface():
                 if submitted_comp:
                     if not justificativa.strip():
                         st.error("❌ A justificativa é obrigatória")
+                    elif not projeto_complemento:
+                        st.error("❌ Selecione um projeto para o complemento")
                     else:
                         try:
                             hora_inicio = _parse_hhmm_or_raise(hora_inicio_txt, "Hora de inicio")
@@ -4952,8 +4984,6 @@ def solicitar_correcao_registro_interface():
                             registro_id_ref = unico_registro['id'] if unico_registro else 0
                             data_hora_original = unico_registro['data_hora'] if unico_registro else datetime.combine(data_corrigir, time(0, 0))
                             tipo_original = unico_registro['tipo'] if unico_registro else None
-                            modalidade_original = unico_registro['modalidade'] if unico_registro else None
-                            projeto_original = unico_registro['projeto'] if unico_registro else None
 
                             conn = get_connection()
                             try:
@@ -4977,9 +5007,9 @@ def solicitar_correcao_registro_interface():
                                     tipo_original,
                                     'inicio_e_fim',
                                     modalidade_original,
-                                    modalidade_original,
+                                    modalidade_complemento,
                                     projeto_original,
-                                    projeto_original,
+                                    projeto_complemento,
                                     data_ref_str,
                                     hora_inicio.strftime("%H:%M"),
                                     hora_saida.strftime("%H:%M"),
@@ -5011,9 +5041,9 @@ def solicitar_correcao_registro_interface():
                                                 tipo_original,
                                                 'inicio_e_fim',
                                                 modalidade_original,
-                                                modalidade_original,
+                                                modalidade_complemento,
                                                 projeto_original,
-                                                projeto_original,
+                                                projeto_complemento,
                                                 data_ref_str,
                                                 hora_inicio.strftime("%H:%M"),
                                                 hora_saida.strftime("%H:%M"),
@@ -5039,6 +5069,8 @@ def solicitar_correcao_registro_interface():
                                     "data_referencia": data_ref_str,
                                     "hora_inicio": hora_inicio.strftime("%H:%M"),
                                     "hora_saida": hora_saida.strftime("%H:%M"),
+                                    "modalidade": modalidade_complemento,
+                                    "projeto": projeto_complemento,
                                 }
                             )
                             st.success("✅ Solicitação enviada com sucesso! Aguarde aprovação do gestor.")
