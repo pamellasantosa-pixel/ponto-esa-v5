@@ -296,6 +296,10 @@ def init_db_postgresql():
         CREATE UNIQUE INDEX IF NOT EXISTS idx_pendencia_ignorada_unica
         ON pendencias_ponto_ignoradas(usuario, data_referencia, tipo_inconsistencia)
     ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_pendencias_ign_data
+        ON pendencias_ponto_ignoradas(data_referencia)
+    ''')
 
     # Tabela solicitacoes_correcao_registro
     c.execute('''
@@ -337,6 +341,19 @@ def init_db_postgresql():
     c.execute('''
         CREATE INDEX IF NOT EXISTS idx_solicitacoes_correcao_registro 
         ON solicitacoes_correcao_registro(registro_id)
+    ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_corr_usuario_status_data
+        ON solicitacoes_correcao_registro(usuario, status, data_solicitacao)
+    ''')
+
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_auditoria_usuario_data
+        ON auditoria_alteracoes_ponto(usuario_afetado, data_registro)
+    ''')
+    c.execute('''
+        CREATE INDEX IF NOT EXISTS idx_auditoria_data_alteracao
+        ON auditoria_alteracoes_ponto(data_alteracao)
     ''')
 
     # ============================================

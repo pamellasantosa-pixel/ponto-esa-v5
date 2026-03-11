@@ -873,6 +873,16 @@ def _init_db_tables(conn):
         
         # Jornada semanal
         ("idx_jornada_usuario_data", "jornada_semanal", "usuario, data_referencia"),
+
+        # Auditoria de alteracoes de ponto
+        ("idx_auditoria_usuario_data", "auditoria_alteracoes_ponto", "usuario_afetado, data_registro"),
+        ("idx_auditoria_data_alteracao", "auditoria_alteracoes_ponto", "data_alteracao"),
+
+        # Pendencias ignoradas
+        ("idx_pendencias_ign_data", "pendencias_ponto_ignoradas", "data_referencia"),
+
+        # Solicitacoes de correcao
+        ("idx_corr_usuario_status_data", "solicitacoes_correcao_registro", "usuario, status, data_solicitacao"),
     ]
     
     for idx_name, table, columns in indices:

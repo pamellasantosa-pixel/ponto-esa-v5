@@ -905,11 +905,17 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
     elif tipo_norm in ('fim', 'saida', 'saída'):
         tipo_alvo = 'fim'
     
-    if REFACTORING_ENABLED:
+    owns_conn = conn_external is None
+    conn = conn_external if conn_external else get_connection()
+    try:
+        cursor = conn.cursor()
+        data_ref = data_hora_registro.strftime("%Y-%m-%d")
+
+        entrada_antes, saida_antes, _ = obter_entrada_saida_dia_cursor(cursor, usuario, data_ref)
+
         if tipo_alvo:
-            data_ref = data_hora_registro.strftime("%Y-%m-%d")
             q_tipos = ('início', 'inicio', 'entrada') if tipo_alvo == 'inicio' else ('fim', 'saída', 'saida')
-            existe = execute_query(
+            cursor.execute(
                 f"""
                     SELECT COUNT(*)
                     FROM registros_ponto
@@ -919,52 +925,42 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
                 """,
                 (usuario, data_ref, q_tipos[0], q_tipos[1], q_tipos[2])
             )
-            if existe and existe[0][0] > 0:
+            if (cursor.fetchone() or [0])[0] > 0:
                 raise ValueError(f"Ja existe registro de '{tipo_alvo}' para este dia. Apenas intermediario pode repetir.")
 
-        success = execute_update(
-            f'''
-                INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-                VALUES ({placeholders})
-            ''',
-            (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-        )
-        if success:
-            return data_hora_registro
-        else:
-            log_error("Erro ao registrar ponto", context={"usuario": usuario, "tipo": tipo})
-            return None
-    else:
-        owns_conn = conn_external is None
-        conn = conn_external if conn_external else get_connection()
-        try:
-            cursor = conn.cursor()
-            if tipo_alvo:
-                data_ref = data_hora_registro.strftime("%Y-%m-%d")
-                q_tipos = ('início', 'inicio', 'entrada') if tipo_alvo == 'inicio' else ('fim', 'saída', 'saida')
-                cursor.execute(
-                    f"""
-                        SELECT COUNT(*)
-                        FROM registros_ponto
-                        WHERE usuario = {SQL_PLACEHOLDER}
-                          AND DATE(data_hora) = {SQL_PLACEHOLDER}
-                          AND LOWER(tipo) IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                    """,
-                    (usuario, data_ref, q_tipos[0], q_tipos[1], q_tipos[2])
-                )
-                if (cursor.fetchone() or [0])[0] > 0:
-                    raise ValueError(f"Ja existe registro de '{tipo_alvo}' para este dia. Apenas intermediario pode repetir.")
+        cursor.execute(f'''
+            INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
+            VALUES ({placeholders})
+        ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
 
-            cursor.execute(f'''
-                INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
-                VALUES ({placeholders})
-            ''', (usuario, data_hora_registro, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude))
-            if owns_conn:
-                conn.commit()
-            return data_hora_registro
-        finally:
-            if owns_conn:
-                _return_conn(conn)
+        entrada_depois, saida_depois, _ = obter_entrada_saida_dia_cursor(cursor, usuario, data_ref)
+        registrar_auditoria_alteracao_ponto_cursor(
+            cursor,
+            usuario_afetado=usuario,
+            data_registro=data_ref,
+            entrada_original=entrada_antes,
+            saida_original=saida_antes,
+            entrada_corrigida=entrada_depois,
+            saida_corrigida=saida_depois,
+            tipo_alteracao="registro_ponto_criado",
+            realizado_por=usuario,
+            justificativa="Registro realizado pelo colaborador",
+            detalhes=f"tipo={tipo}; modalidade={modalidade}; projeto={projeto}",
+        )
+
+        if owns_conn:
+            conn.commit()
+        return data_hora_registro
+    except Exception:
+        if owns_conn:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        raise
+    finally:
+        if owns_conn:
+            _return_conn(conn)
 
 
 def obter_registros_usuario(usuario, data_inicio=None, data_fim=None):
@@ -5352,6 +5348,14 @@ def pendencias_ponto_interface():
                 ORDER BY usuario, data_hora
             """, (data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")))
         registros_raw = cursor.fetchall()
+
+        cursor.execute(f"""
+            SELECT data
+            FROM feriados
+            WHERE ativo = 1
+              AND data BETWEEN {SQL_PLACEHOLDER} AND {SQL_PLACEHOLDER}
+        """, (data_inicio.strftime("%Y-%m-%d"), data_fim.strftime("%Y-%m-%d")))
+        feriados_periodo = {str(row[0]) for row in cursor.fetchall()}
     finally:
         _return_conn(conn)
 
@@ -5368,6 +5372,11 @@ def pendencias_ponto_interface():
         for i in range(total_dias):
             dia = data_inicio + timedelta(days=i)
             dia_str = dia.strftime("%Y-%m-%d")
+
+            # Filtro de dias uteis: ignora sabado/domingo e feriados ativos.
+            if dia.weekday() >= 5 or dia_str in feriados_periodo:
+                continue
+
             key = (usuario, dia_str)
             registros = registros_por_dia.get(key, [])
 

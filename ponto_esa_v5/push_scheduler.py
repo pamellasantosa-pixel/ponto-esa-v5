@@ -39,6 +39,23 @@ HORARIOS_LEMBRETE_PADRAO = [
     (16, 50, "Quase na hora! Registre a saída.", "🏠"),
 ]
 
+# Evita executar DDL em todas as renderizacoes de UI.
+_push_schema_ready = False
+_push_schema_lock = threading.Lock()
+
+
+def ensure_push_schema_once() -> None:
+    """Garante inicializacao/migracao do schema de push apenas uma vez por processo."""
+    global _push_schema_ready
+    if _push_schema_ready:
+        return
+
+    with _push_schema_lock:
+        if _push_schema_ready:
+            return
+        criar_tabela_subscriptions()
+        _push_schema_ready = True
+
 
 # ---------------------------------------------------------------------------
 # Helpers de conexão (usa pool e devolve corretamente)
@@ -321,7 +338,7 @@ def registrar_subscription(usuario: str) -> str:
     Returns:
         Tópico ntfy atribuído ao usuário.
     """
-    criar_tabela_subscriptions()
+    ensure_push_schema_once()
     topic = get_topic_for_user(usuario)
 
     try:
@@ -387,7 +404,7 @@ def verificar_subscription(usuario: str) -> tuple:
         Tupla ``(topic, ativo)`` — ``(None, False)`` se não encontrado.
     """
     try:
-        criar_tabela_subscriptions()
+        ensure_push_schema_once()
         with _db() as conn:
             cursor = conn.cursor()
             cursor.execute(
