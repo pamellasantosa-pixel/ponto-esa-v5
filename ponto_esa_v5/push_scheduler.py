@@ -130,6 +130,26 @@ def get_topic_for_user(usuario: str) -> str:
     return f"ponto-exsa-{hash_user}"
 
 
+def _get_topic_from_db_or_default(usuario: str) -> str:
+    """Retorna o tópico salvo em push_subscriptions; fallback para tópico determinístico."""
+    try:
+        ensure_push_schema_once()
+        with _db() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"SELECT topic FROM push_subscriptions WHERE usuario = {SQL_PLACEHOLDER} LIMIT 1",
+                (usuario,),
+            )
+            row = cursor.fetchone()
+            cursor.close()
+            if row and row[0]:
+                return str(row[0]).strip()
+    except Exception as e:
+        logger.debug("Erro ao buscar topic no banco para %s: %s", usuario, e)
+
+    return get_topic_for_user(usuario)
+
+
 # ---------------------------------------------------------------------------
 # Envio de notificação via ntfy
 # ---------------------------------------------------------------------------
@@ -150,7 +170,7 @@ def enviar_notificacao(usuario: str, titulo: str, mensagem: str, emoji: str = "�
         logger.warning("[Push] Tentativa de envio com parâmetros vazios")
         return False
 
-    topic = get_topic_for_user(usuario)
+    topic = _get_topic_from_db_or_default(usuario)
     url = f"{NTFY_URL}/{topic}"
 
     try:

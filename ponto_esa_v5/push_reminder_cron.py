@@ -147,7 +147,7 @@ def verificar_registro_entrada_hoje(usuario: str) -> bool:
             SELECT COUNT(*) FROM registros_ponto
             WHERE usuario = {SQL_PLACEHOLDER}
             AND DATE(data_hora) = {SQL_PLACEHOLDER}
-            AND LOWER(tipo) = 'início'
+            AND LOWER(tipo) IN ('início', 'inicio', 'entrada')
         """, (usuario, hoje))
         
         count = cursor.fetchone()[0]
@@ -358,7 +358,6 @@ def job_lembrete_entrada() -> Dict:
     }
     
     usuarios = obter_usuarios_ativos_com_jornada()
-    agora = get_time_br()
     
     for user in usuarios:
         resultados['verificados'] += 1
@@ -368,11 +367,6 @@ def job_lembrete_entrada() -> Dict:
             config = verificar_config_lembretes(user['usuario'])
             
             if not config['lembrete_entrada']:
-                continue
-            
-            # Verificar se já passou o horário de lembrete
-            horario_lembrete = config['horario_lembrete_entrada']
-            if agora < horario_lembrete:
                 continue
             
             # Verificar se é dia de trabalho para este usuário
@@ -430,7 +424,6 @@ def job_lembrete_saida() -> Dict:
     }
     
     usuarios = obter_usuarios_ativos_com_jornada()
-    agora = get_time_br()
     
     for user in usuarios:
         resultados['verificados'] += 1
@@ -439,10 +432,6 @@ def job_lembrete_saida() -> Dict:
             config = verificar_config_lembretes(user['usuario'])
             
             if not config['lembrete_saida']:
-                continue
-            
-            horario_lembrete = config['horario_lembrete_saida']
-            if agora < horario_lembrete:
                 continue
             
             dia_semana = get_datetime_br().isoweekday()
