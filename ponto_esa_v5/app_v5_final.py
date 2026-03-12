@@ -318,6 +318,20 @@ def normalizar_tipo_ponto(tipo):
     return valor
 
 
+def normalizar_modalidade_ponto(modalidade):
+    """Normaliza variantes de modalidade para os valores persistidos no banco."""
+    valor = str(modalidade or "").strip().lower()
+    if valor in ("", "none", "null"):
+        return ""
+    if valor in ("presencial",):
+        return "presencial"
+    if valor in ("home office", "home_office", "home-office", "homeoffice"):
+        return "home_office"
+    if valor in ("campo",):
+        return "campo"
+    return valor
+
+
 def format_datetime_safe(value, fmt="%d/%m/%Y %H:%M", default="-"):
     """Formata data/hora sem quebrar a UI quando o valor for inválido."""
     dt = safe_datetime_parse(value)
@@ -5371,7 +5385,7 @@ def corrigir_registros_interface():
                                 "Nova Modalidade",
                                 ["", "presencial", "home_office", "campo"],
                                 index=["", "presencial", "home_office", "campo"].index(
-                                    registro['modalidade'] or "")
+                                    normalizar_modalidade_ponto(registro.get('modalidade')))
                             )
 
                             novo_projeto = st.selectbox(
@@ -6462,7 +6476,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     title="📍 Status de Presença Hoje",
                     colors=[THEME_COLORS['success'], THEME_COLORS['danger']]
                 )
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
         
         with col2:
             # Gauge de taxa de registros
@@ -6478,7 +6492,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     {'range': [80, 100], 'color': THEME_COLORS['success']}
                 ]
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
         
         # Gráfico de linha - Registros últimos 7 dias
         datas_semana = []
@@ -6505,7 +6519,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
             y_label="Registros",
             fill=True
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
         
         # Gráficos de barras
         col1, col2 = st.columns(2)
@@ -6537,7 +6551,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     y_label="Quantidade",
                     color_scale="Plasma"
                 )
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("📊 Sem dados de ausências no mês")
         
@@ -6566,7 +6580,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     title="📋 Status de Solicitações (Mês)",
                     colors=[THEME_COLORS['warning'], THEME_COLORS['success'], THEME_COLORS['danger']]
                 )
-                st.plotly_chart(fig, width="stretch")
+                st.plotly_chart(fig, use_container_width=True)
             else:
                 st.info("📊 Sem solicitações no mês")
         

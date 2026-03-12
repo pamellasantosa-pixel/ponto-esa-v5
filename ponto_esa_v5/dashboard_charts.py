@@ -452,7 +452,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
                 title="📍 Status de Presença Hoje",
                 colors=[THEME_COLORS['success'], THEME_COLORS['warning'], THEME_COLORS['danger']]
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         # Gauge de pontualidade
@@ -468,7 +468,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
                 {'range': [80, 100], 'color': THEME_COLORS['success']}
             ]
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     
     # Gráfico de registros por dia (últimos 7 dias)
     if 'registros_semana' in dados and dados['registros_semana']:
@@ -480,7 +480,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
             y_label="Registros",
             fill=True
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     
     # Heatmap de horários
     col1, col2 = st.columns(2)
@@ -495,7 +495,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
                 y_label="Horas",
                 color_scale="Plasma"
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
     
     with col2:
         if 'ausencias_tipo' in dados and dados['ausencias_tipo']:
@@ -504,7 +504,7 @@ def render_dashboard_executivo(dados: Dict[str, Any]):
                 values=list(dados['ausencias_tipo'].values()),
                 title="🏥 Ausências por Tipo (Mês)"
             )
-            st.plotly_chart(fig, width="stretch")
+            st.plotly_chart(fig, use_container_width=True)
     
     # Barra de progresso para metas
     st.markdown("### 🎯 Metas do Mês")
@@ -660,7 +660,7 @@ def render_mini_dashboard(dados: Dict[str, Any]):
             colors=[THEME_COLORS['success'], THEME_COLORS['danger']]
         )
         fig.update_layout(height=250)
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
 
 
 def render_funcionario_dashboard(dados: Dict[str, Any], usuario: str):
@@ -715,7 +715,7 @@ def render_funcionario_dashboard(dados: Dict[str, Any], usuario: str):
             y_label="Horas",
             color_scale="Tealgrn"
         )
-        st.plotly_chart(fig, width="stretch")
+        st.plotly_chart(fig, use_container_width=True)
     
     # Próximas ausências programadas
     if dados.get('proximas_ausencias'):
