@@ -16,6 +16,7 @@ import os
 import sys
 import signal
 import logging
+import time as time_module
 from datetime import datetime, time
 from typing import Optional
 
@@ -48,155 +49,40 @@ signal.signal(signal.SIGINT, signal_handler)
 
 def run_scheduler():
     """
-    Executa o scheduler de notificações.
-    Usa APScheduler para agendar jobs em horários específicos.
+    Executa o scheduler de notificações com configuração dinâmica do banco.
+    Reutiliza o background_scheduler para respeitar horários salvos na UI.
     """
     global shutdown_requested
-    
+
     try:
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        from apscheduler.triggers.cron import CronTrigger
-    except ImportError:
-        logger.error("APScheduler não instalado. Instalando...")
-        import subprocess
-        subprocess.check_call([sys.executable, "-m", "pip", "install", "apscheduler"])
-        from apscheduler.schedulers.blocking import BlockingScheduler
-        from apscheduler.triggers.cron import CronTrigger
-    
-    # Importar funções de lembrete
-    try:
-        from push_reminder_cron import (
-            job_lembrete_entrada,
-            job_lembrete_saida,
-            job_alerta_hora_extra,
-            job_lembrete_aprovadores,
-            job_lembrete_fim_dia_aprovadores,
-            get_datetime_br
+        from background_scheduler import (
+            iniciar_scheduler_background,
+            parar_scheduler,
+            obter_status_scheduler,
         )
-    except ImportError as e:
-        logger.error(f"Erro ao importar push_reminder_cron: {e}")
+    except Exception as e:
+        logger.error(f"Erro ao importar background_scheduler: {e}")
         return
-    
-    # Criar scheduler com timezone de Brasília
-    scheduler = BlockingScheduler(timezone='America/Sao_Paulo')
-    
+
     logger.info("=" * 60)
     logger.info("🔔 NOTIFICATION WORKER - Ponto ExSA")
     logger.info("=" * 60)
-    logger.info(f"Iniciado em: {get_datetime_br()}")
-    logger.info("Jobs configurados:")
-    
-    # ============================================
-    # JOB 1: Lembrete de Entrada (esqueceu de bater ponto)
-    # Executa: 8:15, 8:30, 9:00 (dias úteis)
-    # ============================================
-    scheduler.add_job(
-        job_lembrete_entrada,
-        CronTrigger(hour='8', minute='15', day_of_week='mon-fri'),
-        id='lembrete_entrada_8h15',
-        name='Lembrete Entrada 8:15',
-        misfire_grace_time=300
-    )
-    scheduler.add_job(
-        job_lembrete_entrada,
-        CronTrigger(hour='8', minute='30', day_of_week='mon-fri'),
-        id='lembrete_entrada_8h30',
-        name='Lembrete Entrada 8:30',
-        misfire_grace_time=300
-    )
-    scheduler.add_job(
-        job_lembrete_entrada,
-        CronTrigger(hour='9', minute='0', day_of_week='mon-fri'),
-        id='lembrete_entrada_9h00',
-        name='Lembrete Entrada 9:00',
-        misfire_grace_time=300
-    )
-    logger.info("  ✅ Lembrete de Entrada: 8:15, 8:30, 9:00 (Seg-Sex)")
-    
-    # ============================================
-    # JOB 2: Lembrete de Saída (esqueceu de bater ponto)
-    # Executa: 17:15, 17:30, 18:00 (dias úteis)
-    # ============================================
-    scheduler.add_job(
-        job_lembrete_saida,
-        CronTrigger(hour='17', minute='15', day_of_week='mon-fri'),
-        id='lembrete_saida_17h15',
-        name='Lembrete Saída 17:15',
-        misfire_grace_time=300
-    )
-    scheduler.add_job(
-        job_lembrete_saida,
-        CronTrigger(hour='17', minute='30', day_of_week='mon-fri'),
-        id='lembrete_saida_17h30',
-        name='Lembrete Saída 17:30',
-        misfire_grace_time=300
-    )
-    scheduler.add_job(
-        job_lembrete_saida,
-        CronTrigger(hour='18', minute='0', day_of_week='mon-fri'),
-        id='lembrete_saida_18h00',
-        name='Lembrete Saída 18:00',
-        misfire_grace_time=300
-    )
-    logger.info("  ✅ Lembrete de Saída: 17:15, 17:30, 18:00 (Seg-Sex)")
-    
-    # ============================================
-    # JOB 3: Alerta de Hora Extra (muito tempo em HE)
-    # Executa: a cada 30 minutos entre 18:00 e 22:00 (dias úteis)
-    # ============================================
-    scheduler.add_job(
-        job_alerta_hora_extra,
-        CronTrigger(hour='18-22', minute='0,30', day_of_week='mon-fri'),
-        id='alerta_hora_extra',
-        name='Alerta Hora Extra',
-        misfire_grace_time=300
-    )
-    logger.info("  ✅ Alerta Hora Extra: cada 30min das 18h às 22h (Seg-Sex)")
-    
-    # ============================================
-    # JOB 4: Lembrete para Aprovadores (pendências)
-    # Executa: 9:00, 14:00 (dias úteis)
-    # ============================================
-    scheduler.add_job(
-        job_lembrete_aprovadores,
-        CronTrigger(hour='9', minute='0', day_of_week='mon-fri'),
-        id='aprovadores_manha',
-        name='Lembrete Aprovadores Manhã',
-        misfire_grace_time=300
-    )
-    scheduler.add_job(
-        job_lembrete_aprovadores,
-        CronTrigger(hour='14', minute='0', day_of_week='mon-fri'),
-        id='aprovadores_tarde',
-        name='Lembrete Aprovadores Tarde',
-        misfire_grace_time=300
-    )
-    logger.info("  ✅ Lembrete Aprovadores: 9:00, 14:00 (Seg-Sex)")
-    
-    # ============================================
-    # JOB 5: Lembrete Urgente Aprovadores (fim do dia)
-    # Executa: 17:00 (dias úteis)
-    # ============================================
-    scheduler.add_job(
-        job_lembrete_fim_dia_aprovadores,
-        CronTrigger(hour='17', minute='0', day_of_week='mon-fri'),
-        id='aprovadores_urgente',
-        name='Lembrete Urgente Aprovadores',
-        misfire_grace_time=300
-    )
-    logger.info("  ✅ Lembrete Urgente Aprovadores: 17:00 (Seg-Sex)")
-    
-    logger.info("=" * 60)
-    logger.info("🚀 Scheduler iniciado. Aguardando próximo job...")
-    logger.info("=" * 60)
-    
-    # Iniciar scheduler
+    logger.info("Iniciando scheduler com configurações salvas no banco...")
+
+    if not iniciar_scheduler_background():
+        logger.error("Falha ao iniciar scheduler de notificações")
+        return
+
+    status = obter_status_scheduler()
+    logger.info("Scheduler ativo=%s | jobs=%s", status.get("ativo"), status.get("total_jobs"))
+
     try:
-        scheduler.start()
+        while not shutdown_requested:
+            time_module.sleep(2)
     except (KeyboardInterrupt, SystemExit):
         logger.info("Scheduler interrompido.")
     finally:
-        scheduler.shutdown(wait=False)
+        parar_scheduler()
         logger.info("Scheduler encerrado.")
 
 

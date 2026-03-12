@@ -33,7 +33,7 @@ try:
     _streamlit_utils = importlib.import_module('streamlit_utils')
     safe_download_button = getattr(_streamlit_utils, 'safe_download_button')
 except Exception:
-    def safe_download_button(label, data, file_name, mime="application/octet-stream", use_container_width=False, key=None):
+    def safe_download_button(label, data, file_name, mime="application/octet-stream", width="content", key=None):
         """Fallback leve caso `streamlit_utils.safe_download_button` não esteja disponível."""
         from io import BytesIO as _BytesIO
 
@@ -50,7 +50,7 @@ except Exception:
                 data=content,
                 file_name=file_name,
                 mime=mime,
-                use_container_width=use_container_width,
+                width=width,
                 key=key,
             )
         except Exception:
@@ -311,6 +311,8 @@ def normalizar_tipo_ponto(tipo):
     valor = str(tipo or "").strip().lower()
     if valor in ("início", "inicio", "entrada"):
         return "inicio"
+    if valor in ("intermediário", "intermediario", "intervalo", "almoco", "almoço"):
+        return "intermediario"
     if valor in ("fim", "saída", "saida"):
         return "fim"
     return valor
@@ -1045,6 +1047,105 @@ def obter_usuarios_ativos():
         finally:
             _return_conn(conn)
 
+
+@st.cache_data(ttl=20)
+def obter_badges_gestor_cached(usuario: str):
+    """Obtém contadores de badges do gestor em uma única consulta com cache curto."""
+    if REFACTORING_ENABLED:
+        row = execute_query(
+            f"""
+            SELECT
+                (SELECT COUNT(*) FROM solicitacoes_horas_extras
+                 WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
+                (SELECT COUNT(*) FROM atestado_horas
+                 WHERE status = 'pendente') AS atestados_pendentes,
+                (SELECT COUNT(*) FROM solicitacoes_correcao_registro
+                 WHERE status = 'pendente') AS correcoes_pendentes
+            """,
+            (usuario,),
+            fetch_one=True,
+        )
+        if not row:
+            return 0, 0, 0
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT
+                (SELECT COUNT(*) FROM solicitacoes_horas_extras
+                 WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
+                (SELECT COUNT(*) FROM atestado_horas
+                 WHERE status = 'pendente') AS atestados_pendentes,
+                (SELECT COUNT(*) FROM solicitacoes_correcao_registro
+                 WHERE status = 'pendente') AS correcoes_pendentes
+            """,
+            (usuario,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return 0, 0, 0
+        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
+    finally:
+        _return_conn(conn)
+
+
+@st.cache_data(ttl=15)
+def obter_solicitacoes_pendentes_count_cached(usuario: str) -> int:
+    """Conta solicitações de HE aguardando aprovação com cache curto."""
+    if REFACTORING_ENABLED:
+        result = execute_query(
+            f"SELECT COUNT(*) FROM horas_extras_ativas WHERE aprovador = {SQL_PLACEHOLDER} AND status = 'aguardando_aprovacao'",
+            (usuario,),
+            fetch_one=True,
+        )
+        return int(result[0]) if result else 0
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"""
+            SELECT COUNT(*) FROM horas_extras_ativas
+            WHERE aprovador = {SQL_PLACEHOLDER}
+              AND status = 'aguardando_aprovacao'
+            """,
+            (usuario,),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        _return_conn(conn)
+
+
+@st.cache_data(ttl=20)
+def obter_mensagens_nao_lidas_count_cached(usuario: str) -> int:
+    """Conta mensagens diretas não lidas para o usuário com cache curto."""
+    if not usuario:
+        return 0
+
+    if REFACTORING_ENABLED:
+        result = execute_query(
+            f"SELECT COUNT(*) FROM mensagens_diretas WHERE destinatario = {SQL_PLACEHOLDER} AND lida = FALSE",
+            (usuario,),
+            fetch_one=True,
+        )
+        return int(result[0]) if result else 0
+
+    conn = get_connection()
+    try:
+        cursor = conn.cursor()
+        cursor.execute(
+            f"SELECT COUNT(*) FROM mensagens_diretas WHERE destinatario = {SQL_PLACEHOLDER} AND lida = FALSE",
+            (usuario,),
+        )
+        row = cursor.fetchone()
+        return int(row[0]) if row else 0
+    finally:
+        _return_conn(conn)
+
 # Interface de login
 
 
@@ -1098,7 +1199,7 @@ def tela_login():
                                   placeholder="Digite sua senha")
 
             submitted = st.form_submit_button(
-                "ENTRAR", use_container_width=True)
+                "ENTRAR", width="stretch")
 
             if submitted:
                 if usuario and senha:
@@ -1329,13 +1430,13 @@ def iniciar_hora_extra_interface():
         with col1:
             submitted = st.form_submit_button(
                 "✅ Iniciar Hora Extra", 
-                use_container_width=True, 
+                width="stretch", 
                 type="primary"
             )
         with col2:
             cancelar = st.form_submit_button(
                 "❌ Cancelar", 
-                use_container_width=True
+                width="stretch"
             )
         
         if cancelar:
@@ -1561,7 +1662,7 @@ def exibir_hora_extra_em_andamento():
                 
                 col1, col2 = st.columns([1, 3])
                 with col1:
-                    if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                    if st.button("🛑 Encerrar Hora Extra", type="primary", width="stretch", key="btn_encerrar_he"):
                         # Encerrar hora extra
                         try:
                             agora = get_datetime_br()
@@ -1705,7 +1806,7 @@ def exibir_hora_extra_em_andamento():
                 
                 col1, col2 = st.columns([1, 3])
                 with col1:
-                    if st.button("🛑 Encerrar Hora Extra", type="primary", use_container_width=True, key="btn_encerrar_he"):
+                    if st.button("🛑 Encerrar Hora Extra", type="primary", width="stretch", key="btn_encerrar_he"):
                         # Encerrar hora extra
                         conn_encerrar = get_connection()
                         cursor_encerrar = conn_encerrar.cursor()
@@ -1807,7 +1908,7 @@ def aprovar_hora_extra_rapida_interface():
             if not solicitacoes:
                 st.info("✅ Nenhuma solicitação pendente no momento")
                 
-                if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if st.button("↩️ Voltar ao Menu", width="stretch"):
                     if 'aprovar_hora_extra' in st.session_state:
                         del st.session_state.aprovar_hora_extra
                     st.rerun()
@@ -1844,7 +1945,7 @@ def aprovar_hora_extra_rapida_interface():
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", width="stretch"):
                         # Atualizar status para em_execucao
                         update_query = f"""
                             UPDATE horas_extras_ativas
@@ -1872,7 +1973,7 @@ def aprovar_hora_extra_rapida_interface():
                         st.rerun()
                 
                 with col2:
-                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", width="stretch"):
                         # Atualizar status para rejeitada
                         update_query = f"""
                             UPDATE horas_extras_ativas
@@ -1901,7 +2002,7 @@ def aprovar_hora_extra_rapida_interface():
                 st.markdown("---")
             
             # Botão para voltar
-            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+            if st.button("↩️ Voltar ao Menu", width="stretch"):
                 if 'aprovar_hora_extra' in st.session_state:
                     del st.session_state.aprovar_hora_extra
                 st.rerun()
@@ -1937,7 +2038,7 @@ def aprovar_hora_extra_rapida_interface():
             if not solicitacoes:
                 st.info("✅ Nenhuma solicitação pendente no momento")
                 
-                if st.button("↩️ Voltar ao Menu", use_container_width=True):
+                if st.button("↩️ Voltar ao Menu", width="stretch"):
                     if 'aprovar_hora_extra' in st.session_state:
                         del st.session_state.aprovar_hora_extra
                     st.rerun()
@@ -1974,7 +2075,7 @@ def aprovar_hora_extra_rapida_interface():
                 col1, col2 = st.columns(2)
                 
                 with col1:
-                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", use_container_width=True):
+                    if st.button("✅ Aprovar", key=f"aprovar_{he_id}", type="primary", width="stretch"):
                         # Atualizar status para em_execucao
                         cursor.execute(f"""
                             UPDATE horas_extras_ativas
@@ -2008,7 +2109,7 @@ def aprovar_hora_extra_rapida_interface():
                         st.rerun()
                 
                 with col2:
-                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", use_container_width=True):
+                    if st.button("❌ Rejeitar", key=f"rejeitar_{he_id}", width="stretch"):
                         # Atualizar status para rejeitada
                         cursor.execute(f"""
                             UPDATE horas_extras_ativas
@@ -2043,7 +2144,7 @@ def aprovar_hora_extra_rapida_interface():
                 st.markdown("---")
             
             # Botão para voltar
-            if st.button("↩️ Voltar ao Menu", use_container_width=True):
+            if st.button("↩️ Voltar ao Menu", width="stretch"):
                 if 'aprovar_hora_extra' in st.session_state:
                     del st.session_state.aprovar_hora_extra
                 st.rerun()
@@ -2227,7 +2328,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                         col_apr, col_rej = st.columns(2)
                         
                         with col_apr:
-                            if st.button("✅ Aprovar", key=f"apr_he_widget_{sol_id}", use_container_width=True, type="primary"):
+                            if st.button("✅ Aprovar", key=f"apr_he_widget_{sol_id}", width="stretch", type="primary"):
                                 try:
                                     conn = get_connection()
                                     try:
@@ -2247,7 +2348,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                                     st.error(f"Erro: {e}")
                         
                         with col_rej:
-                            if st.button("❌ Rejeitar", key=f"rej_he_widget_{sol_id}", use_container_width=True):
+                            if st.button("❌ Rejeitar", key=f"rej_he_widget_{sol_id}", width="stretch"):
                                 if not observacoes_he or not observacoes_he.strip():
                                     st.error("❌ Informe o motivo da rejeição!")
                                 else:
@@ -2302,7 +2403,7 @@ def exibir_widget_notificacoes(horas_extras_system):
             if correcoes_pendentes > 0:
                 with cols[0]:
                     if st.button(f"🔧 {correcoes_pendentes} Correção(ões) Pendente(s)", 
-                                use_container_width=True,
+                                width="stretch",
                                 type="secondary",
                                 key="notif_correcao"):
                         st.session_state.ir_para_correcoes = True
@@ -2311,7 +2412,7 @@ def exibir_widget_notificacoes(horas_extras_system):
             if atestados_pendentes > 0:
                 with cols[1]:
                     if st.button(f"⏰ {atestados_pendentes} Atestado(s) Pendente(s)", 
-                                use_container_width=True,
+                                width="stretch",
                                 type="secondary",
                                 key="notif_atestado"):
                         st.session_state.ir_para_atestados = True
@@ -2415,9 +2516,7 @@ def tela_funcionario():
         # Contar mensagens não lidas (fora do bloco try/except)
         msgs_nao_lidas = 0
         try:
-            from push_scheduler import obter_mensagens_usuario
-            msgs = obter_mensagens_usuario(st.session_state.usuario, apenas_nao_lidas=True)
-            msgs_nao_lidas = len(msgs) if msgs else 0
+            msgs_nao_lidas = obter_mensagens_nao_lidas_count_cached(st.session_state.usuario)
         except Exception as e:
             logger.debug(f"Erro ao contar mensagens não lidas: {e}")
 
@@ -2520,21 +2619,21 @@ def tela_funcionario():
                     else:
                         st.error("❌ Erro ao salvar")
             
-            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push"):
+            if st.button("🔕 Desativar", width="stretch", key="btn_desativar_push"):
                 from push_scheduler import desativar_subscription
                 desativar_subscription(st.session_state.usuario)
                 st.rerun()
         else:
             st.info("📱 Receba lembretes mesmo com o app fechado!")
             
-            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push"):
+            if st.button("🔔 Ativar Lembretes", width="stretch", key="btn_ativar_push"):
                 topic = registrar_subscription(st.session_state.usuario)
                 st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
                 st.rerun()
 
         st.markdown("---")
 
-        if st.button("🚪 Sair", use_container_width=True):
+        if st.button("🚪 Sair", width="stretch"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -2956,7 +3055,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         
         col_sim, col_nao = st.columns(2)
         with col_sim:
-            if st.button("✅ Sim, fazer horas extras", use_container_width=True, type="primary"):
+            if st.button("✅ Sim, fazer horas extras", width="stretch", type="primary"):
                 st.session_state.horas_extras_ativa = True
                 st.session_state.horas_extras_inicio = get_datetime_br()
                 st.session_state.popup_hora_extra_mostrado = True
@@ -2964,7 +3063,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.rerun()
         
         with col_nao:
-            if st.button("❌ Não, encerrar expediente", use_container_width=True):
+            if st.button("❌ Não, encerrar expediente", width="stretch"):
                 # Registrar fim automaticamente
                 st.session_state.popup_hora_extra_mostrado = True
                 latitude = None
@@ -3056,9 +3155,9 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     with col_btn1:
         if he_em_andamento:
-            st.button("🕐 HE em Andamento", disabled=True, use_container_width=True)
+            st.button("🕐 HE em Andamento", disabled=True, width="stretch")
         elif pode_iniciar_he:
-            if st.button("▶️ Solicitar Horas Extras", use_container_width=True, type="primary"):
+            if st.button("▶️ Solicitar Horas Extras", width="stretch", type="primary"):
                 st.session_state.horas_extras_ativa = True
                 st.session_state.horas_extras_inicio = get_datetime_br()
                 st.session_state.popup_hora_extra_mostrado = True
@@ -3066,7 +3165,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 st.rerun()
         else:
             btn_help = "Registre entrada primeiro" if not ja_registrou_inicio else "Disponível após " + horario_fim_jornada if not passou_horario_fim else "Já registrou saída"
-            st.button("▶️ Solicitar Horas Extras", disabled=True, use_container_width=True, help=btn_help)
+            st.button("▶️ Solicitar Horas Extras", disabled=True, width="stretch", help=btn_help)
     
     with col_contador:
         contador_class = "he-contador he-contador-ativo" if he_em_andamento else "he-contador he-contador-inativo"
@@ -3092,10 +3191,10 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     
     with col_btn2:
         if he_em_andamento:
-            if st.button("⏹️ Finalizar Horas Extras", use_container_width=True, type="primary"):
+            if st.button("⏹️ Finalizar Horas Extras", width="stretch", type="primary"):
                 st.session_state.mostrar_finalizar_he = True
         else:
-            st.button("⏹️ Finalizar Horas Extras", disabled=True, use_container_width=True)
+            st.button("⏹️ Finalizar Horas Extras", disabled=True, width="stretch")
     
     # Modal de finalização de horas extras
     if st.session_state.get('mostrar_finalizar_he', False) and he_em_andamento:
@@ -3111,7 +3210,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         col_confirmar, col_cancelar = st.columns(2)
         
         with col_confirmar:
-            if st.button("✅ Confirmar e Enviar", use_container_width=True, type="primary", key="btn_confirmar_he"):
+            if st.button("✅ Confirmar e Enviar", width="stretch", type="primary", key="btn_confirmar_he"):
                 aprovador_sel = st.session_state.get('aprovador_he_selecionado', 'Selecione...')
                 if aprovador_sel == "Selecione...":
                     st.error("❌ Selecione quem vai autorizar as horas extras!")
@@ -3189,7 +3288,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                         st.error(f"❌ Erro: {str(e)}")
         
         with col_cancelar:
-            if st.button("❌ Cancelar", use_container_width=True, key="btn_cancelar_he"):
+            if st.button("❌ Cancelar", width="stretch", key="btn_cancelar_he"):
                 st.session_state.mostrar_finalizar_he = False
                 st.rerun()
     
@@ -3318,7 +3417,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         gps_lng_input = st.text_input("Longitude GPS", value=st.session_state.gps_lng_value, key="gps_lng_field", label_visibility="collapsed", placeholder="GPS Lng")
 
         submitted = st.form_submit_button(
-            "✅ Registrar Ponto", use_container_width=True)
+            "✅ Registrar Ponto", width="stretch")
 
         if submitted:
             if not atividade.strip():
@@ -3412,7 +3511,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         st.dataframe(
             df_dia[['Hora', 'Tipo', 'Modalidade',
                     'Projeto', 'Atividade', 'Localização']],
-            use_container_width=True
+            width="stretch"
         )
     else:
         st.info(
@@ -3696,7 +3795,7 @@ def historico_horas_extras_interface():
         st.info("📋 Nenhum registro encontrado para os filtros selecionados")
     
     # Botão voltar
-    if st.button("↩️ Voltar ao Menu", use_container_width=True):
+    if st.button("↩️ Voltar ao Menu", width="stretch"):
         st.rerun()
 
 
@@ -3710,7 +3809,7 @@ def horas_extras_interface(horas_extras_system):
     """, unsafe_allow_html=True)
     
     # Botão para acessar histórico completo
-    if st.button("📊 Ver Histórico Completo", use_container_width=True, type="secondary"):
+    if st.button("📊 Ver Histórico Completo", width="stretch", type="secondary"):
         st.session_state.ver_historico_completo = True
         st.rerun()
     
@@ -3771,7 +3870,7 @@ def horas_extras_interface(horas_extras_system):
             )
 
             submitted = st.form_submit_button(
-                "✅ Enviar Solicitação", use_container_width=True)
+                "✅ Enviar Solicitação", width="stretch")
 
             if submitted:
                 if not justificativa.strip():
@@ -4050,7 +4149,7 @@ def minhas_horas_projeto_interface():
             
             st.dataframe(
                 df[['Projeto', 'Horas', 'Percentual']],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
     else:
@@ -4134,7 +4233,7 @@ def banco_horas_funcionario_interface(banco_horas_system):
                 "data": "Data",
                 "descricao": "Descrição"
             }),
-            use_container_width=True
+            width="stretch"
         )
 
         # Botão de exportação
@@ -4457,7 +4556,7 @@ def registrar_ausencia_interface(upload_system):
             )
 
         submitted = st.form_submit_button(
-            "✅ Registrar Ausência", use_container_width=True)
+            "✅ Registrar Ausência", width="stretch")
 
     if submitted:
         if not motivo.strip():
@@ -4606,7 +4705,7 @@ def atestado_horas_interface(atestado_system, upload_system):
                     )
 
                 submitted = st.form_submit_button(
-                    "✅ Registrar Atestado", use_container_width=True)
+                    "✅ Registrar Atestado", width="stretch")
 
             if submitted:
                 if not motivo.strip():
@@ -4838,7 +4937,7 @@ def solicitar_correcao_registro_interface():
                     help="Campo obrigatório"
                 )
 
-                submitted = st.form_submit_button("✅ Enviar Solicitação", use_container_width=True)
+                submitted = st.form_submit_button("✅ Enviar Solicitação", width="stretch")
                 if submitted:
                     if not justificativa.strip():
                         st.error("❌ A justificativa é obrigatória")
@@ -4978,7 +5077,7 @@ def solicitar_correcao_registro_interface():
                     help="Campo obrigatório"
                 )
 
-                submitted_comp = st.form_submit_button("✅ Enviar Solicitação", use_container_width=True)
+                submitted_comp = st.form_submit_button("✅ Enviar Solicitação", width="stretch")
                 if submitted_comp:
                     if not justificativa.strip():
                         st.error("❌ A justificativa é obrigatória")
@@ -5188,6 +5287,10 @@ def corrigir_registros_interface():
 
     # Selecionar funcionário
     usuarios = obter_usuarios_ativos()
+    if not usuarios:
+        st.info("📭 Nenhum usuário ativo encontrado para correção.")
+        return
+
     opcoes_usuarios = [f"{u['nome_completo']} ({u['usuario']})" for u in usuarios]
 
     usuario_prefill = st.session_state.get("pendencia_usuario_prefill")
@@ -5230,6 +5333,9 @@ def corrigir_registros_interface():
             st.subheader(
                 f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
+            projetos_ativos = obter_projetos_ativos()
+            tipos_opcoes = ["inicio", "intermediario", "fim"]
+
             for registro in registros:
                 with st.expander(f"⏰ {registro['data_hora']} - {registro['tipo']}"):
                     col1, col2 = st.columns(2)
@@ -5246,11 +5352,14 @@ def corrigir_registros_interface():
                     with col2:
                         # Formulário de edição
                         with st.form(f"editar_registro_{registro['id']}"):
+                            tipo_atual = normalizar_tipo_ponto(registro.get('tipo'))
+                            if tipo_atual not in tipos_opcoes:
+                                tipo_atual = "inicio"
+
                             novo_tipo = st.selectbox(
                                 "Novo Tipo",
-                                ["inicio", "intermediario", "fim"],
-                                index=["inicio", "intermediario",
-                                       "fim"].index(registro['tipo'])
+                                tipos_opcoes,
+                                index=tipos_opcoes.index(tipo_atual)
                             )
 
                             nova_data_hora = st.text_input(
@@ -5267,9 +5376,9 @@ def corrigir_registros_interface():
 
                             novo_projeto = st.selectbox(
                                 "Novo Projeto",
-                                [""] + obter_projetos_ativos(),
-                                index=[""] + obter_projetos_ativos().index(
-                                    registro['projeto']) if registro['projeto'] in obter_projetos_ativos() else 0
+                                [""] + projetos_ativos,
+                                index=(projetos_ativos.index(registro['projeto']) + 1)
+                                if registro['projeto'] in projetos_ativos else 0
                             )
 
                             # Justificativa obrigatória para auditoria da correção
@@ -5281,7 +5390,7 @@ def corrigir_registros_interface():
 
                             # Botão de salvar alteração do formulário
                             submitted = st.form_submit_button(
-                                "💾 Salvar Alterações", use_container_width=True)
+                                "💾 Salvar Alterações", width="stretch")
 
                             if submitted:
                                 if not justificativa_edicao.strip():
@@ -5412,7 +5521,7 @@ def pendencias_ponto_interface():
     df["Horas registradas"] = df["Horas registradas"].apply(
         lambda v: "-" if v in (None, "") else str(v)
     )
-    st.dataframe(df, use_container_width=True, hide_index=True)
+    st.dataframe(df, width="stretch", hide_index=True)
     st.caption(f"Total de inconsistências encontradas: {len(pendencias)}")
 
     st.markdown("### Ações")
@@ -5535,7 +5644,7 @@ def meus_registros_interface(calculo_horas_system):
         st.markdown("### 📅 Registros do Período")
         st.dataframe(
             df[['Data', 'Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização']],
-            use_container_width=True,
+            width="stretch",
             hide_index=True
         )
 
@@ -5693,33 +5802,12 @@ def tela_gestor():
 
     # Verificar se há solicitações de hora extra pendentes
     solicitacoes_pendentes_count = 0
-    if REFACTORING_ENABLED:
-        try:
-            result = execute_query(
-                f"SELECT COUNT(*) FROM horas_extras_ativas WHERE aprovador = {SQL_PLACEHOLDER} AND status = 'aguardando_aprovacao'",
-                (st.session_state.usuario,),
-                fetch_one=True
-            )
-            solicitacoes_pendentes_count = result[0] if result else 0
-        except Exception as e:
-            log_error("Erro ao verificar solicitações pendentes", e, {"usuario": st.session_state.usuario})
-    else:
-        conn = None
-        try:
-            conn = get_connection()
-            cursor = conn.cursor()
-            cursor.execute(f"""
-                SELECT COUNT(*) FROM horas_extras_ativas
-                WHERE aprovador = {SQL_PLACEHOLDER}
-                AND status = 'aguardando_aprovacao'
-            """, (st.session_state.usuario,))
-            result = cursor.fetchone()
-            solicitacoes_pendentes_count = result[0] if result else 0
-        except Exception as e:
-            logger.error(f"Erro ao verificar solicitações pendentes: {str(e)}")
-        finally:
-            if conn:
-                _return_conn(conn)
+    try:
+        solicitacoes_pendentes_count = obter_solicitacoes_pendentes_count_cached(
+            st.session_state.usuario
+        )
+    except Exception as e:
+        log_error("Erro ao verificar solicitações pendentes", e, {"usuario": st.session_state.usuario})
     
     # Se houver solicitações pendentes, exibir alerta destacado
     if solicitacoes_pendentes_count > 0:
@@ -5746,7 +5834,7 @@ def tela_gestor():
         </style>
         """, unsafe_allow_html=True)
         
-        if st.button("📋 Aprovar Agora", type="primary", use_container_width=True, key="btn_aprovar_rapido"):
+        if st.button("📋 Aprovar Agora", type="primary", width="stretch", key="btn_aprovar_rapido"):
             st.session_state.aprovar_hora_extra = True
             st.rerun()
     
@@ -5759,61 +5847,14 @@ def tela_gestor():
     with st.sidebar:
         st.markdown("### 🎛️ Menu do Gestor")
         
-        # Contar pendências para badges
-        if REFACTORING_ENABLED:
-            try:
-                # Horas extras para aprovar
-                result_he = execute_query(
-                    f"SELECT COUNT(*) FROM solicitacoes_horas_extras WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente'",
-                    (st.session_state.usuario,),
-                    fetch_one=True
-                )
-                he_aprovar = result_he[0] if result_he else 0
-                
-                # Atestados pendentes
-                result_at = execute_query(
-                    "SELECT COUNT(*) FROM atestado_horas WHERE status = 'pendente'",
-                    fetch_one=True
-                )
-                atestados_pendentes = result_at[0] if result_at else 0
-                
-                # Correções pendentes (todas - gestor aprova todas)
-                result_corr = execute_query(
-                    "SELECT COUNT(*) FROM solicitacoes_correcao_registro WHERE status = 'pendente'",
-                    fetch_one=True
-                )
-                correcoes_pendentes = result_corr[0] if result_corr else 0
-            except Exception as e:
-                log_error("Erro ao contar pendências do gestor", e, {"usuario": st.session_state.usuario})
-                he_aprovar = atestados_pendentes = correcoes_pendentes = 0
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                # Horas extras para aprovar
-                cursor.execute(f"""
-                    SELECT COUNT(*) FROM solicitacoes_horas_extras 
-                    WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente'
-                """, (st.session_state.usuario,))
-                he_aprovar = cursor.fetchone()[0]
-
-                # Atestados pendentes
-                cursor.execute("""
-                    SELECT COUNT(*) FROM atestado_horas 
-                    WHERE status = 'pendente'
-                """)
-                atestados_pendentes = cursor.fetchone()[0]
-
-                # Correções pendentes (todas - gestor aprova todas)
-                cursor.execute("""
-                    SELECT COUNT(*) FROM solicitacoes_correcao_registro 
-                    WHERE status = 'pendente'
-                """)
-                correcoes_pendentes = cursor.fetchone()[0]
-
-            finally:
-                _return_conn(conn)
+        # Contar pendências para badges (consulta única + cache curto)
+        try:
+            he_aprovar, atestados_pendentes, correcoes_pendentes = obter_badges_gestor_cached(
+                st.session_state.usuario
+            )
+        except Exception as e:
+            log_error("Erro ao contar pendências do gestor", e, {"usuario": st.session_state.usuario})
+            he_aprovar = atestados_pendentes = correcoes_pendentes = 0
         
         total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
         
@@ -5909,21 +5950,21 @@ def tela_gestor():
                     else:
                         st.error("❌ Erro ao salvar")
             
-            if st.button("🔕 Desativar", use_container_width=True, key="btn_desativar_push_gestor"):
+            if st.button("🔕 Desativar", width="stretch", key="btn_desativar_push_gestor"):
                 from push_scheduler import desativar_subscription
                 desativar_subscription(st.session_state.usuario)
                 st.rerun()
         else:
             st.info("📱 Receba lembretes mesmo com o app fechado!")
             
-            if st.button("🔔 Ativar Lembretes", use_container_width=True, key="btn_ativar_push_gestor"):
+            if st.button("🔔 Ativar Lembretes", width="stretch", key="btn_ativar_push_gestor"):
                 topic = registrar_subscription(st.session_state.usuario)
                 st.success(f"✅ Ativado! Seu tópico: **{ntfy_topic}**")
                 st.rerun()
 
         st.markdown("---")
 
-        if st.button("🚪 Sair", use_container_width=True):
+        if st.button("🚪 Sair", width="stretch"):
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
@@ -6021,7 +6062,7 @@ def comunicacao_gestor_interface():
         
         col1, col2 = st.columns([1, 3])
         with col1:
-            if st.button("📤 Enviar Aviso", type="primary", use_container_width=True):
+            if st.button("📤 Enviar Aviso", type="primary", width="stretch"):
                 if titulo and mensagem:
                     enviados = enviar_aviso_geral(
                         gestor=st.session_state.usuario,
@@ -6066,7 +6107,7 @@ def comunicacao_gestor_interface():
         
         col1, col2 = st.columns([1, 3])
         with col1:
-            if st.button("📤 Enviar Mensagem", type="primary", use_container_width=True):
+            if st.button("📤 Enviar Mensagem", type="primary", width="stretch"):
                 if destinatario and msg_direta:
                     sucesso = enviar_mensagem_direta(
                         remetente=st.session_state.usuario,
@@ -6421,7 +6462,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     title="📍 Status de Presença Hoje",
                     colors=[THEME_COLORS['success'], THEME_COLORS['danger']]
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
         
         with col2:
             # Gauge de taxa de registros
@@ -6437,7 +6478,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     {'range': [80, 100], 'color': THEME_COLORS['success']}
                 ]
             )
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
         
         # Gráfico de linha - Registros últimos 7 dias
         datas_semana = []
@@ -6464,7 +6505,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
             y_label="Registros",
             fill=True
         )
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig, width="stretch")
         
         # Gráficos de barras
         col1, col2 = st.columns(2)
@@ -6496,7 +6537,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     y_label="Quantidade",
                     color_scale="Plasma"
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("📊 Sem dados de ausências no mês")
         
@@ -6525,7 +6566,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
                     title="📋 Status de Solicitações (Mês)",
                     colors=[THEME_COLORS['warning'], THEME_COLORS['success'], THEME_COLORS['danger']]
                 )
-                st.plotly_chart(fig, use_container_width=True)
+                st.plotly_chart(fig, width="stretch")
             else:
                 st.info("📊 Sem solicitações no mês")
         
@@ -6716,7 +6757,7 @@ def banco_horas_gestor_interface(banco_horas_system):
                 "usuario": "Usuário",
                 "Saldo Formatado": "Saldo Atual"
             }),
-            use_container_width=True
+            width="stretch"
         )
 
         # Filtros para extrato detalhado
@@ -6776,7 +6817,7 @@ def banco_horas_gestor_interface(banco_horas_system):
                         "data": "Data",
                         "descricao": "Descrição"
                     }),
-                    use_container_width=True
+                    width="stretch"
                 )
             else:
                 st.info("📋 Nenhuma movimentação encontrada no período selecionado")
@@ -7009,7 +7050,7 @@ def aprovar_correcoes_registros_interface():
                         col_a, col_b = st.columns(2)
 
                         with col_a:
-                            if st.button("✅ Aprovar", key=f"aprovar_corr_{correcao_id}", use_container_width=True, type="primary"):
+                            if st.button("✅ Aprovar", key=f"aprovar_corr_{correcao_id}", width="stretch", type="primary"):
                                 try:
                                     conn = get_connection()
                                     try:
@@ -7270,7 +7311,7 @@ def aprovar_correcoes_registros_interface():
                                     st.error(f"❌ Erro ao aprovar: {str(e)}")
 
                         with col_b:
-                            if st.button("❌ Rejeitar", key=f"rejeitar_corr_{correcao_id}", use_container_width=True):
+                            if st.button("❌ Rejeitar", key=f"rejeitar_corr_{correcao_id}", width="stretch"):
                                 st.session_state[f'confirm_reject_corr_{correcao_id}'] = True
 
                         # Confirmação de rejeição
@@ -7816,7 +7857,7 @@ def aprovar_atestados_interface(atestado_system):
                         col_a, col_b = st.columns(2)
 
                         with col_a:
-                            if st.button("✅ Aprovar", key=f"aprovar_{atestado_id}", use_container_width=True, type="primary"):
+                            if st.button("✅ Aprovar", key=f"aprovar_{atestado_id}", width="stretch", type="primary"):
                                 resultado = atestado_system.aprovar_atestado(
                                     atestado_id,
                                     st.session_state.usuario,
@@ -7833,7 +7874,7 @@ def aprovar_atestados_interface(atestado_system):
                                     st.error(f"❌ Erro: {resultado['message']}")
 
                         with col_b:
-                            if st.button("❌ Rejeitar", key=f"rejeitar_{atestado_id}", use_container_width=True):
+                            if st.button("❌ Rejeitar", key=f"rejeitar_{atestado_id}", width="stretch"):
                                 st.session_state[f'confirm_reject_{atestado_id}'] = True
 
                         # Confirmação de rejeição
@@ -7957,7 +7998,7 @@ def aprovar_atestados_interface(atestado_system):
 
                     with col2:
                         # Opção de reverter aprovação
-                        if st.button("🔄 Reverter", key=f"reverter_{atestado_id}", use_container_width=True):
+                        if st.button("🔄 Reverter", key=f"reverter_{atestado_id}", width="stretch"):
                             st.session_state[f'confirm_reverter_{atestado_id}'] = True
 
                         if st.session_state.get(f'confirm_reverter_{atestado_id}'):
@@ -8107,7 +8148,7 @@ def aprovar_atestados_interface(atestado_system):
             # Exibir apenas colunas relevantes
             st.dataframe(
                 df[['Nome', 'Data', 'Horas', 'Status', 'Data Registro']],
-                use_container_width=True,
+                width="stretch",
                 hide_index=True
             )
 
@@ -8380,7 +8421,7 @@ def todos_registros_interface(calculo_horas_system):
                 data=csv,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.csv",
                 mime="text/csv",
-                use_container_width=True
+                width="stretch"
             )
         with col3:
             # Exportar Excel
@@ -8392,7 +8433,7 @@ def todos_registros_interface(calculo_horas_system):
                 data=buffer,
                 file_name=f"registros_ponto_{data_inicio}_{data_fim}.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True
+                width="stretch"
             )
 
     # Agrupar por funcionário e data
@@ -8608,7 +8649,7 @@ def todos_registros_interface(calculo_horas_system):
             for usuario, dados in sorted(usuarios_stats.items(), key=lambda x: x[1]['nome'])
         ])
 
-        st.dataframe(df_stats, use_container_width=True, hide_index=True)
+        st.dataframe(df_stats, width="stretch", hide_index=True)
 
 
 def gerenciar_arquivos_interface(upload_system):
@@ -8807,7 +8848,7 @@ def gerenciar_arquivos_interface(upload_system):
                             data=content,
                             file_name=nome,
                             mime=tipo_arquivo,
-                            use_container_width=True,
+                            width="stretch",
                             key=f"download_arq_{arquivo_id}"
                         )
                         
@@ -8819,7 +8860,7 @@ def gerenciar_arquivos_interface(upload_system):
                         st.caption("O arquivo não está mais acessível no servidor. Solicite ao usuário que faça o re-upload.")
 
                     # Botão de exclusão (com confirmação)
-                    if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", use_container_width=True):
+                    if st.button(f"🗑️ Excluir", key=f"del_{arquivo_id}", width="stretch"):
                         st.session_state[f"confirm_delete_{arquivo_id}"] = True
 
                     if st.session_state.get(f"confirm_delete_{arquivo_id}"):
@@ -8954,7 +8995,7 @@ def gerenciar_projetos_interface():
                         st.write("")
 
                         # Botão de salvar
-                        if st.button("💾 Salvar", key=f"save_{projeto_id}", use_container_width=True):
+                        if st.button("💾 Salvar", key=f"save_{projeto_id}", width="stretch"):
                             if REFACTORING_ENABLED:
                                 try:
                                     update_query = f"""
@@ -8989,7 +9030,7 @@ def gerenciar_projetos_interface():
                                 st.rerun()
 
                         # Botão de excluir
-                        if st.button("🗑️ Excluir", key=f"del_{projeto_id}", use_container_width=True):
+                        if st.button("🗑️ Excluir", key=f"del_{projeto_id}", width="stretch"):
                             st.session_state[f"confirm_del_proj_{projeto_id}"] = True
 
                         if st.session_state.get(f"confirm_del_proj_{projeto_id}"):
@@ -9034,7 +9075,7 @@ def gerenciar_projetos_interface():
             ativo_novo = st.checkbox("Projeto Ativo", value=True)
 
             submitted = st.form_submit_button(
-                "➕ Cadastrar Projeto", use_container_width=True)
+                "➕ Cadastrar Projeto", width="stretch")
 
             if submitted:
                 if not nome_novo:
@@ -9378,7 +9419,7 @@ def gerenciar_usuarios_interface():
                         st.write("")
 
                         # Botão de salvar
-                        if st.button("💾 Salvar", key=f"save_{usuario_id}", use_container_width=True):
+                        if st.button("💾 Salvar", key=f"save_{usuario_id}", width="stretch"):
                             if REFACTORING_ENABLED:
                                 try:
                                     update_query = f"""
@@ -9442,7 +9483,7 @@ def gerenciar_usuarios_interface():
                                 st.rerun()
 
                         # Botão de excluir
-                        if st.button("🗑️ Excluir", key=f"del_{usuario_id}", use_container_width=True):
+                        if st.button("🗑️ Excluir", key=f"del_{usuario_id}", width="stretch"):
                             st.session_state[f"confirm_del_user_{usuario_id}"] = True
 
                         if st.session_state.get(f"confirm_del_user_{usuario_id}"):
@@ -9521,7 +9562,7 @@ def gerenciar_usuarios_interface():
             st.info("💡 **Opcional:** Configure jornada semanal detalhada após criar o usuário na aba de edição")
 
             submitted = st.form_submit_button(
-                "➕ Cadastrar Usuário", use_container_width=True)
+                "➕ Cadastrar Usuário", width="stretch")
 
             if submitted:
                 # ============================================
@@ -9816,7 +9857,7 @@ def horas_por_projeto_interface():
                 
                 st.dataframe(
                     df_display[['Projeto', 'Horas', 'Percentual']],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
                 
@@ -9965,7 +10006,7 @@ def horas_por_projeto_interface():
                 df_display['Horas Formatadas'] = df_display['horas'].apply(format_horas_projeto)
                 st.dataframe(
                     df_display[['Mês', 'Horas Formatadas']],
-                    use_container_width=True,
+                    width="stretch",
                     hide_index=True
                 )
             else:
@@ -10036,7 +10077,7 @@ def relatorios_horas_extras_interface():
                 if status_df_data:
                     import pandas as pd
                     df_status = pd.DataFrame(status_df_data)
-                    st.dataframe(df_status, use_container_width=True, hide_index=True)
+                    st.dataframe(df_status, width="stretch", hide_index=True)
         else:
             st.warning("Não foi possível carregar as estatísticas.")
     
@@ -10079,7 +10120,7 @@ def relatorios_horas_extras_interface():
                     })
                 
                 df = pd.DataFrame(df_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 
                 # Exportar CSV
                 csv = df.to_csv(index=False).encode('utf-8')
@@ -10145,7 +10186,7 @@ def relatorios_horas_extras_interface():
                         })
                     
                     df = pd.DataFrame(df_data)
-                    st.dataframe(df, use_container_width=True, hide_index=True)
+                    st.dataframe(df, width="stretch", hide_index=True)
             else:
                 st.info("Nenhum registro encontrado para o período selecionado.")
     
@@ -10237,7 +10278,7 @@ def relatorios_horas_extras_interface():
                     })
                 
                 df = pd.DataFrame(df_data)
-                st.dataframe(df, use_container_width=True, hide_index=True)
+                st.dataframe(df, width="stretch", hide_index=True)
                 
                 # Exportar
                 csv = df.to_csv(index=False).encode('utf-8')
@@ -10339,10 +10380,10 @@ def _render_backup_email_section():
             col_btn1, col_btn2 = st.columns(2)
 
             with col_btn1:
-                salvar_config = st.form_submit_button("💾 Salvar Configuração", use_container_width=True)
+                salvar_config = st.form_submit_button("💾 Salvar Configuração", width="stretch")
 
             with col_btn2:
-                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", use_container_width=True, type="secondary")
+                enviar_agora = st.form_submit_button("📤 Enviar Backup Agora", width="stretch", type="secondary")
 
         if salvar_config:
             if ativar_backup_email and not email_backup:
@@ -10446,7 +10487,7 @@ def _render_push_notifications_config():
             - Apenas você (gestor) pode desabilitar esta obrigatoriedade
             """)
 
-            if st.form_submit_button("💾 Salvar Configuração de Push", use_container_width=True):
+            if st.form_submit_button("💾 Salvar Configuração de Push", width="stretch"):
                 try:
                     valor = '1' if push_obrigatorio else '0'
 
@@ -10639,7 +10680,7 @@ def _render_auto_notifications_config():
                 key="aprovadores_horarios"
             )
 
-        if st.form_submit_button("💾 Salvar Configurações de Notificação", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de Notificação", width="stretch"):
             novas_configs = [
                 ('notif_entrada_ativo', '1' if entrada_ativo else '0'),
                 ('notif_entrada_horarios', entrada_horarios),
@@ -10823,7 +10864,7 @@ def sistema_interface():
                 value=int(config_dict.get('dias_historico_padrao', '30'))
             )
 
-        if st.form_submit_button("💾 Salvar Configurações de Jornada", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de Jornada", width="stretch"):
             configs_jornada = [
                 ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
                 ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
@@ -10883,7 +10924,7 @@ def sistema_interface():
                     int(config_dict.get('notificacao_fim_jornada', '1')))
             )
 
-        if st.form_submit_button("💾 Salvar Configurações de Horas Extras", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de Horas Extras", width="stretch"):
             conn = get_connection()
             try:
                 cursor = conn.cursor()
@@ -10930,7 +10971,7 @@ def sistema_interface():
 
         st.info("💡 Quando GPS obrigatório está ativado, o sistema não permitirá registro de ponto sem localização válida.")
 
-        if st.form_submit_button("💾 Salvar Configurações de GPS", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações de GPS", width="stretch"):
             conn = get_connection()
             try:
                 cursor = conn.cursor()
@@ -10965,7 +11006,7 @@ def sistema_interface():
                 "Backup Automático Diário"
             )
 
-        if st.form_submit_button("💾 Salvar Configurações Gerais", use_container_width=True):
+        if st.form_submit_button("💾 Salvar Configurações Gerais", width="stretch"):
             conn = get_connection()
             try:
                 cursor = conn.cursor()
@@ -11094,7 +11135,7 @@ def configurar_jornada_interface():
                 value=int(configs_jornada_dict.get('dias_historico_padrao', '30'))
             )
 
-        if st.form_submit_button("💾 Salvar jornada padrão", use_container_width=True):
+        if st.form_submit_button("💾 Salvar jornada padrão", width="stretch"):
             novos_valores = [
                 ('jornada_inicio_padrao', jornada_inicio.strftime("%H:%M")),
                 ('jornada_fim_padrao', jornada_fim.strftime("%H:%M")),
@@ -11279,7 +11320,7 @@ def configurar_jornada_interface():
                     # (se não trabalha_novo, as variáveis já estão inicializadas acima)
 
                     # Botão para salvar este dia
-                    if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", use_container_width=True):
+                    if st.form_submit_button(f"💾 Salvar {NOMES_DIAS.get(dia, dia)}", width="stretch"):
                         # Atualizar configuração
                         jornada_atual[dia] = {
                             'trabalha': trabalha_novo,
@@ -11303,7 +11344,7 @@ def configurar_jornada_interface():
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        if st.button("📋 Copiar para dias úteis (Seg-Sex)", use_container_width=True):
+        if st.button("📋 Copiar para dias úteis (Seg-Sex)", width="stretch"):
             # Copiar config de segunda para ter um padrão
             padrao = jornada_atual.get('seg', {'trabalha': True, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 60})
             for dia in ['ter', 'qua', 'qui', 'sex']:
@@ -11316,7 +11357,7 @@ def configurar_jornada_interface():
                 st.error("❌ Erro ao copiar padrão")
     
     with col2:
-        if st.button("🏖️ Desativar fim de semana (Sab-Dom)", use_container_width=True):
+        if st.button("🏖️ Desativar fim de semana (Sab-Dom)", width="stretch"):
             for dia in ['sab', 'dom']:
                 jornada_atual[dia] = {'trabalha': False, 'inicio': '08:00', 'fim': '17:00', 'intervalo': 0}
             
@@ -11327,7 +11368,7 @@ def configurar_jornada_interface():
                 st.error("❌ Erro ao desativar fim de semana")
     
     with col3:
-        if st.button("🔄 Resetar para padrão", use_container_width=True):
+        if st.button("🔄 Resetar para padrão", width="stretch"):
             # Resetar para 08:00-17:00 seg-sex
             for dia in dias_semana_ordem:
                 if dia in ['seg', 'ter', 'qua', 'qui', 'sex']:
@@ -11405,13 +11446,13 @@ def exibir_alerta_fim_jornada_avancado():
                 logger.debug("Erro ao verificar fim de expediente no alerta: %s", e)
 
             with col1:
-                if st.button("✅ Vou Finalizar", use_container_width=True, key="btn_vai_finalizar"):
+                if st.button("✅ Vou Finalizar", width="stretch", key="btn_vai_finalizar"):
                     st.success("Tudo bem! Trabalhe um ótimo dia 🎉")
             with col2:
                 if ja_finalizou_hoje:
-                    st.button("⏱️ Vou Fazer Hora Extra", disabled=True, use_container_width=True, key="btn_vai_fazer_he_disabled")
+                    st.button("⏱️ Vou Fazer Hora Extra", disabled=True, width="stretch", key="btn_vai_fazer_he_disabled")
                 else:
-                    if st.button("⏱️ Vou Fazer Hora Extra", type="primary", use_container_width=True, key="btn_vai_fazer_he"):
+                    if st.button("⏱️ Vou Fazer Hora Extra", type="primary", width="stretch", key="btn_vai_fazer_he"):
                         st.session_state.solicitar_horas_extras = True
                         st.session_state.vai_fazer_hora_extra = True
                         st.rerun()
@@ -11446,15 +11487,24 @@ def exibir_alerta_fim_jornada_avancado():
 
 def buscar_registros_dia(usuario, data):
     """Busca todos os registros de ponto de um usuário em uma data específica"""
+    data_ref = safe_datetime_parse(data)
+    if not data_ref:
+        return []
+
+    inicio_dia = datetime.combine(data_ref.date(), time.min)
+    fim_dia = inicio_dia + timedelta(days=1)
+
     if REFACTORING_ENABLED:
         try:
             with safe_cursor() as cursor:
                 cursor.execute(f"""
                     SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
                     FROM registros_ponto 
-                    WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                    WHERE usuario = {SQL_PLACEHOLDER}
+                      AND data_hora >= {SQL_PLACEHOLDER}
+                      AND data_hora < {SQL_PLACEHOLDER}
                     ORDER BY data_hora
-                """, (usuario, data))
+                """, (usuario, inicio_dia, fim_dia))
 
                 registros = []
                 for row in cursor.fetchall():
@@ -11462,7 +11512,7 @@ def buscar_registros_dia(usuario, data):
                         'id': row[0],
                         'usuario': row[1],
                         'data_hora': row[2],
-                        'tipo': row[3],
+                        'tipo': normalizar_tipo_ponto(row[3]),
                         'modalidade': row[4],
                         'projeto': row[5],
                         'atividade': row[6]
@@ -11480,9 +11530,11 @@ def buscar_registros_dia(usuario, data):
             cursor.execute(f"""
                 SELECT id, usuario, data_hora, tipo, modalidade, projeto, atividade
                 FROM registros_ponto 
-                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER}
+                WHERE usuario = {SQL_PLACEHOLDER}
+                  AND data_hora >= {SQL_PLACEHOLDER}
+                  AND data_hora < {SQL_PLACEHOLDER}
                 ORDER BY data_hora
-            """, (usuario, data))
+            """, (usuario, inicio_dia, fim_dia))
 
             registros = []
             for row in cursor.fetchall():
@@ -11490,7 +11542,7 @@ def buscar_registros_dia(usuario, data):
                     'id': row[0],
                     'usuario': row[1],
                     'data_hora': row[2],
-                    'tipo': row[3],
+                    'tipo': normalizar_tipo_ponto(row[3]),
                     'modalidade': row[4],
                     'projeto': row[5],
                     'atividade': row[6]
