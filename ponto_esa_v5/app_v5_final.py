@@ -338,6 +338,24 @@ def format_datetime_safe(value, fmt="%d/%m/%Y %H:%M", default="-"):
     return dt.strftime(fmt) if dt else default
 
 
+def formatar_localizacao_legivel(localizacao_original, latitude=None, longitude=None):
+    """Retorna localização amigável (endereço/CEP quando possível) para exibição."""
+    if latitude is None or longitude is None:
+        return localizacao_original or "GPS não disponível"
+
+    try:
+        from geocoding import formatar_localizacao_gestor
+        loc = formatar_localizacao_gestor(latitude, longitude, localizacao_original)
+        if loc.get("endereco"):
+            return loc["endereco"]
+    except Exception as e:
+        logger.debug("Falha ao formatar localização legível: %s", e)
+
+    if localizacao_original and localizacao_original != "GPS não disponível":
+        return localizacao_original
+    return f"GPS: {latitude:.6f}, {longitude:.6f}"
+
+
 def obter_entrada_saida_dia_cursor(cursor, usuario, data_referencia):
     """Retorna (entrada, saida, horas) para um dia com base nos registros existentes."""
     cursor.execute(f"""
@@ -3443,10 +3461,13 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
                 latitude = None
                 longitude = None
                 try:
-                    if gps_lat_input and gps_lat_input.strip():
-                        latitude = float(gps_lat_input.strip())
-                    if gps_lng_input and gps_lng_input.strip():
-                        longitude = float(gps_lng_input.strip())
+                    lat_raw = gps_lat_input or st.session_state.get("gps_lat_field", "")
+                    lng_raw = gps_lng_input or st.session_state.get("gps_lng_field", "")
+
+                    if lat_raw and str(lat_raw).strip():
+                        latitude = float(str(lat_raw).strip().replace(",", "."))
+                    if lng_raw and str(lng_raw).strip():
+                        longitude = float(str(lng_raw).strip().replace(",", "."))
                 except (ValueError, TypeError):
                     # Se não conseguir converter, registra sem GPS
                     latitude = None
@@ -3520,6 +3541,10 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         df_dia = pd.DataFrame(registros_dia, columns=[
             'ID', 'Usuário', 'Data/Hora', 'Tipo', 'Modalidade', 'Projeto', 'Atividade', 'Localização', 'Latitude', 'Longitude', 'Registro'
         ])
+        df_dia['Localização'] = df_dia.apply(
+            lambda r: formatar_localizacao_legivel(r['Localização'], r['Latitude'], r['Longitude']),
+            axis=1
+        )
         df_dia['Hora'] = pd.to_datetime(
             df_dia['Data/Hora']).dt.strftime('%H:%M')
         st.dataframe(
@@ -5299,6 +5324,59 @@ def corrigir_registros_interface():
     </div>
     """, unsafe_allow_html=True)
 
+    # Mostrar toda a fila de pendências para o gestor tratar todas de uma vez.
+    pendencias = []
+    if REFACTORING_ENABLED:
+        try:
+            pendencias = execute_query(
+                """
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.justificativa, c.data_solicitacao, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+                LIMIT 200
+                """
+            ) or []
+        except Exception as e:
+            logger.debug("Falha ao carregar pendências de correção: %s", e)
+    else:
+        conn_pend = get_connection()
+        try:
+            cur_pend = conn_pend.cursor()
+            cur_pend.execute("""
+                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.justificativa, c.data_solicitacao, u.nome_completo
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+                LIMIT 200
+            """)
+            pendencias = cur_pend.fetchall() or []
+        finally:
+            _return_conn(conn_pend)
+
+    if pendencias:
+        st.markdown(f"### 📬 Pendências Abertas ({len(pendencias)})")
+        for pend in pendencias:
+            pend_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
+            titulo = f"⏳ {pend_nome or pend_usuario} - {format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}"
+            with st.expander(titulo):
+                st.markdown(f"**Solicitado em:** {format_datetime_safe(pend_data_sol, '%d/%m/%Y %H:%M')}")
+                st.markdown(
+                    f"**Alteração:** `{format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}` → `{format_datetime_safe(pend_dt_nova, '%d/%m/%Y %H:%M')}`"
+                )
+                st.markdown(f"**Justificativa:** {pend_just or 'Sem justificativa'}")
+                if st.button("Abrir para corrigir", key=f"abrir_pend_corr_{pend_id}"):
+                    st.session_state.pendencia_usuario_prefill = pend_usuario
+                    dt_pref = safe_datetime_parse(pend_dt_nova) or safe_datetime_parse(pend_dt_orig)
+                    if dt_pref:
+                        st.session_state.pendencia_data_prefill = dt_pref.strftime("%Y-%m-%d")
+                    st.rerun()
+        st.markdown("---")
+
     # Selecionar funcionário
     usuarios = obter_usuarios_ativos()
     if not usuarios:
@@ -5653,6 +5731,10 @@ def meus_registros_interface(calculo_horas_system):
         # Formatar dados para exibição
         df['Data'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%d/%m/%Y')
         df['Hora'] = pd.to_datetime(df['Data/Hora']).dt.strftime('%H:%M')
+        df['Localização'] = df.apply(
+            lambda r: formatar_localizacao_legivel(r['Localização'], r['Latitude'], r['Longitude']),
+            axis=1
+        )
         
         # Exibir tabela simples e rápida
         st.markdown("### 📅 Registros do Período")
@@ -7659,7 +7741,11 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.info(justificativa)
                     
                     if st.button("Ver detalhes completos", key=f"ver_corr_{corr_id}"):
-                        st.session_state['opcao_menu'] = "🔧 Corrigir Registros"
+                        st.session_state.ir_para_corrigir_registros = True
+                        st.session_state.pendencia_usuario_prefill = usuario
+                        dt_pref = safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_orig)
+                        if dt_pref:
+                            st.session_state.pendencia_data_prefill = dt_pref.strftime("%Y-%m-%d")
                         st.rerun()
         else:
             st.success("✅ Nenhuma solicitação de correção pendente")

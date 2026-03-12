@@ -90,6 +90,11 @@ def coordenadas_para_endereco(latitude: float, longitude: float) -> Optional[str
                 }
                 estado_abrev = estados_br.get(estado, estado[:2].upper())
                 partes.append(estado_abrev)
+
+            # CEP (quando disponível)
+            cep = address.get("postcode")
+            if cep:
+                partes.append(f"CEP {cep}")
             
             if partes:
                 return " - ".join(partes)
