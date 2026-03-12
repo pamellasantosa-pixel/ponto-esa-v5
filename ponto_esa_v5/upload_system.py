@@ -193,18 +193,8 @@ class UploadSystem:
                     "existing_file": existing_file
                 }
 
-            # 🔧 CORREÇÃO: Não salvar mais no sistema de arquivos local (efêmero em Render)
-            # O conteúdo será armazenado diretamente no banco de dados
-            # Manter file_path para compatibilidade, mas conteúdo vem do banco
-            
-            # Tentar criar diretório e salvar arquivo localmente como backup
-            try:
-                os.makedirs(os.path.dirname(file_path), exist_ok=True)
-                with open(file_path, 'wb') as f:
-                    f.write(file_content)
-            except Exception:
-                # Se não conseguir salvar localmente, continua (arquivo estará no banco)
-                pass
+            # Conteúdo crítico fica persistido no banco (BYTEA/BLOB).
+            # O caminho físico é mantido apenas como metadado de compatibilidade.
 
             # Registrar no banco COM conteúdo
             mime_type, _ = mimetypes.guess_type(original_filename)
@@ -384,18 +374,9 @@ class UploadSystem:
             if not result:
                 return {"success": False, "message": "Arquivo não encontrado"}
 
-            file_path = result[0]
-
             # Marcar como inativo no banco
             cursor.execute(
                 f"UPDATE uploads SET status = 'removido' WHERE id = {SQL_PLACEHOLDER}", (upload_id,))
-
-            # Remover arquivo físico
-            try:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-            except Exception as e:
-                logger.warning("Não foi possível remover arquivo físico %s: %s", file_path, e)
 
             conn.commit()
             return {"success": True, "message": "Arquivo removido com sucesso"}
@@ -436,13 +417,8 @@ class UploadSystem:
         except Exception:
             pass  # Se falhar, tenta arquivo local
         
-        # Fallback: tentar ler do sistema de arquivos local
-        try:
-            with open(file_info['caminho'], 'rb') as f:
-                content = f.read()
-            return content, file_info
-        except Exception:
-            return None, None
+        # Sem fallback para disco local: evita dependência de filesystem efêmero.
+        return None, None
 
     def cleanup_temp_files(self, max_age_hours=24):
         """Remove arquivos temporários antigos"""

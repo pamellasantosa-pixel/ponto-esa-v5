@@ -290,8 +290,7 @@ def safe_datetime_parse(value):
     try:
         return datetime.fromisoformat(str(value))
     except Exception:
-        # Fallback: agora (evita quebra na UI)
-        return agora_br_naive()
+        return None
 
 def ensure_time(value, default=time(8, 0)):
     """Garante um objeto datetime.time a partir de time|datetime|str."""
@@ -315,6 +314,12 @@ def normalizar_tipo_ponto(tipo):
     if valor in ("fim", "saída", "saida"):
         return "fim"
     return valor
+
+
+def format_datetime_safe(value, fmt="%d/%m/%Y %H:%M", default="-"):
+    """Formata data/hora sem quebrar a UI quando o valor for inválido."""
+    dt = safe_datetime_parse(value)
+    return dt.strftime(fmt) if dt else default
 
 
 def obter_entrada_saida_dia_cursor(cursor, usuario, data_referencia):
@@ -349,6 +354,7 @@ def obter_entrada_saida_dia_cursor(cursor, usuario, data_referencia):
 
 def registrar_auditoria_alteracao_ponto_cursor(
     cursor,
+    registro_id,
     usuario_afetado,
     data_registro,
     entrada_original,
@@ -362,13 +368,14 @@ def registrar_auditoria_alteracao_ponto_cursor(
 ):
     cursor.execute(f"""
         INSERT INTO auditoria_alteracoes_ponto
-        (usuario_afetado, data_registro, entrada_original, saida_original,
+        (registro_id, usuario_afetado, data_registro, entrada_original, saida_original,
          entrada_corrigida, saida_corrigida, tipo_alteracao, realizado_por,
          data_alteracao, justificativa, detalhes)
-        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+        VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
                 {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
                 CURRENT_TIMESTAMP, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
     """, (
+        registro_id,
         usuario_afetado,
         data_registro,
         entrada_original,
@@ -377,7 +384,7 @@ def registrar_auditoria_alteracao_ponto_cursor(
         saida_corrigida,
         tipo_alteracao,
         realizado_por,
-        justificativa,
+        justificativa or "Sem justificativa informada",
         detalhes,
     ))
 
@@ -785,11 +792,41 @@ def init_systems():
     calculo_horas_system = CalculoHorasSystem()
     return atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system
 
+
+@st.cache_data(ttl=30)
+def _get_login_row_cached(usuario: str):
+    """Busca credenciais do usuário com cache curto para reduzir pressão no banco."""
+    if not usuario:
+        return None
+
+    if REFACTORING_ENABLED:
+        return execute_query(
+            f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
+            (usuario,),
+            fetch_one=True,
+        )
+
+    conn_local = get_connection()
+    try:
+        cursor = conn_local.cursor()
+        cursor.execute(
+            f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
+            (usuario,),
+        )
+        return cursor.fetchone()
+    finally:
+        _return_conn(conn_local)
+
 # Funções de banco de dados
 
 
 def verificar_login(usuario, senha):
     """Verifica credenciais de login (suporta bcrypt e SHA256 legado com migração automática)"""
+    usuario = (usuario or "").strip()
+    senha = senha or ""
+    if not usuario or not senha:
+        return None
+
     try:
         from password_utils import verify_and_upgrade
         _has_password_utils = True
@@ -806,29 +843,11 @@ def verificar_login(usuario, senha):
         return False
 
     def _exec_login_once():
-        if REFACTORING_ENABLED:
-            row_local = execute_query(
-                f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
-                (usuario,),
-                fetch_one=True
-            )
-            if row_local and _check_password(senha, row_local[0], usuario):
-                log_security_event("LOGIN", usuario=usuario, severity="INFO")
-                return (row_local[1], row_local[2])
-            return None
-
-        conn_local = get_connection()
-        try:
-            cursor = conn_local.cursor()
-            cursor.execute(
-                f"SELECT senha, tipo, nome_completo FROM usuarios WHERE usuario = {SQL_PLACEHOLDER}",
-                (usuario,))
-            row_local = cursor.fetchone()
-            if row_local and _check_password(senha, row_local[0], usuario):
-                return (row_local[1], row_local[2])
-            return None
-        finally:
-            _return_conn(conn_local)
+        row_local = _get_login_row_cached(usuario)
+        if row_local and _check_password(senha, row_local[0], usuario):
+            log_security_event("LOGIN", usuario=usuario, severity="INFO")
+            return (row_local[1], row_local[2])
+        return None
 
     try:
         return _exec_login_once()
@@ -936,6 +955,7 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
         entrada_depois, saida_depois, _ = obter_entrada_saida_dia_cursor(cursor, usuario, data_ref)
         registrar_auditoria_alteracao_ponto_cursor(
             cursor,
+            registro_id=None,
             usuario_afetado=usuario,
             data_registro=data_ref,
             entrada_original=entrada_antes,
@@ -3840,7 +3860,7 @@ def horas_extras_interface(horas_extras_system):
                         st.write(
                             f"**Status:** {solicitacao['status'].title()}")
                         st.write(
-                            f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
+                            f"**Solicitado em:** {format_datetime_safe(solicitacao['data_solicitacao'], '%d/%m/%Y às %H:%M')}")
                         if solicitacao['aprovado_por']:
                             st.write(
                                 f"**Processado por:** {solicitacao['aprovado_por']}")
@@ -4241,7 +4261,7 @@ def notificacoes_interface(horas_extras_system):
                             f"**Horário:** {solicitacao['hora_inicio']} às {solicitacao['hora_fim']}")
                         st.write(
                             f"**Justificativa:** {solicitacao['justificativa']}")
-                        ds_fmt = safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')
+                        ds_fmt = format_datetime_safe(solicitacao['data_solicitacao'], '%d/%m/%Y às %H:%M')
                         st.write(f"**Solicitado em:** {ds_fmt}")
 
                     with col2:
@@ -5290,6 +5310,11 @@ def corrigir_registros_interface():
 
 def pendencias_ponto_interface():
     """Painel de inconsistências de ponto para gestores/RH."""
+    try:
+        from pendencias_ponto import detectar_pendencias_ponto
+    except Exception:
+        from ponto_esa_v5.pendencias_ponto import detectar_pendencias_ponto
+
     st.markdown("""
     <div class="feature-card">
         <h3>⚠️ PENDÊNCIAS DE PONTO</h3>
@@ -5359,93 +5384,15 @@ def pendencias_ponto_interface():
     finally:
         _return_conn(conn)
 
-    registros_por_dia = {}
-    for usuario, data_ref, data_hora, tipo in registros_raw:
-        if usuario not in usuarios_considerados:
-            continue
-        chave = (usuario, str(data_ref))
-        registros_por_dia.setdefault(chave, []).append((data_hora, tipo))
-
-    pendencias = []
-    total_dias = (data_fim - data_inicio).days + 1
-    for usuario in usuarios_considerados:
-        for i in range(total_dias):
-            dia = data_inicio + timedelta(days=i)
-            dia_str = dia.strftime("%Y-%m-%d")
-
-            # Filtro de dias uteis: ignora sabado/domingo e feriados ativos.
-            if dia.weekday() >= 5 or dia_str in feriados_periodo:
-                continue
-
-            key = (usuario, dia_str)
-            registros = registros_por_dia.get(key, [])
-
-            if not registros:
-                tipo_inc = "dia_sem_registro"
-                if (usuario, dia_str, tipo_inc) not in ignoradas:
-                    pendencias.append({
-                        "usuario": usuario,
-                        "nome": usuarios_mapa.get(usuario, usuario),
-                        "data": dia_str,
-                        "tipo": "Dia sem nenhum registro",
-                        "tipo_key": tipo_inc,
-                        "horas": None,
-                    })
-                continue
-
-            qtd_inicio = 0
-            qtd_fim = 0
-            primeiro_inicio = None
-            ultimo_fim = None
-            for data_hora, tipo in sorted(registros, key=lambda x: safe_datetime_parse(x[0])):
-                dt = safe_datetime_parse(data_hora)
-                tipo_norm = normalizar_tipo_ponto(tipo)
-                if tipo_norm == "inicio":
-                    qtd_inicio += 1
-                    if primeiro_inicio is None:
-                        primeiro_inicio = dt
-                elif tipo_norm == "fim":
-                    qtd_fim += 1
-                    ultimo_fim = dt
-
-            horas = None
-            if primeiro_inicio and ultimo_fim and ultimo_fim > primeiro_inicio:
-                horas = round((ultimo_fim - primeiro_inicio).total_seconds() / 3600, 2)
-
-            if qtd_inicio > qtd_fim:
-                tipo_inc = "entrada_sem_saida"
-                if (usuario, dia_str, tipo_inc) not in ignoradas:
-                    pendencias.append({
-                        "usuario": usuario,
-                        "nome": usuarios_mapa.get(usuario, usuario),
-                        "data": dia_str,
-                        "tipo": "Entrada registrada sem saída",
-                        "tipo_key": tipo_inc,
-                        "horas": horas,
-                    })
-            elif qtd_fim > qtd_inicio:
-                tipo_inc = "saida_sem_entrada"
-                if (usuario, dia_str, tipo_inc) not in ignoradas:
-                    pendencias.append({
-                        "usuario": usuario,
-                        "nome": usuarios_mapa.get(usuario, usuario),
-                        "data": dia_str,
-                        "tipo": "Saída registrada sem entrada",
-                        "tipo_key": tipo_inc,
-                        "horas": horas,
-                    })
-
-            if horas is not None and horas > 12:
-                tipo_inc = "horas_muito_altas"
-                if (usuario, dia_str, tipo_inc) not in ignoradas:
-                    pendencias.append({
-                        "usuario": usuario,
-                        "nome": usuarios_mapa.get(usuario, usuario),
-                        "data": dia_str,
-                        "tipo": "Horas trabalhadas muito altas (>12h)",
-                        "tipo_key": tipo_inc,
-                        "horas": horas,
-                    })
+    pendencias = detectar_pendencias_ponto(
+        usuarios_considerados=usuarios_considerados,
+        usuarios_mapa=usuarios_mapa,
+        data_inicio=data_inicio,
+        data_fim=data_fim,
+        registros_raw=registros_raw,
+        feriados_periodo=feriados_periodo,
+        ignoradas=ignoradas,
+    )
 
     if not pendencias:
         st.success("✅ Nenhuma pendência encontrada no período")
@@ -5665,7 +5612,7 @@ def meus_arquivos_interface(upload_system):
                 with col1:
                     st.write(
                         f"**Categoria:** {get_category_name(upload.get('relacionado_a', 'documento'))}")
-                    st.write(f"**Upload em:** {safe_datetime_parse(upload['data_upload']).strftime('%d/%m/%Y às %H:%M')}")
+                    st.write(f"**Upload em:** {format_datetime_safe(upload['data_upload'], '%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tipo:** {upload['tipo_arquivo']}")
 
                 with col2:
@@ -6009,7 +5956,7 @@ def tela_gestor():
     elif opcao.startswith("📅 Configurar Jornada"):
         configurar_jornada_interface()
     elif opcao.startswith("🔧 Corrigir Registros"):
-        aprovar_correcoes_registros_interface()
+        corrigir_registros_interface()
     elif opcao.startswith("📁 Gerenciar Arquivos"):
         gerenciar_arquivos_interface(upload_system)
     elif opcao.startswith("🏢 Gerenciar Projetos"):
@@ -6456,7 +6403,7 @@ def dashboard_gestor(banco_horas_system, calculo_horas_system):
             if REFACTORING_ENABLED:
                 try:
                     query_presentes = f"""
-                        SELECT COUNT(DISTINCT usuario_id) FROM registros_ponto 
+                        SELECT COUNT(DISTINCT usuario) FROM registros_ponto 
                         WHERE DATE(data_hora) = {SQL_PLACEHOLDER}
                     """
                     resultado = execute_query(query_presentes, (hoje,), fetch_one=True)
@@ -6855,6 +6802,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                 SELECT * FROM solicitacoes_horas_extras 
                 WHERE status = 'pendente'
                 ORDER BY data_solicitacao ASC
+                LIMIT 200
             """
             solicitacoes = execute_query(query_solicitacoes)
         except Exception as e:
@@ -6868,6 +6816,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                 SELECT * FROM solicitacoes_horas_extras 
                 WHERE status = 'pendente'
                 ORDER BY data_solicitacao ASC
+                LIMIT 200
             """)
             solicitacoes = cursor.fetchall()
         finally:
@@ -6897,7 +6846,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                     st.write(
                         f"**Aprovador Solicitado:** {solicitacao['aprovador_solicitado']}")
                     st.write(
-                        f"**Solicitado em:** {safe_datetime_parse(solicitacao['data_solicitacao']).strftime('%d/%m/%Y às %H:%M')}")
+                        f"**Solicitado em:** {format_datetime_safe(solicitacao['data_solicitacao'], '%d/%m/%Y às %H:%M')}")
 
                 with col2:
                     observacoes = st.text_area(
@@ -7015,7 +6964,7 @@ def aprovar_correcoes_registros_interface():
 
                     with col1:
                         st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                        st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                        st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y às %H:%M')}")
                         
                         st.markdown("---")
                         st.markdown("### 🔄 Alterações Solicitadas")
@@ -7287,6 +7236,7 @@ def aprovar_correcoes_registros_interface():
                                             )
                                             registrar_auditoria_alteracao_ponto_cursor(
                                                 cursor,
+                                                registro_id=registro_id if (tipo_solicitacao != 'complemento_jornada') else None,
                                                 usuario_afetado=usuario,
                                                 data_registro=data_alvo_auditoria,
                                                 entrada_original=entrada_orig,
@@ -7530,6 +7480,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON h.usuario = u.usuario
                     WHERE h.status = 'pendente'
                     ORDER BY h.data_solicitacao DESC
+                    LIMIT 200
                 """
                 he_pendentes = execute_query(query_he)
             except Exception as e:
@@ -7547,6 +7498,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON h.usuario = u.usuario
                     WHERE h.status = 'pendente'
                     ORDER BY h.data_solicitacao DESC
+                    LIMIT 200
                 """)
                 he_pendentes = cursor.fetchall()
             finally:
@@ -7588,7 +7540,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
                     st.markdown(f"**Data:** {data}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
-                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Justificativa:**")
                     st.info(justificativa)
                     
@@ -7612,6 +7564,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON c.usuario = u.usuario
                     WHERE c.status = 'pendente'
                     ORDER BY c.data_solicitacao DESC
+                    LIMIT 200
                 """
                 corr_pendentes = execute_query(query_corr)
             except Exception as e:
@@ -7629,6 +7582,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON c.usuario = u.usuario
                     WHERE c.status = 'pendente'
                     ORDER BY c.data_solicitacao DESC
+                    LIMIT 200
                 """)
                 corr_pendentes = cursor.fetchall()
             finally:
@@ -7640,12 +7594,12 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             for correcao in corr_pendentes:
                 corr_id, usuario, dt_orig, dt_nova, justificativa, data_solicitacao, nome_completo = correcao
                 
-                with st.expander(f"⏳ {nome_completo or usuario} - {safe_datetime_parse(dt_orig).strftime('%d/%m/%Y %H:%M')}"):
+                with st.expander(f"⏳ {nome_completo or usuario} - {format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    dt_orig_fmt = safe_datetime_parse(dt_orig).strftime('%d/%m/%Y %H:%M')
-                    dt_nova_fmt = safe_datetime_parse(dt_nova).strftime('%d/%m/%Y %H:%M')
+                    dt_orig_fmt = format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')
+                    dt_nova_fmt = format_datetime_safe(dt_nova, '%d/%m/%Y %H:%M')
                     st.markdown(f"**Alteração:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
-                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Justificativa:**")
                     st.info(justificativa)
                     
@@ -7669,6 +7623,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON a.usuario = u.usuario
                     WHERE a.status = 'pendente'
                     ORDER BY a.data_registro DESC
+                    LIMIT 200
                 """
                 atestados_pendentes = execute_query(query_atestados)
             except Exception as e:
@@ -7686,6 +7641,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     LEFT JOIN usuarios u ON a.usuario = u.usuario
                     WHERE a.status = 'pendente'
                     ORDER BY a.data_registro DESC
+                    LIMIT 200
                 """)
                 atestados_pendentes = cursor.fetchall()
             finally:
@@ -7699,10 +7655,10 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                 
                 with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else format_datetime_safe(data, '%d/%m/%Y')
                     st.markdown(f"**Data:** {data_fmt}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
-                    st.markdown(f"**Solicitado em:** {safe_datetime_parse(data_registro).strftime('%d/%m/%Y %H:%M')}")
+                    st.markdown(f"**Solicitado em:** {format_datetime_safe(data_registro, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Motivo:**")
                     st.info(motivo or "Sem motivo especificado")
                     
@@ -7787,12 +7743,12 @@ def aprovar_atestados_interface(atestado_system):
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
                         # Data pode vir como date (PostgreSQL) ou string (SQLite)
-                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else format_datetime_safe(data, '%d/%m/%Y')
                         st.markdown(f"**Data do Atestado:** {data_fmt}")
                         st.markdown(
                             f"**Horas Trabalhadas:** {format_time_duration(horas)}")
                         st.markdown(
-                            f"**Solicitado em:** {safe_datetime_parse(data_solicitacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y às %H:%M')}")
 
                         st.markdown("---")
                         st.markdown("**Justificativa:**")
@@ -7985,7 +7941,7 @@ def aprovar_atestados_interface(atestado_system):
                     with col1:
                         st.markdown(
                             f"**Funcionário:** {nome_completo or usuario}")
-                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                        data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else format_datetime_safe(data, '%d/%m/%Y')
                         st.markdown(f"**Data:** {data_fmt}")
                         st.markdown(
                             f"**Horas:** {format_time_duration(horas)}")
@@ -7994,7 +7950,7 @@ def aprovar_atestados_interface(atestado_system):
 
                         st.markdown("---")
                         st.success(
-                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {safe_datetime_parse(data_aprovacao).strftime('%d/%m/%Y às %H:%M')}")
+                            f"✅ Aprovado por **{aprovador_nome or aprovado_por}** em {format_datetime_safe(data_aprovacao, '%d/%m/%Y às %H:%M')}")
 
                         if observacoes:
                             st.info(f"💬 **Observações:** {observacoes}")
@@ -8065,7 +8021,7 @@ def aprovar_atestados_interface(atestado_system):
 
                 with st.expander(f"❌ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else safe_datetime_parse(data).strftime('%d/%m/%Y')
+                    data_fmt = data.strftime('%d/%m/%Y') if isinstance(data, (datetime, date)) else format_datetime_safe(data, '%d/%m/%Y')
                     st.markdown(f"**Data:** {data_fmt}")
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
                     st.markdown(f"**Motivo:** {motivo or 'N/A'}")
@@ -8074,7 +8030,7 @@ def aprovar_atestados_interface(atestado_system):
                     # No schema atual, rejeição usa as colunas aprovado_por/data_aprovacao
                     rejeitador_display = rejeitado_por or 'gestor'
                     st.error(
-                        f"❌ Rejeitado por **{rejeitador_display}** em {safe_datetime_parse(data_rejeicao).strftime('%d/%m/%Y às %H:%M')}")
+                        f"❌ Rejeitado por **{rejeitador_display}** em {format_datetime_safe(data_rejeicao, '%d/%m/%Y às %H:%M')}")
 
                     if observacoes:
                         st.warning(
@@ -8837,7 +8793,7 @@ def gerenciar_arquivos_interface(upload_system):
                     st.write(f"**Usuário:** {nome_completo or usuario}")
                     st.write(f"**Tipo:** {tipo_arquivo or 'N/A'}")
                     st.write(
-                        f"**Data:** {safe_datetime_parse(data).strftime('%d/%m/%Y às %H:%M')}")
+                        f"**Data:** {format_datetime_safe(data, '%d/%m/%Y às %H:%M')}")
                     st.write(f"**Tamanho:** {format_file_size(tamanho)}")
                     st.write(f"**Formato:** {tipo_arquivo}")
 
@@ -11560,7 +11516,10 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
             return {"success": False, "message": "Registro não encontrado"}
 
         usuario_afetado, data_hora_antiga = row
-        data_antiga = safe_datetime_parse(data_hora_antiga).strftime("%Y-%m-%d")
+        data_hora_antiga_dt = safe_datetime_parse(data_hora_antiga)
+        if not data_hora_antiga_dt:
+            return {"success": False, "message": "Data/hora original inválida no registro"}
+        data_antiga = data_hora_antiga_dt.strftime("%Y-%m-%d")
 
         nova_data_hora_dt = safe_datetime_parse(nova_data_hora)
         if not nova_data_hora_dt:
@@ -11587,6 +11546,7 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
         entrada_corr_ant, saida_corr_ant, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_antiga)
         registrar_auditoria_alteracao_ponto_cursor(
             cursor,
+            registro_id=registro_id,
             usuario_afetado=usuario_afetado,
             data_registro=data_antiga,
             entrada_original=entrada_orig_ant,
@@ -11603,6 +11563,7 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
             entrada_corr_nova, saida_corr_nova, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_nova)
             registrar_auditoria_alteracao_ponto_cursor(
                 cursor,
+                registro_id=registro_id,
                 usuario_afetado=usuario_afetado,
                 data_registro=data_nova,
                 entrada_original=entrada_orig_nova,
@@ -11640,14 +11601,18 @@ def _initialize_app_once():
     except Exception as e:
         logger.warning("Não foi possível executar migrações: %s", e)
     
-    # Iniciar scheduler de notificações
-    try:
-        from background_scheduler import iniciar_scheduler_background, is_scheduler_running
-        if not is_scheduler_running():
-            iniciar_scheduler_background()
-            logger.info("✅ Scheduler de notificações automáticas iniciado")
-    except Exception as e:
-        logger.warning(f"Scheduler de notificações não iniciado: {e}")
+    # Iniciar scheduler embutido apenas quando explicitamente habilitado.
+    # Em produção, preferimos worker dedicado para evitar acoplamento ao processo web.
+    if os.getenv("USE_EMBEDDED_SCHEDULER", "false").lower() == "true":
+        try:
+            from background_scheduler import iniciar_scheduler_background, is_scheduler_running
+            if not is_scheduler_running():
+                iniciar_scheduler_background()
+                logger.info("✅ Scheduler embutido de notificações iniciado")
+        except Exception as e:
+            logger.warning(f"Scheduler embutido não iniciado: {e}")
+    else:
+        logger.info("ℹ️ Scheduler embutido desabilitado (USE_EMBEDDED_SCHEDULER=false)")
     
     # Inicializar sistema de uploads
     try:

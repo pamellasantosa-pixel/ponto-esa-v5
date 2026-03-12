@@ -151,11 +151,11 @@ def get_lista_usuarios_ativos() -> List[Dict]:
     """Retorna lista de usuários ativos (com cache)"""
     try:
         result = execute_query_optimized(
-            "SELECT id, usuario, nome_completo, email, tipo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo"
+            "SELECT id, usuario, nome_completo, tipo FROM usuarios WHERE ativo = 1 ORDER BY nome_completo"
         )
         if result:
             return [
-                {"id": r[0], "usuario": r[1], "nome": r[2], "email": r[3], "tipo": r[4]}
+                {"id": r[0], "usuario": r[1], "nome": r[2], "tipo": r[3]}
                 for r in result
             ]
     except Exception as e:

@@ -104,6 +104,7 @@ class AjusteRegistrosSystem:
     def _registrar_auditoria_alteracao_cursor(
         self,
         cursor: Any,
+        registro_id: Optional[int],
         usuario_afetado: str,
         data_registro: str,
         entrada_original: Optional[str],
@@ -118,14 +119,15 @@ class AjusteRegistrosSystem:
         cursor.execute(
             f"""
             INSERT INTO auditoria_alteracoes_ponto
-            (usuario_afetado, data_registro, entrada_original, saida_original,
+            (registro_id, usuario_afetado, data_registro, entrada_original, saida_original,
              entrada_corrigida, saida_corrigida, tipo_alteracao, realizado_por,
              data_alteracao, justificativa, detalhes)
-            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
                     {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER},
                     {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
             """,
             (
+                registro_id,
                 usuario_afetado,
                 data_registro,
                 entrada_original,
@@ -135,7 +137,7 @@ class AjusteRegistrosSystem:
                 tipo_alteracao,
                 realizado_por,
                 self._now(),
-                justificativa,
+                justificativa or "Sem justificativa informada",
                 detalhes,
             ),
         )
@@ -749,6 +751,7 @@ class AjusteRegistrosSystem:
                 )
                 self._registrar_auditoria_alteracao_cursor(
                     cursor=cursor,
+                    registro_id=dados_para_aplicar.get("registro_id"),
                     usuario_afetado=usuario,
                     data_registro=str(data_auditoria),
                     entrada_original=entrada_original,

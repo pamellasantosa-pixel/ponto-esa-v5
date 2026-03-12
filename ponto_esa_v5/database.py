@@ -702,6 +702,7 @@ def _init_db_tables(conn):
     c.execute(adapt_sql_for_postgresql('''
         CREATE TABLE IF NOT EXISTS auditoria_alteracoes_ponto (
             id SERIAL PRIMARY KEY,
+            registro_id INTEGER,
             usuario_afetado TEXT NOT NULL,
             data_registro DATE NOT NULL,
             entrada_original TEXT,
@@ -715,6 +716,12 @@ def _init_db_tables(conn):
             detalhes TEXT
         )
     '''))
+
+    # Compatibilidade: incluir registro_id na auditoria quando ausente
+    try:
+        c.execute("ALTER TABLE auditoria_alteracoes_ponto ADD COLUMN IF NOT EXISTS registro_id INTEGER")
+    except Exception as e:
+        logger.debug(f"Migração auditoria_alteracoes_ponto.registro_id: {e}")
 
     # Tabela para ignorar pendências de ponto no painel do gestor/RH
     c.execute(adapt_sql_for_postgresql('''
@@ -866,15 +873,16 @@ def _init_db_tables(conn):
         ("idx_he_aprovador", "solicitacoes_horas_extras", "aprovador_solicitado, status"),
         
         # Notificações - busca por usuário e lidas
-        ("idx_notif_usuario_lida", "Notificacoes", "usuario, lida"),
+        ("idx_notif_usuario_lida", "Notificacoes", "user_id, read"),
         
         # Banco de horas
         ("idx_banco_horas_usuario", "banco_horas", "usuario"),
         
         # Jornada semanal
-        ("idx_jornada_usuario_data", "jornada_semanal", "usuario, data_referencia"),
+        ("idx_jornada_usuario_data", "jornada_semanal", "usuario, dia"),
 
         # Auditoria de alteracoes de ponto
+        ("idx_auditoria_registro_id", "auditoria_alteracoes_ponto", "registro_id"),
         ("idx_auditoria_usuario_data", "auditoria_alteracoes_ponto", "usuario_afetado, data_registro"),
         ("idx_auditoria_data_alteracao", "auditoria_alteracoes_ponto", "data_alteracao"),
 
