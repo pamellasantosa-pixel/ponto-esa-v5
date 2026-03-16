@@ -5585,6 +5585,13 @@ def corrigir_registros_interface():
                 )
                 if justificativa_prefill:
                     st.markdown(f"**Justificativa do pedido:** {justificativa_prefill}")
+            elif usuario_prefill and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+                # DEBUG: mostrar informações se houver prefill mas o usuario não corresponde
+                st.warning(
+                    f"⚠️ Você selecionou outro usuário. "
+                    f"A solicitação é para **{usuario_prefill}**, mas você está vendo **{usuario}**. "
+                    f"Selecione **{usuario_prefill}** para ver os detalhes da solicitação."
+                )
 
             projetos_ativos = obter_projetos_ativos()
             tipos_opcoes = ["inicio", "intermediario", "fim"]
