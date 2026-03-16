@@ -5538,11 +5538,15 @@ def corrigir_registros_interface():
     dt_orig_prefill_raw = st.session_state.get("pendencia_datahora_original_prefill", "")
     dt_nova_prefill_raw = st.session_state.get("pendencia_datahora_nova_prefill", "")
     justificativa_prefill = st.session_state.get("pendencia_justificativa_prefill", "")
+    
+    # Normalizar usuario_prefill em lowercase para evitar case mismatch
+    usuario_prefill_norm = usuario_prefill.lower() if usuario_prefill else None
 
     idx_padrao = 0
-    if usuario_prefill:
+    if usuario_prefill_norm:
         for i, opc in enumerate(opcoes_usuarios):
-            if f"({usuario_prefill})" in opc:
+            # Comparação case-insensitive para encontrar o usuário correto
+            if f"({usuario_prefill_norm})" in opc.lower() or f"({usuario_prefill})" in opc:
                 idx_padrao = i
                 break
 
@@ -5553,7 +5557,7 @@ def corrigir_registros_interface():
     )
 
     if usuario_selecionado:
-        usuario = usuario_selecionado.split('(')[-1].replace(')', '')
+        usuario = usuario_selecionado.split('(')[-1].replace(')', '').lower()
 
         # Selecionar data
         data_default = date.today()
@@ -5577,7 +5581,7 @@ def corrigir_registros_interface():
                 f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
             # Exibir contexto da solicitação selecionada para o gestor localizar facilmente.
-            if usuario_prefill and usuario == usuario_prefill and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+            if usuario_prefill_norm and usuario == usuario_prefill_norm and (dt_orig_prefill_raw or dt_nova_prefill_raw):
                 st.info(
                     "🎯 Solicitação selecionada: "
                     f"{format_datetime_safe(dt_orig_prefill_raw, '%d/%m/%Y %H:%M', default='-')} "
@@ -5585,11 +5589,11 @@ def corrigir_registros_interface():
                 )
                 if justificativa_prefill:
                     st.markdown(f"**Justificativa do pedido:** {justificativa_prefill}")
-            elif usuario_prefill and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+            elif usuario_prefill_norm and (dt_orig_prefill_raw or dt_nova_prefill_raw):
                 # DEBUG: mostrar informações se houver prefill mas o usuario não corresponde
                 st.warning(
                     f"⚠️ Você selecionou outro usuário. "
-                    f"A solicitação é para **{usuario_prefill}**, mas você está vendo **{usuario}**. "
+                    f"A solicitação é para **{usuario_prefill}**, mas você está vendo **{usuario_selecionado}**. "
                     f"Selecione **{usuario_prefill}** para ver os detalhes da solicitação."
                 )
 
