@@ -6105,7 +6105,6 @@ def tela_gestor():
         opcoes_menu = [
             "📊 Dashboard",
             "👥 Todos os Registros",
-            "🧾 Auditoria de Alterações",
             "⚠️ Pendências de Ponto",
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
@@ -6120,7 +6119,8 @@ def tela_gestor():
             f"🔔 Notificações{f' 🔴{total_notif}' if total_notif > 0 else ''}",
             "📢 Comunicação",
             "🏖️ Férias",
-            "⚙️ Sistema"
+            "⚙️ Sistema",
+            "🧾 Auditoria de Alterações"
         ]
         
         # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
@@ -7974,7 +7974,58 @@ def auditoria_alteracoes_interface():
     """, unsafe_allow_html=True)
 
     dias = st.number_input("Período (dias)", min_value=1, max_value=365, value=30, step=1)
-    usuario_filtro = st.text_input("Filtrar por usuário afetado (opcional)", value="").strip()
+
+    # Montar opções de usuários para filtro (inclui ativos e usuários presentes na auditoria)
+    usuarios_map = {}
+    try:
+        for u in obter_usuarios_ativos():
+            usr = (u.get("usuario") or "").strip()
+            if usr:
+                usuarios_map[usr] = (u.get("nome_completo") or usr).strip()
+    except Exception as e:
+        logger.debug("Falha ao listar usuários ativos para filtro de auditoria: %s", e)
+
+    try:
+        conn_users = get_connection()
+        try:
+            cur_users = conn_users.cursor()
+            cur_users.execute("""
+                SELECT DISTINCT usuario_afetado
+                FROM auditoria_alteracoes_ponto
+                WHERE usuario_afetado IS NOT NULL AND TRIM(usuario_afetado) <> ''
+            """)
+            for row in (cur_users.fetchall() or []):
+                usr = (row[0] or "").strip()
+                if usr and usr not in usuarios_map:
+                    usuarios_map[usr] = usr
+
+            cur_users.execute("""
+                SELECT DISTINCT r.usuario
+                FROM auditoria_correcoes c
+                LEFT JOIN registros_ponto r ON r.id = c.registro_id
+                WHERE r.usuario IS NOT NULL AND TRIM(r.usuario) <> ''
+            """)
+            for row in (cur_users.fetchall() or []):
+                usr = (row[0] or "").strip()
+                if usr and usr not in usuarios_map:
+                    usuarios_map[usr] = usr
+        finally:
+            _return_conn(conn_users)
+    except Exception as e:
+        logger.debug("Falha ao complementar usuários da auditoria: %s", e)
+
+    opcoes_usuario = ["Todos"] + [
+        f"{usuarios_map[u]} ({u})" if usuarios_map[u] != u else u
+        for u in sorted(usuarios_map.keys())
+    ]
+    usuario_escolhido = st.selectbox("Filtrar por usuário afetado (opcional)", opcoes_usuario, index=0)
+
+    usuario_filtro = None
+    if usuario_escolhido != "Todos":
+        if "(" in usuario_escolhido and usuario_escolhido.endswith(")"):
+            usuario_filtro = usuario_escolhido.split("(")[-1].replace(")", "").strip()
+        else:
+            usuario_filtro = usuario_escolhido.strip()
 
     data_limite = agora_br() - timedelta(days=int(dias))
     params_aud = [data_limite]
@@ -8058,6 +8109,7 @@ def auditoria_alteracoes_interface():
         return
 
     st.markdown("#### 🔄 Histórico de Alterações de Ponto")
+    df_aud = None
     if auditoria_rows:
         df_aud = pd.DataFrame(
             auditoria_rows,
@@ -8071,6 +8123,7 @@ def auditoria_alteracoes_interface():
         st.info("Nenhuma alteração de ponto encontrada no período.")
 
     st.markdown("#### ✅ Auditoria de Correções Aplicadas")
+    df_corr = None
     if correcoes_rows:
         df_corr = pd.DataFrame(
             correcoes_rows,
@@ -8079,6 +8132,26 @@ def auditoria_alteracoes_interface():
         st.dataframe(df_corr, width="stretch", hide_index=True)
     else:
         st.info("Nenhuma correção aplicada encontrada no período.")
+
+    # Exportação consolidada em Excel (duas abas)
+    if df_aud is not None or df_corr is not None:
+        output = BytesIO()
+        with pd.ExcelWriter(output, engine='openpyxl') as writer:
+            if df_aud is not None:
+                df_aud.to_excel(writer, sheet_name='Auditoria_Alteracoes', index=False)
+            if df_corr is not None:
+                df_corr.to_excel(writer, sheet_name='Auditoria_Correcoes', index=False)
+
+        sufixo_usuario = usuario_filtro if usuario_filtro else "todos"
+        nome_arquivo = f"auditoria_{sufixo_usuario}_{agora_br().strftime('%Y%m%d_%H%M')}.xlsx"
+
+        safe_download_button(
+            label="📥 Baixar Auditoria em Excel",
+            data=output.getvalue(),
+            file_name=nome_arquivo,
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_auditoria_excel"
+        )
 
 
 def aprovar_atestados_interface(atestado_system):
