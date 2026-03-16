@@ -357,6 +357,16 @@ def sanitize_ui_text(value, default="-"):
 
 def formatar_localizacao_legivel(localizacao_original, latitude=None, longitude=None):
     """Retorna localização amigável (endereço/CEP quando possível) para exibição."""
+    if (latitude is None or longitude is None) and localizacao_original:
+        try:
+            import re
+            match = re.search(r'(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)', str(localizacao_original))
+            if match:
+                latitude = float(match.group(1))
+                longitude = float(match.group(2))
+        except Exception as e:
+            logger.debug("Falha ao extrair coordenadas do texto de localização: %s", e)
+
     if latitude is None or longitude is None:
         return localizacao_original or "GPS não disponível"
 
@@ -401,6 +411,80 @@ def obter_entrada_saida_dia_cursor(cursor, usuario, data_referencia):
     if primeiro_inicio and ultimo_fim and ultimo_fim > primeiro_inicio:
         horas = round((ultimo_fim - primeiro_inicio).total_seconds() / 3600, 2)
     return entrada, saida, horas
+
+
+def obter_registros_dia_validacao_cursor(cursor, usuario, data_referencia, ignorar_registro_id=None):
+    """Retorna os registros do dia em ordem cronológica para validações de negócio."""
+    query = f"""
+        SELECT id, data_hora, tipo
+        FROM registros_ponto
+        WHERE usuario = {SQL_PLACEHOLDER}
+          AND DATE(data_hora) = {SQL_PLACEHOLDER}
+    """
+    params = [usuario, data_referencia]
+    if ignorar_registro_id is not None:
+        query += f" AND id <> {SQL_PLACEHOLDER}"
+        params.append(ignorar_registro_id)
+    query += " ORDER BY data_hora ASC"
+    cursor.execute(query, tuple(params))
+
+    registros = []
+    for registro_id, data_hora, tipo in cursor.fetchall():
+        dt = safe_datetime_parse(data_hora)
+        if not dt:
+            continue
+        registros.append({
+            "id": registro_id,
+            "data_hora": dt,
+            "tipo": normalizar_tipo_ponto(tipo),
+        })
+    return registros
+
+
+def validar_novo_registro_cursor(cursor, usuario, data_referencia, tipo, data_hora_proposta=None, ignorar_registro_id=None):
+    """Valida regras de sequência do ponto para criação/correção de registros."""
+    tipo_norm = normalizar_tipo_ponto(tipo)
+    registros = obter_registros_dia_validacao_cursor(cursor, usuario, data_referencia, ignorar_registro_id=ignorar_registro_id)
+    proposta_dt = safe_datetime_parse(data_hora_proposta) if data_hora_proposta else None
+
+    registros_inicio = [r for r in registros if r["tipo"] == "inicio"]
+    registros_fim = [r for r in registros if r["tipo"] == "fim"]
+    primeiro_inicio = registros_inicio[0]["data_hora"] if registros_inicio else None
+    ultimo_fim = registros_fim[-1]["data_hora"] if registros_fim else None
+    primeiro_registro = registros[0] if registros else None
+
+    if not registros:
+        if tipo_norm != "inicio":
+            return False, "O primeiro registro do dia deve ser 'Início'."
+        return True, ""
+
+    if tipo_norm == "inicio":
+        if registros_inicio:
+            return False, "O registro de 'Início' só pode ser realizado uma vez por dia."
+        if ultimo_fim:
+            return False, "Não é permitido registrar novo 'Início' após já existir um 'Fim' no dia."
+        if proposta_dt and primeiro_registro and proposta_dt >= primeiro_registro["data_hora"]:
+            return False, "O registro de 'Início' precisa ser o primeiro do dia."
+        return True, ""
+
+    if not primeiro_inicio:
+        return False, "Registre primeiro um 'Início' antes de lançar outros tipos de ponto."
+
+    if tipo_norm == "intermediario":
+        if ultimo_fim:
+            return False, "Não é permitido registrar 'Intermediário' após o 'Fim' do expediente."
+        if proposta_dt and proposta_dt <= primeiro_inicio:
+            return False, "O registro 'Intermediário' deve ocorrer após o 'Início'."
+        return True, ""
+
+    if tipo_norm == "fim":
+        if registros_fim:
+            return False, "O registro de 'Fim' só pode ser realizado uma vez por dia."
+        if proposta_dt and proposta_dt <= primeiro_inicio:
+            return False, "O registro de 'Fim' deve ocorrer após o 'Início'."
+        return True, ""
+
+    return False, "Tipo de registro inválido."
 
 
 def registrar_auditoria_alteracao_ponto_cursor(
@@ -1063,20 +1147,15 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
         data_hora_registro = agora_br.replace(tzinfo=None)
 
     # Formatar localização
-    if latitude and longitude:
-        localizacao = f"GPS: {latitude:.6f}, {longitude:.6f}"
+    if latitude is not None and longitude is not None:
+        localizacao = formatar_localizacao_legivel(None, latitude, longitude)
     else:
         localizacao = "GPS não disponível"
 
     # Usar placeholder correto baseado no tipo de banco
     placeholders = ', '.join([SQL_PLACEHOLDER] * 9)
 
-    tipo_norm = str(tipo or '').strip().lower()
-    tipo_alvo = None
-    if tipo_norm in ('inicio', 'início', 'entrada'):
-        tipo_alvo = 'inicio'
-    elif tipo_norm in ('fim', 'saida', 'saída'):
-        tipo_alvo = 'fim'
+    tipo_norm = normalizar_tipo_ponto(tipo)
     
     owns_conn = conn_external is None
     conn = conn_external if conn_external else get_connection()
@@ -1084,22 +1163,17 @@ def registrar_ponto(usuario, tipo, modalidade, projeto, atividade, data_registro
         cursor = conn.cursor()
         data_ref = data_hora_registro.strftime("%Y-%m-%d")
 
-        entrada_antes, saida_antes, _ = obter_entrada_saida_dia_cursor(cursor, usuario, data_ref)
+        valido_fluxo, mensagem_fluxo = validar_novo_registro_cursor(
+            cursor,
+            usuario,
+            data_ref,
+            tipo_norm,
+            data_hora_proposta=data_hora_registro,
+        )
+        if not valido_fluxo:
+            raise ValueError(mensagem_fluxo)
 
-        if tipo_alvo:
-            q_tipos = ('início', 'inicio', 'entrada') if tipo_alvo == 'inicio' else ('fim', 'saída', 'saida')
-            cursor.execute(
-                f"""
-                    SELECT COUNT(*)
-                    FROM registros_ponto
-                    WHERE usuario = {SQL_PLACEHOLDER}
-                      AND DATE(data_hora) = {SQL_PLACEHOLDER}
-                      AND LOWER(tipo) IN ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER})
-                """,
-                (usuario, data_ref, q_tipos[0], q_tipos[1], q_tipos[2])
-            )
-            if (cursor.fetchone() or [0])[0] > 0:
-                raise ValueError(f"Ja existe registro de '{tipo_alvo}' para este dia. Apenas intermediario pode repetir.")
+        entrada_antes, saida_antes, _ = obter_entrada_saida_dia_cursor(cursor, usuario, data_ref)
 
         cursor.execute(f'''
             INSERT INTO registros_ponto (usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao, latitude, longitude)
@@ -3567,16 +3641,25 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
 
         # Validação de registros
         data_str = data_registro.strftime("%Y-%m-%d")
+        pode_registrar = True
+        mensagem_validacao_registro = ""
         try:
-            pode_registrar = calculo_horas_system.pode_registrar_tipo(
-                st.session_state.usuario, data_str, tipo_registro)
+            conn_valid = get_connection()
+            try:
+                cursor_valid = conn_valid.cursor()
+                pode_registrar, mensagem_validacao_registro = validar_novo_registro_cursor(
+                    cursor_valid,
+                    st.session_state.usuario,
+                    data_str,
+                    tipo_registro,
+                )
+            finally:
+                _return_conn(conn_valid)
         except Exception as _val_err:
             logger.warning("Erro ao validar registro: %s", _val_err)
-            pode_registrar = True
 
-        if tipo_registro in ["Início", "Fim"] and not pode_registrar:
-            st.warning(
-                f"⚠️ Você já possui um registro de '{tipo_registro}' para este dia.")
+        if mensagem_validacao_registro:
+            st.warning(f"⚠️ {mensagem_validacao_registro}")
 
         # Campos ocultos para capturar GPS via JavaScript
         # O CSS global oculta esses campos automaticamente baseado no placeholder
@@ -3596,8 +3679,8 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
         if submitted:
             if not atividade.strip():
                 st.error("❌ A descrição da atividade é obrigatória")
-            elif tipo_registro in ["Início", "Fim"] and not pode_registrar:
-                st.error(f"❌ Registro de '{tipo_registro}' já realizado para este dia.")
+            elif not pode_registrar:
+                st.error(f"❌ {mensagem_validacao_registro or 'Registro inválido para este momento do dia.'}")
             else:
                 # GPS: Obter coordenadas dos campos preenchidos via JavaScript
                 latitude = None
@@ -5694,9 +5777,39 @@ def corrigir_registros_interface():
                                         nova_modalidade if nova_modalidade else None,
                                         novo_projeto if novo_projeto else None,
                                         justificativa_edicao,
-                                        st.session_state.usuario
+                                        st.session_state.usuario,
+                                        st.session_state.get("pendencia_correcao_id_prefill") if is_registro_alvo else None,
                                     )
 
+                                    if resultado["success"]:
+                                        for k in [
+                                            "pendencia_correcao_id_prefill",
+                                            "pendencia_registro_id_prefill",
+                                            "pendencia_datahora_original_prefill",
+                                            "pendencia_datahora_nova_prefill",
+                                            "pendencia_justificativa_prefill",
+                                        ]:
+                                            if k in st.session_state:
+                                                del st.session_state[k]
+                                        st.success(f"✅ {resultado['message']}")
+                                        st.rerun()
+                                    else:
+                                        st.error(f"❌ {resultado['message']}")
+
+                            excluir_submitted = st.form_submit_button(
+                                "🗑️ Excluir Registro", width="stretch"
+                            )
+
+                            if excluir_submitted:
+                                if not justificativa_edicao.strip():
+                                    st.error("❌ Justificativa obrigatória para excluir registros")
+                                else:
+                                    resultado = excluir_registro_ponto(
+                                        registro['id'],
+                                        justificativa_edicao,
+                                        st.session_state.usuario,
+                                        st.session_state.get("pendencia_correcao_id_prefill") if is_registro_alvo else None,
+                                    )
                                     if resultado["success"]:
                                         for k in [
                                             "pendencia_correcao_id_prefill",
@@ -9031,28 +9144,26 @@ def todos_registros_interface(calculo_horas_system):
                             st.caption(f"Atividade: {reg['atividade']}")
 
                     with col3:
-                        if reg['latitude'] and reg['longitude']:
-                            # Importar módulo de geocodificação
+                        localizacao_legivel = formatar_localizacao_legivel(
+                            reg['localizacao'], reg['latitude'], reg['longitude']
+                        )
+                        st.markdown(f"📍 **{localizacao_legivel}**")
+
+                        lat_mapa = reg['latitude']
+                        lng_mapa = reg['longitude']
+                        if (lat_mapa is None or lng_mapa is None) and reg['localizacao']:
                             try:
-                                from geocoding import formatar_localizacao_gestor
-                                loc = formatar_localizacao_gestor(reg['latitude'], reg['longitude'], reg['localizacao'])
-                                
-                                if loc["endereco"]:
-                                    st.markdown(f"📍 **{loc['endereco']}**")
-                                else:
-                                    st.markdown(f"📍 GPS: {reg['latitude']:.6f}, {reg['longitude']:.6f}")
-                                
-                                # Link para Google Maps
-                                if loc["maps_url"]:
-                                    st.markdown(f"[🗺️ Ver no Mapa]({loc['maps_url']})")
-                            except ImportError:
-                                # Fallback se módulo não disponível
-                                st.markdown(
-                                    f"📍 **GPS:** {reg['latitude']:.6f}, {reg['longitude']:.6f}")
-                                maps_url = f"https://www.google.com/maps?q={reg['latitude']},{reg['longitude']}"
-                                st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
-                        else:
-                            st.markdown("📍 **GPS:** Não disponível")
+                                import re
+                                match = re.search(r'(-?\d+(?:\.\d+)?)\s*,\s*(-?\d+(?:\.\d+)?)', str(reg['localizacao']))
+                                if match:
+                                    lat_mapa = float(match.group(1))
+                                    lng_mapa = float(match.group(2))
+                            except Exception as e:
+                                logger.debug("Falha ao extrair coordenadas para mapa: %s", e)
+
+                        if lat_mapa is not None and lng_mapa is not None:
+                            maps_url = f"https://www.google.com/maps?q={lat_mapa},{lng_mapa}"
+                            st.markdown(f"[🗺️ Ver no Mapa]({maps_url})")
 
                     if i < len(regs):
                         st.markdown("---")
@@ -12074,7 +12185,7 @@ def buscar_registros_dia(usuario, data):
             _return_conn(conn)
 
 
-def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor):
+def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalidade, novo_projeto, justificativa, gestor, correcao_id=None):
     """Corrige um registro de ponto existente"""
     conn = get_connection()
     cursor = conn.cursor()
@@ -12099,6 +12210,17 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
             return {"success": False, "message": "Nova data/hora inválida"}
         data_nova = nova_data_hora_dt.strftime("%Y-%m-%d")
 
+        valido_fluxo, mensagem_fluxo = validar_novo_registro_cursor(
+            cursor,
+            usuario_afetado,
+            data_nova,
+            novo_tipo,
+            data_hora_proposta=nova_data_hora_dt,
+            ignorar_registro_id=registro_id,
+        )
+        if not valido_fluxo:
+            return {"success": False, "message": mensagem_fluxo}
+
         entrada_orig_ant, saida_orig_ant, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_antiga)
         entrada_orig_nova, saida_orig_nova, _ = (None, None, None)
         if data_nova != data_antiga:
@@ -12115,6 +12237,14 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
             (registro_id, gestor, justificativa, data_correcao)
             VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
         """, (registro_id, gestor, justificativa))
+
+        if correcao_id:
+            cursor.execute(f"""
+                UPDATE solicitacoes_correcao_registro
+                SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER},
+                    data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
+            """, (gestor, justificativa, correcao_id))
 
         entrada_corr_ant, saida_corr_ant, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_antiga)
         registrar_auditoria_alteracao_ponto_cursor(
@@ -12156,6 +12286,71 @@ def corrigir_registro_ponto(registro_id, novo_tipo, nova_data_hora, nova_modalid
         conn.rollback()
         log_error("Erro ao corrigir registro", e, {"registro_id": registro_id, "gestor": gestor})
         return {"success": False, "message": f"Erro ao corrigir registro: {str(e)}"}
+    finally:
+        _return_conn(conn)
+
+
+def excluir_registro_ponto(registro_id, justificativa, gestor, correcao_id=None):
+    """Exclui um registro de ponto com auditoria obrigatória."""
+    conn = get_connection()
+    cursor = conn.cursor()
+
+    try:
+        cursor.execute(
+            f"SELECT usuario, data_hora, tipo, modalidade, projeto, atividade, localizacao FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}",
+            (registro_id,),
+        )
+        row = cursor.fetchone()
+        if not row:
+            return {"success": False, "message": "Registro não encontrado"}
+
+        usuario_afetado, data_hora, tipo, modalidade, projeto, atividade, localizacao = row
+        data_hora_dt = safe_datetime_parse(data_hora)
+        if not data_hora_dt:
+            return {"success": False, "message": "Data/hora do registro inválida"}
+
+        data_ref = data_hora_dt.strftime("%Y-%m-%d")
+        entrada_antes, saida_antes, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_ref)
+
+        cursor.execute(f"DELETE FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
+
+        if correcao_id:
+            cursor.execute(f"""
+                UPDATE solicitacoes_correcao_registro
+                SET status = 'aprovado', aprovado_por = {SQL_PLACEHOLDER},
+                    data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
+                WHERE id = {SQL_PLACEHOLDER}
+            """, (gestor, justificativa, correcao_id))
+
+        cursor.execute(f"""
+            INSERT INTO auditoria_correcoes
+            (registro_id, gestor, justificativa, data_correcao)
+            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+        """, (registro_id, gestor, justificativa))
+
+        entrada_depois, saida_depois, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_ref)
+        registrar_auditoria_alteracao_ponto_cursor(
+            cursor,
+            registro_id=registro_id,
+            usuario_afetado=usuario_afetado,
+            data_registro=data_ref,
+            entrada_original=entrada_antes,
+            saida_original=saida_antes,
+            entrada_corrigida=entrada_depois,
+            saida_corrigida=saida_depois,
+            tipo_alteracao="exclusao_registro_manual",
+            realizado_por=gestor,
+            justificativa=justificativa,
+            detalhes=f"Registro excluído: tipo={tipo}; modalidade={modalidade}; projeto={projeto}; atividade={atividade}; localizacao={localizacao}",
+        )
+
+        conn.commit()
+        log_security_event("RECORD_DELETION", usuario=gestor, context={"registro_id": registro_id, "usuario_afetado": usuario_afetado})
+        return {"success": True, "message": "Registro excluído com sucesso"}
+    except Exception as e:
+        conn.rollback()
+        log_error("Erro ao excluir registro", e, {"registro_id": registro_id, "gestor": gestor})
+        return {"success": False, "message": f"Erro ao excluir registro: {str(e)}"}
     finally:
         _return_conn(conn)
 

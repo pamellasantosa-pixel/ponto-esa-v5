@@ -276,46 +276,66 @@ class CalculoHorasSystem:
     def validar_registros_dia(self, usuario, data):
         """Valida se os registros do dia seguem as regras de negócio"""
         conn = self._get_connection()
-        cursor = conn.cursor()
+        try:
+            cursor = conn.cursor()
+            cursor.execute(f"""
+                    SELECT data_hora, tipo FROM registros_ponto 
+                    WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
+                    ORDER BY data_hora ASC
+                """, (usuario, data))
 
-        cursor.execute(f"""
-                SELECT tipo, COUNT(*) FROM registros_ponto 
-                WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} 
-                GROUP BY tipo
-            """, (usuario, data))
+            registros = cursor.fetchall()
+            contadores = {"Início": 0, "Intermediário": 0, "Fim": 0}
+            erros = []
 
-        contadores = dict(cursor.fetchall())
-        return_connection(conn)
+            tipos_ordenados = []
+            for _, tipo in registros:
+                tipo_norm = str(tipo or "").strip().lower()
+                if tipo_norm in ("início", "inicio", "entrada"):
+                    contadores["Início"] += 1
+                    tipos_ordenados.append("inicio")
+                elif tipo_norm in ("fim", "saída", "saida"):
+                    contadores["Fim"] += 1
+                    tipos_ordenados.append("fim")
+                else:
+                    contadores["Intermediário"] += 1
+                    tipos_ordenados.append("intermediario")
 
-        erros = []
+            if contadores["Início"] > 1:
+                erros.append(f"Múltiplos registros de 'Início' encontrados: {contadores['Início']}")
+            if contadores["Fim"] > 1:
+                erros.append(f"Múltiplos registros de 'Fim' encontrados: {contadores['Fim']}")
+            if tipos_ordenados:
+                if tipos_ordenados[0] != "inicio":
+                    erros.append("O primeiro registro do dia deve ser 'Início'.")
+                if "fim" in tipos_ordenados:
+                    indice_fim = tipos_ordenados.index("fim")
+                    if any(tipo != "fim" for tipo in tipos_ordenados[indice_fim + 1:]):
+                        erros.append("Após um registro de 'Fim', não é permitido lançar novos registros no mesmo dia.")
+                if contadores["Intermediário"] > 0 and contadores["Início"] == 0:
+                    erros.append("Não é permitido registrar 'Intermediário' sem um 'Início'.")
+                if contadores["Fim"] > 0 and contadores["Início"] == 0:
+                    erros.append("Não é permitido registrar 'Fim' sem um 'Início'.")
 
-        # Validar máximo de 1 início e 1 fim por dia
-        if contadores.get("Início", 0) > 1:
-            erros.append(
-                f"Múltiplos registros de 'Início' encontrados: {contadores['Início']}")
-
-        if contadores.get("Fim", 0) > 1:
-            erros.append(
-                f"Múltiplos registros de 'Fim' encontrados: {contadores['Fim']}")
-
-        # Intermediários são ilimitados (não validar)
-
-        return {
-            "valido": len(erros) == 0,
-            "erros": erros,
-            "contadores": contadores
-        }
+            return {
+                "valido": len(erros) == 0,
+                "erros": erros,
+                "contadores": contadores
+            }
+        finally:
+            return_connection(conn)
 
     def pode_registrar_tipo(self, usuario, data, tipo):
         """Verifica se o usuário pode registrar um tipo específico de ponto"""
         validacao = self.validar_registros_dia(usuario, data)
 
+        cont = validacao["contadores"]
         if tipo == "Início":
-            return validacao["contadores"].get("Início", 0) == 0
+            return cont.get("Início", 0) == 0 and cont.get("Fim", 0) == 0
         elif tipo == "Fim":
-            return validacao["contadores"].get("Fim", 0) == 0
+            return cont.get("Início", 0) > 0 and cont.get("Fim", 0) == 0
         elif tipo == "Intermediário":
-            return True  # Intermediários são sempre permitidos
+            return cont.get("Início", 0) > 0 and cont.get("Fim", 0) == 0
 
         return False
 
