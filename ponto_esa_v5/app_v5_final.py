@@ -5472,7 +5472,7 @@ def corrigir_registros_interface():
         try:
             pendencias = execute_query(
                 """
-                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                        c.justificativa, c.data_solicitacao, u.nome_completo
                 FROM solicitacoes_correcao_registro c
                 LEFT JOIN usuarios u ON c.usuario = u.usuario
@@ -5488,7 +5488,7 @@ def corrigir_registros_interface():
         try:
             cur_pend = conn_pend.cursor()
             cur_pend.execute("""
-                SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                        c.justificativa, c.data_solicitacao, u.nome_completo
                 FROM solicitacoes_correcao_registro c
                 LEFT JOIN usuarios u ON c.usuario = u.usuario
@@ -5503,7 +5503,7 @@ def corrigir_registros_interface():
     if pendencias:
         st.markdown(f"### 📬 Pendências Abertas ({len(pendencias)})")
         for pend in pendencias:
-            pend_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
+            pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
             titulo = f"⏳ {pend_nome or pend_usuario} - {format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}"
             with st.expander(titulo):
                 st.markdown(f"**Solicitado em:** {format_datetime_safe(pend_data_sol, '%d/%m/%Y %H:%M')}")
@@ -5513,6 +5513,11 @@ def corrigir_registros_interface():
                 st.markdown(f"**Justificativa:** {sanitize_ui_text(pend_just, default='Sem justificativa')}")
                 if st.button("Abrir para corrigir", key=f"abrir_pend_corr_{pend_id}"):
                     st.session_state.pendencia_usuario_prefill = pend_usuario
+                    st.session_state.pendencia_correcao_id_prefill = pend_id
+                    st.session_state.pendencia_registro_id_prefill = pend_registro_id
+                    st.session_state.pendencia_datahora_original_prefill = str(pend_dt_orig) if pend_dt_orig else ""
+                    st.session_state.pendencia_datahora_nova_prefill = str(pend_dt_nova) if pend_dt_nova else ""
+                    st.session_state.pendencia_justificativa_prefill = sanitize_ui_text(pend_just, default="Sem justificativa")
                     dt_pref = safe_datetime_parse(pend_dt_nova) or safe_datetime_parse(pend_dt_orig)
                     if dt_pref:
                         st.session_state.pendencia_data_prefill = dt_pref.strftime("%Y-%m-%d")
@@ -5529,6 +5534,10 @@ def corrigir_registros_interface():
 
     usuario_prefill = st.session_state.get("pendencia_usuario_prefill")
     data_prefill = st.session_state.get("pendencia_data_prefill")
+    registro_id_prefill = st.session_state.get("pendencia_registro_id_prefill")
+    dt_orig_prefill_raw = st.session_state.get("pendencia_datahora_original_prefill", "")
+    dt_nova_prefill_raw = st.session_state.get("pendencia_datahora_nova_prefill", "")
+    justificativa_prefill = st.session_state.get("pendencia_justificativa_prefill", "")
 
     idx_padrao = 0
     if usuario_prefill:
@@ -5567,17 +5576,46 @@ def corrigir_registros_interface():
             st.subheader(
                 f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
+            # Exibir contexto da solicitação selecionada para o gestor localizar facilmente.
+            if usuario_prefill and usuario == usuario_prefill and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+                st.info(
+                    "🎯 Solicitação selecionada: "
+                    f"{format_datetime_safe(dt_orig_prefill_raw, '%d/%m/%Y %H:%M', default='-')} "
+                    f"→ {format_datetime_safe(dt_nova_prefill_raw, '%d/%m/%Y %H:%M', default='-')}"
+                )
+                if justificativa_prefill:
+                    st.markdown(f"**Justificativa do pedido:** {justificativa_prefill}")
+
             projetos_ativos = obter_projetos_ativos()
             tipos_opcoes = ["inicio", "intermediario", "fim"]
 
             for registro in registros:
+                dt_registro = safe_datetime_parse(registro.get('data_hora'))
+                dt_orig_prefill = safe_datetime_parse(dt_orig_prefill_raw)
+                dt_nova_prefill = safe_datetime_parse(dt_nova_prefill_raw)
+
+                is_registro_alvo = False
+                if registro_id_prefill and str(registro.get('id')) == str(registro_id_prefill):
+                    is_registro_alvo = True
+                elif dt_registro and dt_orig_prefill:
+                    # Fallback para solicitações sem registro_id: mesma data/hora com tolerância curta.
+                    is_registro_alvo = abs((dt_registro - dt_orig_prefill).total_seconds()) <= 60
+
                 with st.expander(f"⏰ {registro['data_hora']} - {registro['tipo']}"):
                     col1, col2 = st.columns(2)
 
                     with col1:
+                        if is_registro_alvo:
+                            st.success("🎯 Registro alvo da solicitação selecionada")
                         st.write(f"**Tipo:** {registro['tipo']}")
                         st.write(
                             f"**Data/Hora Atual:** {registro['data_hora']}")
+                        if is_registro_alvo and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+                            st.write(
+                                f"**Alteração Solicitada:** "
+                                f"`{format_datetime_safe(dt_orig_prefill_raw, '%Y-%m-%d %H:%M:%S', default='-')}` "
+                                f"→ `{format_datetime_safe(dt_nova_prefill_raw, '%Y-%m-%d %H:%M:%S', default='-')}`"
+                            )
                         st.write(
                             f"**Modalidade:** {registro['modalidade'] or 'N/A'}")
                         st.write(
@@ -5596,9 +5634,15 @@ def corrigir_registros_interface():
                                 index=tipos_opcoes.index(tipo_atual)
                             )
 
+                            valor_data_hora_padrao = str(registro['data_hora'])
+                            if is_registro_alvo and dt_nova_prefill:
+                                valor_data_hora_padrao = dt_nova_prefill.strftime("%Y-%m-%d %H:%M:%S")
+                            elif is_registro_alvo and dt_nova_prefill_raw:
+                                valor_data_hora_padrao = str(dt_nova_prefill_raw)
+
                             nova_data_hora = st.text_input(
                                 "Nova Data/Hora (YYYY-MM-DD HH:MM)",
-                                value=registro['data_hora']
+                                value=valor_data_hora_padrao
                             )
 
                             nova_modalidade = st.selectbox(
@@ -5642,6 +5686,15 @@ def corrigir_registros_interface():
                                     )
 
                                     if resultado["success"]:
+                                        for k in [
+                                            "pendencia_correcao_id_prefill",
+                                            "pendencia_registro_id_prefill",
+                                            "pendencia_datahora_original_prefill",
+                                            "pendencia_datahora_nova_prefill",
+                                            "pendencia_justificativa_prefill",
+                                        ]:
+                                            if k in st.session_state:
+                                                del st.session_state[k]
                                         st.success(f"✅ {resultado['message']}")
                                         st.rerun()
                                     else:
