@@ -5539,8 +5539,8 @@ def corrigir_registros_interface():
     dt_nova_prefill_raw = st.session_state.get("pendencia_datahora_nova_prefill", "")
     justificativa_prefill = st.session_state.get("pendencia_justificativa_prefill", "")
     
-    # Normalizar usuario_prefill em lowercase para evitar case mismatch
-    usuario_prefill_norm = usuario_prefill.lower() if usuario_prefill else None
+    # Normalizar para comparação sem perder o login original usado nas consultas.
+    usuario_prefill_norm = usuario_prefill.casefold() if usuario_prefill else None
 
     idx_padrao = 0
     if usuario_prefill_norm:
@@ -5557,7 +5557,8 @@ def corrigir_registros_interface():
     )
 
     if usuario_selecionado:
-        usuario = usuario_selecionado.split('(')[-1].replace(')', '').lower()
+        usuario = usuario_selecionado.split('(')[-1].replace(')', '')
+        usuario_norm = usuario.casefold()
 
         # Selecionar data
         data_default = date.today()
@@ -5581,7 +5582,7 @@ def corrigir_registros_interface():
                 f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
 
             # Exibir contexto da solicitação selecionada para o gestor localizar facilmente.
-            if usuario_prefill_norm and usuario == usuario_prefill_norm and (dt_orig_prefill_raw or dt_nova_prefill_raw):
+            if usuario_prefill_norm and usuario_norm == usuario_prefill_norm and (dt_orig_prefill_raw or dt_nova_prefill_raw):
                 st.info(
                     "🎯 Solicitação selecionada: "
                     f"{format_datetime_safe(dt_orig_prefill_raw, '%d/%m/%Y %H:%M', default='-')} "
@@ -6190,6 +6191,15 @@ def tela_gestor():
         # 🔧 CORREÇÃO: Persistir opção selecionada no session_state após st.rerun()
         if 'menu_gestor_index' not in st.session_state:
             st.session_state.menu_gestor_index = 0
+
+        # Redirecionamento forçado para Corrigir Registros (ex.: vindo da Central de Notificações)
+        if st.session_state.get('ir_para_corrigir_registros'):
+            for i, opt in enumerate(opcoes_menu):
+                if opt.startswith("🔧 Corrigir Registros"):
+                    st.session_state.menu_gestor_index = i
+                    st.session_state["menu_gestor_selectbox"] = opt
+                    break
+            del st.session_state.ir_para_corrigir_registros
         
         # Encontrar índice da opção atual para manter a seleção após rerun
         opcao = st.selectbox(
@@ -6277,14 +6287,6 @@ def tela_gestor():
             for key in list(st.session_state.keys()):
                 del st.session_state[key]
             st.rerun()
-
-    if st.session_state.get('ir_para_corrigir_registros'):
-        del st.session_state.ir_para_corrigir_registros
-        for i, opt in enumerate(opcoes_menu):
-            if opt.startswith("🔧 Corrigir Registros"):
-                opcao = opt
-                st.session_state.menu_gestor_index = i
-                break
 
     # Conteúdo baseado na opção
     if opcao == "📊 Dashboard":
@@ -7910,7 +7912,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
         if REFACTORING_ENABLED:
             try:
                 query_corr = """
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                    SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                            c.justificativa, c.data_solicitacao, u.nome_completo
                     FROM solicitacoes_correcao_registro c
                     LEFT JOIN usuarios u ON c.usuario = u.usuario
@@ -7928,7 +7930,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                 cursor = conn.cursor()
 
                 cursor.execute("""
-                    SELECT c.id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                    SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                            c.justificativa, c.data_solicitacao, u.nome_completo
                     FROM solicitacoes_correcao_registro c
                     LEFT JOIN usuarios u ON c.usuario = u.usuario
@@ -7944,7 +7946,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
             st.info(f"📋 {len(corr_pendentes)} solicitação(ões) de correção")
             
             for correcao in corr_pendentes:
-                corr_id, usuario, dt_orig, dt_nova, justificativa, data_solicitacao, nome_completo = correcao
+                corr_id, registro_id, usuario, dt_orig, dt_nova, justificativa, data_solicitacao, nome_completo = correcao
                 
                 with st.expander(f"⏳ {nome_completo or usuario} - {format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')}"):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
@@ -7957,6 +7959,11 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     
                     if st.button("Ver detalhes completos", key=f"ver_corr_{corr_id}"):
                         st.session_state.ir_para_corrigir_registros = True
+                        st.session_state.pendencia_correcao_id_prefill = corr_id
+                        st.session_state.pendencia_registro_id_prefill = registro_id
+                        st.session_state.pendencia_datahora_original_prefill = str(dt_orig) if dt_orig else ""
+                        st.session_state.pendencia_datahora_nova_prefill = str(dt_nova) if dt_nova else ""
+                        st.session_state.pendencia_justificativa_prefill = sanitize_ui_text(justificativa, default="Sem justificativa")
                         st.session_state.pendencia_usuario_prefill = usuario
                         dt_pref = safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_orig)
                         if dt_pref:
