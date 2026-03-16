@@ -268,7 +268,7 @@ def iniciar_scheduler_background() -> bool:
                     if hora is not None:
                         _scheduler.add_job(
                             job_lembrete_entrada,
-                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri', timezone='America/Sao_Paulo'),
                             id=f'entrada_{hora}h{minuto:02d}',
                             name=f'Lembrete Entrada {hora}:{minuto:02d}',
                             replace_existing=True
@@ -287,7 +287,7 @@ def iniciar_scheduler_background() -> bool:
                     if hora is not None:
                         _scheduler.add_job(
                             job_lembrete_saida,
-                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                            CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri', timezone='America/Sao_Paulo'),
                             id=f'saida_{hora}h{minuto:02d}',
                             name=f'Lembrete Saída {hora}:{minuto:02d}',
                             replace_existing=True
@@ -306,7 +306,7 @@ def iniciar_scheduler_background() -> bool:
                 if hora_inicio and hora_fim:
                     _scheduler.add_job(
                         job_alerta_hora_extra,
-                        CronTrigger(hour=f'{hora_inicio}-{hora_fim}', minute='0,30', day_of_week='mon-fri'),
+                        CronTrigger(hour=f'{hora_inicio}-{hora_fim}', minute='0,30', day_of_week='mon-fri', timezone='America/Sao_Paulo'),
                         id='hora_extra',
                         name='Alerta Hora Extra',
                         replace_existing=True
@@ -326,7 +326,7 @@ def iniciar_scheduler_background() -> bool:
                         if i == len(config['notif_aprovadores_horarios']) - 1:
                             _scheduler.add_job(
                                 job_lembrete_fim_dia_aprovadores,
-                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri', timezone='America/Sao_Paulo'),
                                 id=f'aprovadores_urgente_{hora}h{minuto:02d}',
                                 name=f'Lembrete Urgente Aprovadores {hora}:{minuto:02d}',
                                 replace_existing=True
@@ -334,7 +334,7 @@ def iniciar_scheduler_background() -> bool:
                         else:
                             _scheduler.add_job(
                                 job_lembrete_aprovadores,
-                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri'),
+                                CronTrigger(hour=hora, minute=minuto, day_of_week='mon-fri', timezone='America/Sao_Paulo'),
                                 id=f'aprovadores_{hora}h{minuto:02d}',
                                 name=f'Lembrete Aprovadores {hora}:{minuto:02d}',
                                 replace_existing=True
