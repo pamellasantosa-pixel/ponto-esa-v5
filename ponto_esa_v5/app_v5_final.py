@@ -461,8 +461,10 @@ def validar_novo_registro_cursor(cursor, usuario, data_referencia, tipo, data_ho
     if tipo_norm == "inicio":
         if registros_inicio:
             return False, "O registro de 'Início' só pode ser realizado uma vez por dia."
-        if ultimo_fim:
+        if ultimo_fim and ignorar_registro_id is None:
             return False, "Não é permitido registrar novo 'Início' após já existir um 'Fim' no dia."
+        if ultimo_fim and proposta_dt and proposta_dt >= ultimo_fim:
+            return False, "O registro de 'Início' deve ocorrer antes do 'Fim' do expediente."
         if proposta_dt and primeiro_registro and proposta_dt >= primeiro_registro["data_hora"]:
             return False, "O registro de 'Início' precisa ser o primeiro do dia."
         return True, ""
@@ -485,6 +487,51 @@ def validar_novo_registro_cursor(cursor, usuario, data_referencia, tipo, data_ho
         return True, ""
 
     return False, "Tipo de registro inválido."
+
+
+def existe_solicitacao_correcao_pendente_cursor(
+    cursor,
+    usuario,
+    registro_id,
+    data_hora_original,
+    data_hora_nova,
+    tipo_solicitacao="ajuste_registro",
+    data_referencia=None,
+    hora_inicio=None,
+    hora_saida=None,
+):
+    """Verifica se já existe solicitação pendente equivalente para evitar duplicidades."""
+    query = f"""
+        SELECT id
+        FROM solicitacoes_correcao_registro
+        WHERE usuario = {SQL_PLACEHOLDER}
+          AND COALESCE(registro_id, 0) = {SQL_PLACEHOLDER}
+          AND COALESCE(CAST(data_hora_original AS TEXT), '') = {SQL_PLACEHOLDER}
+          AND COALESCE(CAST(data_hora_nova AS TEXT), '') = {SQL_PLACEHOLDER}
+          AND COALESCE(tipo_solicitacao, 'ajuste_registro') = {SQL_PLACEHOLDER}
+          AND status = 'pendente'
+    """
+    params = [
+        usuario,
+        int(registro_id or 0),
+        str(data_hora_original or ""),
+        str(data_hora_nova or ""),
+        tipo_solicitacao,
+    ]
+
+    if data_referencia is not None:
+        query += f" AND COALESCE(CAST(data_referencia AS TEXT), '') = {SQL_PLACEHOLDER}"
+        params.append(str(data_referencia))
+    if hora_inicio is not None:
+        query += f" AND COALESCE(CAST(hora_inicio_solicitada AS TEXT), '') = {SQL_PLACEHOLDER}"
+        params.append(str(hora_inicio))
+    if hora_saida is not None:
+        query += f" AND COALESCE(CAST(hora_saida_solicitada AS TEXT), '') = {SQL_PLACEHOLDER}"
+        params.append(str(hora_saida))
+
+    cursor.execute(query, tuple(params))
+    row = cursor.fetchone()
+    return row[0] if row else None
 
 
 def registrar_auditoria_alteracao_ponto_cursor(
@@ -1285,8 +1332,15 @@ def obter_badges_gestor_cached(usuario: str):
                  WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
                 (SELECT COUNT(*) FROM atestado_horas
                  WHERE status = 'pendente') AS atestados_pendentes,
-                (SELECT COUNT(*) FROM solicitacoes_correcao_registro
-                 WHERE status = 'pendente') AS correcoes_pendentes
+                (SELECT COUNT(*) FROM (
+                    SELECT DISTINCT
+                        COALESCE(CAST(registro_id AS TEXT), '0') || '|' ||
+                        COALESCE(usuario, '') || '|' ||
+                        COALESCE(CAST(data_hora_original AS TEXT), '') || '|' ||
+                        COALESCE(CAST(data_hora_nova AS TEXT), '')
+                    FROM solicitacoes_correcao_registro
+                    WHERE status = 'pendente'
+                ) x) AS correcoes_pendentes
             """,
             (usuario,),
             fetch_one=True,
@@ -1305,8 +1359,15 @@ def obter_badges_gestor_cached(usuario: str):
                  WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
                 (SELECT COUNT(*) FROM atestado_horas
                  WHERE status = 'pendente') AS atestados_pendentes,
-                (SELECT COUNT(*) FROM solicitacoes_correcao_registro
-                 WHERE status = 'pendente') AS correcoes_pendentes
+                (SELECT COUNT(*) FROM (
+                    SELECT DISTINCT
+                        COALESCE(CAST(registro_id AS TEXT), '0') || '|' ||
+                        COALESCE(usuario, '') || '|' ||
+                        COALESCE(CAST(data_hora_original AS TEXT), '') || '|' ||
+                        COALESCE(CAST(data_hora_nova AS TEXT), '')
+                    FROM solicitacoes_correcao_registro
+                    WHERE status = 'pendente'
+                ) x) AS correcoes_pendentes
             """,
             (usuario,),
         )
@@ -3388,15 +3449,7 @@ def registrar_ponto_interface(calculo_horas_system, horas_extras_system=None):
     </style>
     """, unsafe_allow_html=True)
     
-    # Auto-refresh a cada 1 segundo se HE ativa (usando JavaScript)
-    if he_em_andamento:
-        st.markdown("""
-        <script>
-        setTimeout(function(){
-            window.parent.document.querySelector('button[kind="secondary"]')?.click();
-        }, 1000);
-        </script>
-        """, unsafe_allow_html=True)
+    # Evitar auto-refresh agressivo que pode causar reconexões em sessões web/mobile.
     
     # Layout do painel de horas extras
     col_btn1, col_contador, col_aprovador, col_btn2 = st.columns([1.2, 1, 1.5, 1.2])
@@ -5212,6 +5265,17 @@ def solicitar_correcao_registro_interface():
                             conn = get_connection()
                             try:
                                 cursor = conn.cursor()
+                                solicitacao_duplicada_id = existe_solicitacao_correcao_pendente_cursor(
+                                    cursor,
+                                    usuario=usuario_logado,
+                                    registro_id=registro['id'],
+                                    data_hora_original=registro['data_hora'],
+                                    data_hora_nova=nova_data_hora,
+                                    tipo_solicitacao='ajuste_registro',
+                                )
+                                if solicitacao_duplicada_id:
+                                    st.warning("⚠️ Já existe uma solicitação pendente idêntica para este registro.")
+                                    return
                                 try:
                                     cursor.execute(f"""
                                         INSERT INTO solicitacoes_correcao_registro
@@ -5367,6 +5431,20 @@ def solicitar_correcao_registro_interface():
                             conn = get_connection()
                             try:
                                 cursor = conn.cursor()
+                                solicitacao_duplicada_id = existe_solicitacao_correcao_pendente_cursor(
+                                    cursor,
+                                    usuario=usuario_logado,
+                                    registro_id=registro_id_ref,
+                                    data_hora_original=data_hora_original,
+                                    data_hora_nova=dt_inicio,
+                                    tipo_solicitacao='complemento_jornada',
+                                    data_referencia=data_ref_str,
+                                    hora_inicio=hora_inicio.strftime("%H:%M"),
+                                    hora_saida=hora_saida.strftime("%H:%M"),
+                                )
+                                if solicitacao_duplicada_id:
+                                    st.warning("⚠️ Já existe uma solicitação pendente idêntica para este dia.")
+                                    return
                                 cursor.execute(f"""
                                     INSERT INTO solicitacoes_correcao_registro
                                     (usuario, registro_id, data_hora_original, data_hora_nova,
@@ -5584,6 +5662,21 @@ def corrigir_registros_interface():
             _return_conn(conn_pend)
 
     if pendencias:
+        # Deduplicar pendências idênticas (mantém a mais recente por combinação lógica).
+        dedup = {}
+        for pend in pendencias:
+            pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
+            key = (
+                str(pend_usuario or "").strip().lower(),
+                int(pend_registro_id or 0),
+                str(pend_dt_orig or ""),
+                str(pend_dt_nova or ""),
+            )
+            anterior = dedup.get(key)
+            if not anterior or (safe_datetime_parse(pend_data_sol) or datetime.min) > (safe_datetime_parse(anterior[6]) or datetime.min):
+                dedup[key] = pend
+        pendencias = list(dedup.values())
+
         st.markdown(f"### 📬 Pendências Abertas ({len(pendencias)})")
         for pend in pendencias:
             pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
@@ -12311,6 +12404,26 @@ def excluir_registro_ponto(registro_id, justificativa, gestor, correcao_id=None)
 
         data_ref = data_hora_dt.strftime("%Y-%m-%d")
         entrada_antes, saida_antes, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_ref)
+
+        # Preservar histórico sem violar FK: mover vínculos de auditoria_correcoes para um registro sentinela.
+        cursor.execute(
+            f"SELECT id FROM registros_ponto WHERE usuario = {SQL_PLACEHOLDER} AND DATE(data_hora) = {SQL_PLACEHOLDER} AND id <> {SQL_PLACEHOLDER} ORDER BY data_hora ASC LIMIT 1",
+            (usuario_afetado, data_ref, registro_id),
+        )
+        sentinela = cursor.fetchone()
+        sentinela_id = sentinela[0] if sentinela else None
+
+        if sentinela_id:
+            cursor.execute(
+                f"UPDATE auditoria_correcoes SET registro_id = {SQL_PLACEHOLDER} WHERE registro_id = {SQL_PLACEHOLDER}",
+                (sentinela_id, registro_id),
+            )
+        else:
+            # Sem registro sentinela no dia, apagar vínculos antigos para permitir limpeza definitiva do registro duplicado.
+            cursor.execute(
+                f"DELETE FROM auditoria_correcoes WHERE registro_id = {SQL_PLACEHOLDER}",
+                (registro_id,),
+            )
 
         cursor.execute(f"DELETE FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
 
