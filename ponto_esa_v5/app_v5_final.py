@@ -334,8 +334,25 @@ def normalizar_modalidade_ponto(modalidade):
 
 def format_datetime_safe(value, fmt="%d/%m/%Y %H:%M", default="-"):
     """Formata data/hora sem quebrar a UI quando o valor for inválido."""
+    valor_txt = str(value or "")
+    if "NotFoundError" in valor_txt and "removeChild" in valor_txt:
+        return default
     dt = safe_datetime_parse(value)
     return dt.strftime(fmt) if dt else default
+
+
+def sanitize_ui_text(value, default="-"):
+    """Evita exibir stack traces frontend como se fossem dados de negócio."""
+    txt = str(value or "").strip()
+    if not txt:
+        return default
+
+    txt_lower = txt.lower()
+    if "notfounderror" in txt_lower and "removechild" in txt_lower:
+        return "Erro de interface detectado em solicitação antiga (detalhes técnicos ocultados)."
+    if "ponto-esa-v5.onrender.com/static/js/index" in txt_lower:
+        return "Erro de interface detectado em solicitação antiga (detalhes técnicos ocultados)."
+    return txt
 
 
 def formatar_localizacao_legivel(localizacao_original, latitude=None, longitude=None):
@@ -656,8 +673,18 @@ def get_custom_css():
     /* Usar seletor de atributo para inputs com placeholders GPS */
     div.stTextInput:has(input[placeholder="GPS Lat"]),
     div.stTextInput:has(input[placeholder="GPS Lng"]),
+    div.stTextInput:has(input[placeholder="Latitude GPS"]),
+    div.stTextInput:has(input[placeholder="Longitude GPS"]),
+    div.stTextInput:has(input[placeholder="GPS Longo"]),
+    div.stTextInput:has(input[aria-label="Latitude GPS"]),
+    div.stTextInput:has(input[aria-label="Longitude GPS"]),
     div[data-testid="stTextInput"]:has(input[placeholder="GPS Lat"]),
-    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lng"]) {
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Lng"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="Latitude GPS"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="Longitude GPS"]),
+    div[data-testid="stTextInput"]:has(input[placeholder="GPS Longo"]),
+    div[data-testid="stTextInput"]:has(input[aria-label="Latitude GPS"]),
+    div[data-testid="stTextInput"]:has(input[aria-label="Longitude GPS"]) {
         display: none !important;
         height: 0 !important;
         overflow: hidden !important;
@@ -667,7 +694,12 @@ def get_custom_css():
     
     /* Fallback para navegadores que não suportam :has() */
     input[placeholder="GPS Lat"],
-    input[placeholder="GPS Lng"] {
+    input[placeholder="GPS Lng"],
+    input[placeholder="Latitude GPS"],
+    input[placeholder="Longitude GPS"],
+    input[placeholder="GPS Longo"],
+    input[aria-label="Latitude GPS"],
+    input[aria-label="Longitude GPS"] {
         position: absolute !important;
         left: -9999px !important;
         opacity: 0 !important;
@@ -677,6 +709,19 @@ def get_custom_css():
         margin: 0 !important;
         padding: 0 !important;
         border: none !important;
+    }
+
+    .gps-hidden-field,
+    .gps-hidden-field * {
+        display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        min-height: 0 !important;
+        max-height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        border: 0 !important;
+        overflow: hidden !important;
     }
 
     @media (max-width: 768px) {
@@ -737,13 +782,19 @@ def get_custom_css():
 <script>
 // Fallback seguro: esconder apenas o input, sem alterar containers do React/Streamlit.
 function hideGpsInputsSafely() {
-    document.querySelectorAll('input[placeholder="GPS Lat"], input[placeholder="GPS Lng"]').forEach(function(input) {
+    document.querySelectorAll('input[placeholder="GPS Lat"], input[placeholder="GPS Lng"], input[placeholder="Latitude GPS"], input[placeholder="Longitude GPS"], input[placeholder="GPS Longo"], input[aria-label="Latitude GPS"], input[aria-label="Longitude GPS"]').forEach(function(input) {
         input.style.position = 'absolute';
         input.style.left = '-9999px';
         input.style.opacity = '0';
         input.style.pointerEvents = 'none';
         input.style.height = '0';
         input.style.width = '0';
+
+        // Esconder também o container visual sem removê-lo do DOM.
+        var wrap = input.closest('div[data-testid="stTextInput"]');
+        if (wrap) {
+            wrap.classList.add('gps-hidden-field');
+        }
     });
 }
 hideGpsInputsSafely();
@@ -2847,9 +2898,26 @@ def _render_gps_capture_js():
         const cachedTime = sessionStorage.getItem('gps_timestamp');
         const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
 
+        function findGpsInput(kind) {
+            const all = Array.from(document.querySelectorAll('input[type="text"]'));
+            const isLat = kind === 'lat';
+            return all.find(function(input) {
+                const p = (input.getAttribute('placeholder') || '').toLowerCase();
+                const a = (input.getAttribute('aria-label') || '').toLowerCase();
+                const ref = (p + ' ' + a).trim();
+                if (!ref.includes('gps') && !ref.includes('lat') && !ref.includes('long')) {
+                    return false;
+                }
+                if (isLat) {
+                    return ref.includes('lat');
+                }
+                return ref.includes('lng') || ref.includes('long');
+            }) || null;
+        }
+
         function fillInputs(lat, lng, retries) {
-            const latField = document.querySelector('input[placeholder="GPS Lat"]');
-            const lngField = document.querySelector('input[placeholder="GPS Lng"]');
+            const latField = findGpsInput('lat');
+            const lngField = findGpsInput('lng');
             if (latField && lngField) {
                 const nativeInputValueSetter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
                 latField.value = lat.toString();
@@ -4559,10 +4627,10 @@ def notificacoes_interface(horas_extras_system):
                     
                     with col2:
                         st.write("**Correção Solicitada:**")
-                        st.write(f"- Nova Data/Hora: {data_nova}")
+                        st.write(f"- Nova Data/Hora: {sanitize_ui_text(data_nova, default='-')}")
                         st.write(f"- Novo Tipo: {tipo_novo}")
                     
-                    st.write(f"**Justificativa:** {just}")
+                    st.write(f"**Justificativa:** {sanitize_ui_text(just, default='Sem justificativa')}")
                     st.write(f"**Solicitado em:** {data_sol}")
                     st.info("⏳ Aguardando aprovação do gestor...")
         else:
@@ -5374,10 +5442,10 @@ def solicitar_correcao_registro_interface():
                             st.write(f"- Hora início: {hora_inicio_sol}")
                             st.write(f"- Hora saída: {hora_saida_sol}")
                         else:
-                            st.write(f"- Nova Data/Hora: {data_nova}")
+                            st.write(f"- Nova Data/Hora: {sanitize_ui_text(data_nova, default='-')}")
                             st.write(f"- Novo Tipo: {tipo_novo}")
                     
-                    st.write(f"**Justificativa:** {just}")
+                    st.write(f"**Justificativa:** {sanitize_ui_text(just, default='Sem justificativa')}")
                     st.write(f"**Solicitado em:** {data_sol}")
                     
                     if status != 'pendente':
@@ -5442,7 +5510,7 @@ def corrigir_registros_interface():
                 st.markdown(
                     f"**Alteração:** `{format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}` → `{format_datetime_safe(pend_dt_nova, '%d/%m/%Y %H:%M')}`"
                 )
-                st.markdown(f"**Justificativa:** {pend_just or 'Sem justificativa'}")
+                st.markdown(f"**Justificativa:** {sanitize_ui_text(pend_just, default='Sem justificativa')}")
                 if st.button("Abrir para corrigir", key=f"abrir_pend_corr_{pend_id}"):
                     st.session_state.pendencia_usuario_prefill = pend_usuario
                     dt_pref = safe_datetime_parse(pend_dt_nova) or safe_datetime_parse(pend_dt_orig)
@@ -7762,7 +7830,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.markdown(f"**Horas:** {format_time_duration(horas)}")
                     st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Justificativa:**")
-                    st.info(justificativa)
+                    st.info(sanitize_ui_text(justificativa, default="Sem justificativa"))
                     
                     if st.button("Ver detalhes completos", key=f"ver_he_{he_id}"):
                         st.session_state['opcao_menu'] = "🕐 Aprovar Horas Extras"
@@ -7821,7 +7889,7 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.markdown(f"**Alteração:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
                     st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Justificativa:**")
-                    st.info(justificativa)
+                    st.info(sanitize_ui_text(justificativa, default="Sem justificativa"))
                     
                     if st.button("Ver detalhes completos", key=f"ver_corr_{corr_id}"):
                         st.session_state.ir_para_corrigir_registros = True
