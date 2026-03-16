@@ -430,7 +430,7 @@ st.set_page_config(
     page_title="Ponto ExSA v5.0",
     page_icon="⏰",
     layout="wide",
-    initial_sidebar_state="expanded"
+    initial_sidebar_state="auto"
 )
 
 # Inicializar sistema de Push Notifications (ntfy.sh)
@@ -453,6 +453,18 @@ def get_custom_css():
         font-family: 'Inter', sans-serif;
         background: linear-gradient(135deg, #87CEEB 0%, #4682B4 100%);
         min-height: 100vh;
+        overflow-x: hidden;
+    }
+
+    html, body, [data-testid="stAppViewContainer"] {
+        max-width: 100%;
+        overflow-x: hidden;
+    }
+
+    .main .block-container {
+        max-width: 100%;
+        padding-left: 1rem;
+        padding-right: 1rem;
     }
     
     /* Container principal de login */
@@ -550,6 +562,16 @@ def get_custom_css():
         color: #4682B4;
         margin-bottom: 15px;
         font-weight: 600;
+    }
+
+    [data-testid="stDataFrame"], .stTable {
+        max-width: 100%;
+        overflow-x: auto;
+    }
+
+    pre {
+        white-space: pre-wrap !important;
+        word-break: break-word !important;
     }
     
     /* Notificações */
@@ -656,31 +678,78 @@ def get_custom_css():
         padding: 0 !important;
         border: none !important;
     }
+
+    @media (max-width: 768px) {
+        .main .block-container {
+            padding-left: 0.6rem;
+            padding-right: 0.6rem;
+            padding-top: 0.8rem;
+        }
+
+        .main-header {
+            padding: 14px;
+            border-radius: 10px;
+            margin-bottom: 12px;
+        }
+
+        .user-welcome {
+            font-size: 20px;
+            line-height: 1.2;
+        }
+
+        .user-info {
+            font-size: 12px;
+        }
+
+        .feature-card {
+            padding: 14px;
+            border-radius: 12px;
+            margin-bottom: 12px;
+        }
+
+        .feature-card h3 {
+            font-size: 1.1rem;
+            margin-bottom: 10px;
+        }
+
+        [data-testid="stHorizontalBlock"] {
+            flex-direction: column !important;
+            gap: 0.5rem !important;
+        }
+
+        [data-testid="column"] {
+            width: 100% !important;
+            flex: 1 1 100% !important;
+            min-width: 0 !important;
+        }
+
+        .footer-left,
+        .footer-right {
+            position: static;
+            display: block;
+            margin: 8px 0 0 0;
+            width: fit-content;
+            max-width: 100%;
+            font-size: 11px;
+        }
+    }
 </style>
 <script>
-// Ocultar campos GPS via JavaScript (fallback para navegadores sem :has())
-function hideGpsFields() {
+// Fallback seguro: esconder apenas o input, sem alterar containers do React/Streamlit.
+function hideGpsInputsSafely() {
     document.querySelectorAll('input[placeholder="GPS Lat"], input[placeholder="GPS Lng"]').forEach(function(input) {
-        var container = input.closest('div[data-testid="stTextInput"]') || input.parentElement.parentElement.parentElement;
-        if (container) {
-            container.style.display = 'none';
-            container.style.height = '0';
-            container.style.overflow = 'hidden';
-            container.style.margin = '0';
-            container.style.padding = '0';
-        }
+        input.style.position = 'absolute';
+        input.style.left = '-9999px';
+        input.style.opacity = '0';
+        input.style.pointerEvents = 'none';
+        input.style.height = '0';
+        input.style.width = '0';
     });
 }
-// Executar imediatamente e depois de 1 segundo (para quando Streamlit re-renderiza)
-hideGpsFields();
-setTimeout(hideGpsFields, 500);
-setTimeout(hideGpsFields, 1000);
-setTimeout(hideGpsFields, 2000);
-// Observar mudanças no DOM
-if (typeof MutationObserver !== 'undefined') {
-    var observer = new MutationObserver(hideGpsFields);
-    observer.observe(document.body, { childList: true, subtree: true });
-}
+hideGpsInputsSafely();
+setTimeout(hideGpsInputsSafely, 300);
+setTimeout(hideGpsInputsSafely, 900);
+setTimeout(hideGpsInputsSafely, 1600);
 </script>
 """
 
@@ -2778,7 +2847,7 @@ def _render_gps_capture_js():
         const cachedTime = sessionStorage.getItem('gps_timestamp');
         const cacheValid = cachedTime && (Date.now() - parseInt(cachedTime)) < 120000;
 
-        function fillInputs(lat, lng) {
+        function fillInputs(lat, lng, retries) {
             const latField = document.querySelector('input[placeholder="GPS Lat"]');
             const lngField = document.querySelector('input[placeholder="GPS Lng"]');
             if (latField && lngField) {
@@ -2795,7 +2864,12 @@ def _render_gps_capture_js():
                 lngField.dispatchEvent(new Event('input', { bubbles: true }));
                 console.log('GPS fields filled:', lat, lng);
             } else {
-                console.log('GPS fields not found.');
+                const remaining = (typeof retries === 'number') ? retries : 12;
+                if (remaining > 0) {
+                    setTimeout(function() { fillInputs(lat, lng, remaining - 1); }, 300);
+                } else {
+                    console.log('GPS fields not found after retries.');
+                }
             }
         }
 
@@ -2812,7 +2886,7 @@ def _render_gps_capture_js():
 
         if (cacheValid && cachedLat && cachedLng) {
             updateGpsStatus(true, 'GPS: ' + parseFloat(cachedLat).toFixed(6) + ', ' + parseFloat(cachedLng).toFixed(6) + ' (±' + Math.round(cachedAcc || 0) + 'm)');
-            setTimeout(() => fillInputs(cachedLat, cachedLng), 300);
+            setTimeout(() => fillInputs(cachedLat, cachedLng, 12), 300);
         }
 
         if (navigator.geolocation) {
@@ -2827,7 +2901,7 @@ def _render_gps_capture_js():
                     sessionStorage.setItem('gps_accuracy', acc);
                     sessionStorage.setItem('gps_timestamp', Date.now());
                     updateGpsStatus(true, 'GPS: ' + lat.toFixed(6) + ', ' + lng.toFixed(6) + ' (±' + Math.round(acc) + 'm)');
-                    setTimeout(() => fillInputs(lat, lng), 300);
+                    setTimeout(() => fillInputs(lat, lng, 12), 300);
                     if (acc > 100) {
                         navigator.geolocation.getCurrentPosition(
                             function(p) {
@@ -2837,7 +2911,7 @@ def _render_gps_capture_js():
                                     sessionStorage.setItem('gps_accuracy', p.coords.accuracy);
                                     sessionStorage.setItem('gps_timestamp', Date.now());
                                     updateGpsStatus(true, 'GPS: ' + p.coords.latitude.toFixed(6) + ', ' + p.coords.longitude.toFixed(6) + ' (±' + Math.round(p.coords.accuracy) + 'm)');
-                                    fillInputs(p.coords.latitude, p.coords.longitude);
+                                    fillInputs(p.coords.latitude, p.coords.longitude, 12);
                                 }
                             },
                             function() {},
@@ -5876,8 +5950,14 @@ def tela_gestor():
                 col1, col2 = st.columns(2)
                 with col1:
                     if st.button("✅ Responder", key=f"responder_{notificacao['solicitacao_id']}"):
-                        # Redirecionar para a tela de aprovação
-                        st.session_state.pagina_atual = "🕐 Aprovar Horas Extras"
+                        # Redirecionar para a tela correta conforme tipo da notificação.
+                        notif_type = str(notificacao.get('type', '')).lower()
+                        if 'ajuste' in notif_type or 'correc' in notif_type:
+                            st.session_state.ir_para_corrigir_registros = True
+                        elif 'atestado' in notif_type:
+                            st.session_state['opcao_menu'] = "✅ Aprovar Atestados"
+                        else:
+                            st.session_state['opcao_menu'] = "🕐 Aprovar Horas Extras"
                         st.rerun()
 
                 with col2:
@@ -5957,6 +6037,7 @@ def tela_gestor():
         opcoes_menu = [
             "📊 Dashboard",
             "👥 Todos os Registros",
+            "🧾 Auditoria de Alterações",
             "⚠️ Pendências de Ponto",
             f"✅ Aprovar Atestados{f' 🔴{atestados_pendentes}' if atestados_pendentes > 0 else ''}",
             f"🕐 Aprovar Horas Extras{f' 🔴{he_aprovar}' if he_aprovar > 0 else ''}",
@@ -6078,6 +6159,8 @@ def tela_gestor():
         dashboard_gestor(banco_horas_system, calculo_horas_system)
     elif opcao.startswith("👥 Todos os Registros"):
         todos_registros_interface(calculo_horas_system)
+    elif opcao.startswith("🧾 Auditoria de Alterações"):
+        auditoria_alteracoes_interface()
     elif opcao.startswith("⚠️ Pendências de Ponto"):
         pendencias_ponto_interface()
     elif opcao.startswith("✅ Aprovar Atestados"):
@@ -7811,6 +7894,123 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
 
 
 # Outras interfaces do gestor (simplificadas)
+
+
+def auditoria_alteracoes_interface():
+    """Painel para consulta de auditoria de alterações e correções."""
+    st.markdown("""
+    <div class="feature-card">
+        <h3>🧾 Auditoria de Alterações</h3>
+        <p>Consulte mudanças em registros de ponto e aprovações de correção.</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    dias = st.number_input("Período (dias)", min_value=1, max_value=365, value=30, step=1)
+    usuario_filtro = st.text_input("Filtrar por usuário afetado (opcional)", value="").strip()
+
+    data_limite = agora_br() - timedelta(days=int(dias))
+    params_aud = [data_limite]
+    params_corr = [data_limite]
+    where_user_aud = ""
+    where_user_corr = ""
+
+    if usuario_filtro:
+        where_user_aud = f" AND a.usuario_afetado = {SQL_PLACEHOLDER}"
+        where_user_corr = f" AND r.usuario = {SQL_PLACEHOLDER}"
+        params_aud.append(usuario_filtro)
+        params_corr.append(usuario_filtro)
+
+    auditoria_rows = []
+    correcoes_rows = []
+
+    try:
+        if REFACTORING_ENABLED:
+            auditoria_rows = execute_query(
+                f"""
+                SELECT a.data_alteracao, a.usuario_afetado, a.data_registro,
+                       a.entrada_original, a.saida_original, a.entrada_corrigida, a.saida_corrigida,
+                       a.tipo_alteracao, a.realizado_por, a.justificativa
+                FROM auditoria_alteracoes_ponto a
+                  WHERE a.data_alteracao >= {SQL_PLACEHOLDER}
+                {where_user_aud}
+                ORDER BY a.data_alteracao DESC
+                LIMIT 500
+                """,
+                tuple(params_aud)
+            ) or []
+
+            correcoes_rows = execute_query(
+                f"""
+                SELECT c.data_correcao, r.usuario, c.registro_id, c.gestor, c.justificativa
+                FROM auditoria_correcoes c
+                LEFT JOIN registros_ponto r ON r.id = c.registro_id
+                WHERE c.data_correcao >= {SQL_PLACEHOLDER}
+                {where_user_corr}
+                ORDER BY c.data_correcao DESC
+                LIMIT 500
+                """,
+                tuple(params_corr)
+            ) or []
+        else:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT a.data_alteracao, a.usuario_afetado, a.data_registro,
+                           a.entrada_original, a.saida_original, a.entrada_corrigida, a.saida_corrigida,
+                           a.tipo_alteracao, a.realizado_por, a.justificativa
+                    FROM auditoria_alteracoes_ponto a
+                          WHERE a.data_alteracao >= {SQL_PLACEHOLDER}
+                    {where_user_aud}
+                    ORDER BY a.data_alteracao DESC
+                    LIMIT 500
+                    """,
+                    tuple(params_aud)
+                )
+                auditoria_rows = cursor.fetchall() or []
+
+                cursor.execute(
+                    f"""
+                    SELECT c.data_correcao, r.usuario, c.registro_id, c.gestor, c.justificativa
+                    FROM auditoria_correcoes c
+                    LEFT JOIN registros_ponto r ON r.id = c.registro_id
+                    WHERE c.data_correcao >= {SQL_PLACEHOLDER}
+                    {where_user_corr}
+                    ORDER BY c.data_correcao DESC
+                    LIMIT 500
+                    """,
+                    tuple(params_corr)
+                )
+                correcoes_rows = cursor.fetchall() or []
+            finally:
+                _return_conn(conn)
+    except Exception as e:
+        st.error(f"❌ Erro ao carregar auditoria: {e}")
+        return
+
+    st.markdown("#### 🔄 Histórico de Alterações de Ponto")
+    if auditoria_rows:
+        df_aud = pd.DataFrame(
+            auditoria_rows,
+            columns=[
+                "Data Alteração", "Usuário", "Data Registro", "Entrada Original", "Saída Original",
+                "Entrada Corrigida", "Saída Corrigida", "Tipo", "Realizado Por", "Justificativa"
+            ]
+        )
+        st.dataframe(df_aud, width="stretch", hide_index=True)
+    else:
+        st.info("Nenhuma alteração de ponto encontrada no período.")
+
+    st.markdown("#### ✅ Auditoria de Correções Aplicadas")
+    if correcoes_rows:
+        df_corr = pd.DataFrame(
+            correcoes_rows,
+            columns=["Data Correção", "Usuário", "Registro ID", "Gestor", "Justificativa"]
+        )
+        st.dataframe(df_corr, width="stretch", hide_index=True)
+    else:
+        st.info("Nenhuma correção aplicada encontrada no período.")
 
 
 def aprovar_atestados_interface(atestado_system):
@@ -10640,7 +10840,7 @@ def _render_auto_notifications_config():
     """)
 
     try:
-        from background_scheduler import obter_status_scheduler, is_scheduler_running
+        from background_scheduler import obter_status_scheduler, iniciar_scheduler_background
 
         status = obter_status_scheduler()
 
@@ -10657,7 +10857,16 @@ def _render_auto_notifications_config():
             st.markdown(f"🕐 **Horário do servidor:** {status['data_hora_atual']}")
         else:
             st.warning("⚠️ **Scheduler inativo** - Notificações automáticas desabilitadas")
-            st.info("O scheduler será iniciado automaticamente ao reiniciar o app.")
+            st.info("Você pode iniciar agora sem reiniciar o app.")
+            if st.button("▶️ Iniciar Scheduler Agora", key="iniciar_scheduler_manual"):
+                try:
+                    if iniciar_scheduler_background():
+                        st.success("✅ Scheduler iniciado com sucesso!")
+                        st.rerun()
+                    else:
+                        st.error("❌ Não foi possível iniciar o scheduler.")
+                except Exception as e:
+                    st.error(f"❌ Erro ao iniciar scheduler: {e}")
 
     except ImportError:
         st.info("ℹ️ Módulo de notificações automáticas não disponível.")
@@ -11753,9 +11962,9 @@ def _initialize_app_once():
     except Exception as e:
         logger.warning("Não foi possível executar migrações: %s", e)
     
-    # Iniciar scheduler embutido apenas quando explicitamente habilitado.
-    # Em produção, preferimos worker dedicado para evitar acoplamento ao processo web.
-    if os.getenv("USE_EMBEDDED_SCHEDULER", "false").lower() == "true":
+    # Iniciar scheduler embutido por padrão.
+    # Pode ser desabilitado explicitamente com USE_EMBEDDED_SCHEDULER=false.
+    if os.getenv("USE_EMBEDDED_SCHEDULER", "true").lower() == "true":
         try:
             from background_scheduler import iniciar_scheduler_background, is_scheduler_running
             if not is_scheduler_running():

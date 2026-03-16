@@ -1067,8 +1067,20 @@ def parar_scheduler() -> None:
 
 
 def init_push_system() -> None:
-    """Inicializa o sistema de push (entry point chamado pelo app)."""
+    """Inicializa o sistema de push (entry point chamado pelo app).
+
+    Por padrao, apenas garante schema/tabelas. O scheduler legado deste modulo
+    fica desabilitado para evitar disparos em horarios hardcoded e conflitantes
+    com o ``background_scheduler`` configuravel via banco.
+    """
     try:
-        iniciar_scheduler()
+        ensure_push_schema_once()
+
+        # Compatibilidade: permite habilitar scheduler legado explicitamente
+        # em ambientes que ainda dependem dele.
+        if os.getenv("USE_LEGACY_PUSH_SCHEDULER", "false").strip().lower() == "true":
+            iniciar_scheduler()
+        else:
+            logger.info("[Push] Scheduler legado desabilitado (USE_LEGACY_PUSH_SCHEDULER=false)")
     except Exception as e:
         logger.error("[Push] Erro ao iniciar sistema: %s", e)
