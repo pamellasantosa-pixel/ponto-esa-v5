@@ -6488,11 +6488,14 @@ def tela_gestor():
         if 'menu_gestor_index' not in st.session_state:
             st.session_state.menu_gestor_index = 0
 
+        redirecionamento_forcado = False
+
         # Redirecionamento forçado para Corrigir Registros (ex.: vindo da Central de Notificações)
         if st.session_state.get('ir_para_corrigir_registros'):
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🔧 Corrigir Registros"):
                     st.session_state.menu_gestor_index = i
+                    redirecionamento_forcado = True
                     break
             del st.session_state.ir_para_corrigir_registros
 
@@ -6501,6 +6504,7 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🔔 Notificações"):
                     st.session_state.menu_gestor_index = i
+                    redirecionamento_forcado = True
                     break
             del st.session_state.ir_para_notificacoes
 
@@ -6508,6 +6512,7 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🕐 Aprovar Horas Extras"):
                     st.session_state.menu_gestor_index = i
+                    redirecionamento_forcado = True
                     break
             del st.session_state.ir_para_aprovar_horas_extras
 
@@ -6515,8 +6520,14 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("✅ Aprovar Atestados"):
                     st.session_state.menu_gestor_index = i
+                    redirecionamento_forcado = True
                     break
             del st.session_state.ir_para_aprovar_atestados
+
+        # Quando há redirecionamento via flags, remove o valor persistido do selectbox
+        # para permitir que o index programático seja aplicado no rerun atual.
+        if redirecionamento_forcado and 'menu_gestor_selectbox' in st.session_state:
+            del st.session_state['menu_gestor_selectbox']
         
         # Encontrar índice da opção atual para manter a seleção após rerun
         opcao = st.selectbox(
