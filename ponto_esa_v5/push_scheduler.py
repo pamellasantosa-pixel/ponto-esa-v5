@@ -466,6 +466,25 @@ def atualizar_horarios_usuario(
                     horario_saida = {SQL_PLACEHOLDER}
                 WHERE usuario = {SQL_PLACEHOLDER}
             """, (entrada, almoco_saida, almoco_retorno, saida, usuario))
+
+            # Mantém em sincronia com a tabela usada pelo scheduler automático.
+            cursor.execute(
+                f"""
+                INSERT INTO config_lembretes_push (
+                    usuario,
+                    horario_lembrete_entrada,
+                    horario_lembrete_saida,
+                    data_atualizacao
+                )
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+                ON CONFLICT (usuario)
+                DO UPDATE SET
+                    horario_lembrete_entrada = EXCLUDED.horario_lembrete_entrada,
+                    horario_lembrete_saida = EXCLUDED.horario_lembrete_saida,
+                    data_atualizacao = CURRENT_TIMESTAMP
+                """,
+                (usuario, entrada, saida),
+            )
             conn.commit()
             cursor.close()
         logger.info("[Push] Horários atualizados para %s", usuario)

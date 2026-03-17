@@ -590,7 +590,7 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
         # Horas extras pendentes
         try:
             cursor.execute("""
-                SELECT COUNT(*) FROM horas_extras_ativas
+                SELECT COUNT(*) FROM solicitacoes_horas_extras
                 WHERE status = 'pendente'
             """)
             pendentes['horas_extras'] = cursor.fetchone()[0] or 0
@@ -610,7 +610,7 @@ def obter_solicitacoes_pendentes_por_tipo() -> Dict[str, int]:
         # Atestados pendentes
         try:
             cursor.execute("""
-                SELECT COUNT(*) FROM atestados
+                SELECT COUNT(*) FROM atestado_horas
                 WHERE status = 'pendente'
             """)
             pendentes['atestados'] = cursor.fetchone()[0] or 0
@@ -659,7 +659,7 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
         try:
             cursor.execute(f"""
                 SELECT usuario, data_solicitacao
-                FROM horas_extras_ativas
+                FROM solicitacoes_horas_extras
                 WHERE status = 'pendente'
                 AND DATE(data_solicitacao) <= {SQL_PLACEHOLDER}
             """, (data_limite,))
@@ -696,10 +696,10 @@ def obter_solicitacoes_urgentes(dias_limite: int = 3) -> List[Dict]:
         # Atestados urgentes
         try:
             cursor.execute(f"""
-                SELECT usuario, data_envio
-                FROM atestados
+                SELECT usuario, data_registro
+                FROM atestado_horas
                 WHERE status = 'pendente'
-                AND DATE(data_envio) <= {SQL_PLACEHOLDER}
+                AND DATE(data_registro) <= {SQL_PLACEHOLDER}
             """, (data_limite,))
             
             for row in cursor.fetchall():
@@ -763,18 +763,34 @@ def job_lembrete_aprovadores() -> Dict:
     
     for gestor in gestores:
         try:
-            # Enviar resumo de pendências
-            enviados, total = notificar_resumo_diario_aprovador(gestor, pendentes)
+            # Enviar resumo de pendências via ntfy (canal oficial em produção).
+            resumo = (
+                f"Pendências atuais: "
+                f"HE={pendentes.get('horas_extras', 0)}, "
+                f"Correções={pendentes.get('correcoes', 0)}, "
+                f"Atestados={pendentes.get('atestados', 0)}, "
+                f"Ajustes={pendentes.get('ajustes', 0)}."
+            )
+            enviados = _enviar_ntfy_usuario(
+                gestor,
+                "Resumo de Pendências",
+                resumo,
+                "📋",
+            )
             if enviados > 0:
                 resultados['notificacoes_enviadas'] += 1
                 logger.info(f"Resumo de pendências enviado para: {gestor}")
             
             # Enviar alertas urgentes (solicitações antigas)
             for urgente in urgentes[:3]:  # Limitar a 3 urgentes por vez
-                enviados, total = notificar_lembrete_aprovacao_urgente(
+                enviados = _enviar_ntfy_usuario(
                     gestor,
-                    urgente['dias_pendente'],
-                    urgente['funcionario']
+                    "Aprovação Urgente",
+                    (
+                        f"{urgente['funcionario']} possui solicitação pendente há "
+                        f"{urgente['dias_pendente']} dia(s)."
+                    ),
+                    "🚨",
                 )
                 if enviados > 0:
                     resultados['notificacoes_enviadas'] += 1
@@ -840,10 +856,14 @@ def job_lembrete_fim_dia_aprovadores() -> Dict:
     for gestor in gestores:
         try:
             for urgente in urgentes:
-                enviados, total = notificar_lembrete_aprovacao_urgente(
+                enviados = _enviar_ntfy_usuario(
                     gestor,
-                    urgente['dias_pendente'],
-                    urgente['funcionario']
+                    "Aprovação Urgente",
+                    (
+                        f"{urgente['funcionario']} possui solicitação pendente há "
+                        f"{urgente['dias_pendente']} dia(s)."
+                    ),
+                    "🚨",
                 )
                 if enviados > 0:
                     resultados['urgentes_alertados'] += 1

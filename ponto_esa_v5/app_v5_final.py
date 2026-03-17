@@ -1378,6 +1378,39 @@ def obter_badges_gestor_cached(usuario: str):
         return 0, 0, 0
 
 
+def invalidar_caches_notificacoes(usuario: str | None = None) -> None:
+    """Invalida caches de notificações para refletir aprovações/rejeições imediatamente."""
+    try:
+        obter_badges_gestor_cached.clear()
+    except Exception:
+        pass
+
+    try:
+        obter_solicitacoes_pendentes_count_cached.clear()
+    except Exception:
+        pass
+
+    try:
+        obter_mensagens_nao_lidas_count_cached.clear()
+    except Exception:
+        pass
+
+    # Limpa fallback de badges por usuário para evitar "bolinha" defasada após ação.
+    try:
+        if usuario and 'badges_cache_fallback' in st.session_state:
+            st.session_state.badges_cache_fallback.pop(usuario, None)
+    except Exception:
+        pass
+
+    # Limpa caches do módulo otimizado, quando disponível.
+    try:
+        from db_optimized import get_notificacoes_funcionario, get_solicitacoes_he_pendentes
+        get_notificacoes_funcionario.clear()
+        get_solicitacoes_he_pendentes.clear()
+    except Exception:
+        pass
+
+
 @st.cache_data(ttl=120)  # Cache de 2 minutos
 def obter_solicitacoes_pendentes_count_cached(usuario: str) -> int:
     """Conta solicitações de HE aguardando aprovação com cache de 2 minutos para reduzir reconexões."""
@@ -2612,6 +2645,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                                         conn.commit()
                                     finally:
                                         _return_conn(conn)
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.success("✅ Horas extras aprovadas!")
                                     st.rerun()
                                 except Exception as e:
@@ -2635,6 +2669,7 @@ def exibir_widget_notificacoes(horas_extras_system):
                                             conn.commit()
                                         finally:
                                             _return_conn(conn)
+                                        invalidar_caches_notificacoes(st.session_state.usuario)
                                         st.warning("❌ Horas extras rejeitadas.")
                                         st.rerun()
                                     except Exception as e:
@@ -2647,23 +2682,23 @@ def exibir_widget_notificacoes(horas_extras_system):
             st.markdown("""
             <style>
             .notification-widget {
-                background: linear-gradient(135deg, #FFA500 0%, #FF6347 100%);
-                padding: 15px 20px;
-                border-radius: 10px;
+                background: linear-gradient(135deg, #ffb703 0%, #fb8500 100%);
+                padding: 20px 24px;
+                border-radius: 12px;
                 margin: 15px 0;
-                box-shadow: 0 4px 12px rgba(255, 99, 71, 0.3);
-                border-left: 5px solid #FF4500;
+                box-shadow: 0 6px 18px rgba(251, 133, 0, 0.35);
+                border-left: 7px solid #d00000;
             }
             </style>
             """, unsafe_allow_html=True)
             
             st.markdown(f"""
             <div class="notification-widget">
-                <h3 style="margin: 0; color: white; display: inline-block;">
-                    🔔 Notificações Pendentes
+                <h3 style="margin: 0; color: #1f2937; display: inline-block; font-size: 24px;">
+                    🔔 Notificações Pendentes do Gestor
                 </h3>
-                <p style="margin: 10px 0 5px 0; color: white; font-size: 14px;">
-                    Você tem ações aguardando resposta:
+                <p style="margin: 10px 0 5px 0; color: #1f2937; font-size: 18px; font-weight: 600;">
+                    Ações aguardando resposta imediata:
                 </p>
             </div>
             """, unsafe_allow_html=True)
@@ -4676,6 +4711,7 @@ def notificacoes_interface(horas_extras_system):
                                     observacoes
                                 )
                                 if resultado["success"]:
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.success("✅ Solicitação aprovada!")
                                     st.rerun()
                                 else:
@@ -4690,6 +4726,7 @@ def notificacoes_interface(horas_extras_system):
                                         observacoes
                                     )
                                     if resultado["success"]:
+                                        invalidar_caches_notificacoes(st.session_state.usuario)
                                         st.success("❌ Solicitação rejeitada!")
                                         st.rerun()
                                     else:
@@ -6355,11 +6392,33 @@ def tela_gestor():
 
     total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
     if total_notif > 0:
-        st.warning(
-            f"🔔 Você tem {total_notif} notificação(ões) pendente(s): "
-            f"{he_aprovar} hora(s) extra(s), {correcoes_pendentes} correção(ões) de registro e "
-            f"{atestados_pendentes} atestado(s)."
+        st.markdown(
+            f"""
+            <div style="
+                background: linear-gradient(135deg, #ffb703 0%, #fb8500 100%);
+                padding: 18px 22px;
+                border-radius: 12px;
+                margin: 10px 0 14px 0;
+                color: #1f2937;
+                box-shadow: 0 6px 18px rgba(251, 133, 0, 0.28);
+                border-left: 7px solid #d00000;
+            ">
+                <h3 style="margin: 0 0 8px 0; font-size: 24px; color: #1f2937;">
+                    🔔 Ações pendentes do gestor
+                </h3>
+                <p style="margin: 0; font-size: 18px; font-weight: 600; line-height: 1.45;">
+                    Total: <strong>{total_notif}</strong> pendência(s)
+                    | 🕐 HE: <strong>{he_aprovar}</strong>
+                    | 🔧 Correções: <strong>{correcoes_pendentes}</strong>
+                    | ✅ Atestados: <strong>{atestados_pendentes}</strong>
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
+        if st.button("📌 Abrir Central de Notificações", key="btn_ir_notificacoes_topo", type="primary"):
+            st.session_state.ir_para_notificacoes = True
+            st.rerun()
 
     # Verificar se há solicitações de hora extra pendentes
     solicitacoes_pendentes_count = he_aprovar
@@ -7487,6 +7546,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                             )
                             if resultado["success"]:
                                 log_security_event("HORA_EXTRA_APPROVED", usuario=st.session_state.usuario, context={"solicitacao_id": solicitacao['id'], "funcionario": solicitacao['usuario']})
+                                invalidar_caches_notificacoes(st.session_state.usuario)
                                 st.success("✅ Solicitação aprovada!")
                                 st.rerun()
                             else:
@@ -7503,6 +7563,7 @@ def aprovar_horas_extras_interface(horas_extras_system):
                                 )
                                 if resultado["success"]:
                                     log_security_event("HORA_EXTRA_REJECTED", usuario=st.session_state.usuario, context={"solicitacao_id": solicitacao['id'], "funcionario": solicitacao['usuario'], "motivo": observacoes})
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.success("❌ Solicitação rejeitada!")
                                     st.rerun()
                                 else:
@@ -7898,6 +7959,7 @@ def aprovar_correcoes_registros_interface():
                                         usuario=st.session_state.usuario,
                                         context={"correcao_id": correcao_id, "funcionario": usuario, "registro_id": registro_id, "tipo": tipo_solicitacao}
                                     )
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.rerun()
                                     
                                 except Exception as e:
@@ -7940,6 +8002,7 @@ def aprovar_correcoes_registros_interface():
                                             
                                             st.success("❌ Correção rejeitada")
                                             del st.session_state[f'confirm_reject_corr_{correcao_id}']
+                                            invalidar_caches_notificacoes(st.session_state.usuario)
                                             st.rerun()
                                             
                                         except Exception as e:
@@ -8689,6 +8752,7 @@ def aprovar_atestados_interface(atestado_system):
 
                                 if resultado['success']:
                                     log_security_event("ATTESTATION_APPROVED", usuario=st.session_state.usuario, context={"atestado_id": atestado_id, "usuario_afetado": usuario})
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.success(
                                         "✅ Atestado aprovado com sucesso!")
                                     st.rerun()
@@ -8725,6 +8789,7 @@ def aprovar_atestados_interface(atestado_system):
                                             log_security_event("ATTESTATION_REJECTED", usuario=st.session_state.usuario, context={"atestado_id": atestado_id, "usuario_afetado": usuario, "motivo": motivo[:100]})
                                             st.success("❌ Atestado rejeitado")
                                             del st.session_state[f'confirm_reject_{atestado_id}']
+                                            invalidar_caches_notificacoes(st.session_state.usuario)
                                             st.rerun()
                                         else:
                                             log_error("Erro ao rejeitar atestado", resultado.get('message', ''), {"atestado_id": atestado_id})
@@ -8851,6 +8916,7 @@ def aprovar_atestados_interface(atestado_system):
 
                                     st.success("🔄 Aprovação revertida!")
                                     del st.session_state[f'confirm_reverter_{atestado_id}']
+                                    invalidar_caches_notificacoes(st.session_state.usuario)
                                     st.rerun()
                                 else:
                                     st.error("Motivo obrigatório!")
