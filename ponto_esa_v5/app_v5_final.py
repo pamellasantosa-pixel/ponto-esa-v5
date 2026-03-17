@@ -6493,7 +6493,6 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🔧 Corrigir Registros"):
                     st.session_state.menu_gestor_index = i
-                    st.session_state["menu_gestor_selectbox"] = opt
                     break
             del st.session_state.ir_para_corrigir_registros
 
@@ -6502,7 +6501,6 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🔔 Notificações"):
                     st.session_state.menu_gestor_index = i
-                    st.session_state["menu_gestor_selectbox"] = opt
                     break
             del st.session_state.ir_para_notificacoes
 
@@ -6510,7 +6508,6 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("🕐 Aprovar Horas Extras"):
                     st.session_state.menu_gestor_index = i
-                    st.session_state["menu_gestor_selectbox"] = opt
                     break
             del st.session_state.ir_para_aprovar_horas_extras
 
@@ -6518,7 +6515,6 @@ def tela_gestor():
             for i, opt in enumerate(opcoes_menu):
                 if opt.startswith("✅ Aprovar Atestados"):
                     st.session_state.menu_gestor_index = i
-                    st.session_state["menu_gestor_selectbox"] = opt
                     break
             del st.session_state.ir_para_aprovar_atestados
         
