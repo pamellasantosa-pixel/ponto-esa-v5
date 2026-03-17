@@ -1889,14 +1889,6 @@ def exibir_hora_extra_em_andamento():
             if not hora_extra:
                 return
             
-            # Se há hora extra ativa, ativar auto-refresh de 30 segundos
-            try:
-                from streamlit_autorefresh import st_autorefresh
-                st_autorefresh(interval=30000, key="hora_extra_counter")
-            except ImportError:
-                # Biblioteca não instalada - continuar sem auto-refresh
-                pass
-            
             he_id, aprovador, justificativa, data_inicio, status = hora_extra
             
             # Calcular tempo decorrido
@@ -2032,14 +2024,6 @@ def exibir_hora_extra_em_andamento():
             
             if not hora_extra:
                 return
-            
-            # Se há hora extra ativa, ativar auto-refresh de 30 segundos
-            try:
-                from streamlit_autorefresh import st_autorefresh
-                st_autorefresh(interval=30000, key="hora_extra_counter")
-            except ImportError:
-                # Biblioteca não instalada - continuar sem auto-refresh
-                pass
             
             he_id, aprovador, justificativa, data_inicio, status = hora_extra
             
@@ -12414,17 +12398,25 @@ def excluir_registro_ponto(registro_id, justificativa, gestor, correcao_id=None)
         sentinela_id = sentinela[0] if sentinela else None
 
         if sentinela_id:
+            # Reatribuir auditoria_correcoes antigos para o sentinela
             cursor.execute(
                 f"UPDATE auditoria_correcoes SET registro_id = {SQL_PLACEHOLDER} WHERE registro_id = {SQL_PLACEHOLDER}",
                 (sentinela_id, registro_id),
             )
+            # Inserir novo auditoria_correcoes referenciando sentinela (evita FK violation)
+            cursor.execute(f"""
+                INSERT INTO auditoria_correcoes
+                (registro_id, gestor, justificativa, data_correcao)
+                VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
+            """, (sentinela_id, gestor, justificativa))
         else:
-            # Sem registro sentinela no dia, apagar vínculos antigos para permitir limpeza definitiva do registro duplicado.
+            # Sem registro sentinela no dia, apagar vínculos antigos para permitir limpeza definitiva
             cursor.execute(
                 f"DELETE FROM auditoria_correcoes WHERE registro_id = {SQL_PLACEHOLDER}",
                 (registro_id,),
             )
 
+        # Deletar o registro ponto DEPOIS de tratar auditoria_correcoes
         cursor.execute(f"DELETE FROM registros_ponto WHERE id = {SQL_PLACEHOLDER}", (registro_id,))
 
         if correcao_id:
@@ -12434,12 +12426,6 @@ def excluir_registro_ponto(registro_id, justificativa, gestor, correcao_id=None)
                     data_aprovacao = CURRENT_TIMESTAMP, observacoes = {SQL_PLACEHOLDER}
                 WHERE id = {SQL_PLACEHOLDER}
             """, (gestor, justificativa, correcao_id))
-
-        cursor.execute(f"""
-            INSERT INTO auditoria_correcoes
-            (registro_id, gestor, justificativa, data_correcao)
-            VALUES ({SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, {SQL_PLACEHOLDER}, CURRENT_TIMESTAMP)
-        """, (registro_id, gestor, justificativa))
 
         entrada_depois, saida_depois, _ = obter_entrada_saida_dia_cursor(cursor, usuario_afetado, data_ref)
         registrar_auditoria_alteracao_ponto_cursor(

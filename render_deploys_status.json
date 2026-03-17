@@ -1,0 +1,281 @@
+﻿[
+  {
+    "commit": {
+      "createdAt": "2026-03-10T15:15:07Z",
+      "id": "896852a440eefa63a5113459f2a5582f87d09b63",
+      "message": "fix: retry login on transient postgres ssl disconnect"
+    },
+    "createdAt": "2026-03-10T15:15:36.868235Z",
+    "id": "dep-d6o3b5nji75s73cejjtg",
+    "startedAt": "2026-03-10T15:18:37.633497Z",
+    "status": "build_in_progress",
+    "trigger": "api",
+    "updatedAt": "2026-03-10T15:18:37.63403Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T15:15:07Z",
+      "id": "896852a440eefa63a5113459f2a5582f87d09b63",
+      "message": "fix: retry login on transient postgres ssl disconnect"
+    },
+    "createdAt": "2026-03-10T15:15:23.890974Z",
+    "finishedAt": "2026-03-10T15:18:37.220684Z",
+    "id": "dep-d6o3b2u3jp1c73bg7kng",
+    "startedAt": "2026-03-10T15:15:23.843578Z",
+    "status": "live",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-10T15:19:04.949612Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T02:44:08Z",
+      "id": "edbdda42dae433fb55bf174d2d473932ec762f8d",
+      "message": "feat: painel de pendencias de ponto e auditoria completa de alteracoes"
+    },
+    "createdAt": "2026-03-10T02:44:31.937513Z",
+    "finishedAt": "2026-03-10T02:49:59.49135Z",
+    "id": "dep-d6nob3vh7j1c73epht40",
+    "startedAt": "2026-03-10T02:47:04.898498Z",
+    "status": "deactivated",
+    "trigger": "api",
+    "updatedAt": "2026-03-10T15:18:37.219102Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T02:44:08Z",
+      "id": "edbdda42dae433fb55bf174d2d473932ec762f8d",
+      "message": "feat: painel de pendencias de ponto e auditoria completa de alteracoes"
+    },
+    "createdAt": "2026-03-10T02:44:21.64896Z",
+    "finishedAt": "2026-03-10T02:47:04.419537Z",
+    "id": "dep-d6nob1er433s73brh4l0",
+    "startedAt": "2026-03-10T02:44:21.613845Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-10T02:49:59.489705Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T00:59:52Z",
+      "id": "bf382e2e88c5da823c6b637baf9727e778af20fa",
+      "message": "fix: robust push subscription upsert and ntfy header encoding"
+    },
+    "createdAt": "2026-03-10T01:00:10.441661Z",
+    "finishedAt": "2026-03-10T01:06:23.154593Z",
+    "id": "dep-d6nmq67ji75s73c6pg60",
+    "startedAt": "2026-03-10T01:02:40.703587Z",
+    "status": "deactivated",
+    "trigger": "api",
+    "updatedAt": "2026-03-10T02:47:04.418358Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T00:59:52Z",
+      "id": "bf382e2e88c5da823c6b637baf9727e778af20fa",
+      "message": "fix: robust push subscription upsert and ntfy header encoding"
+    },
+    "createdAt": "2026-03-10T00:59:57.278678Z",
+    "finishedAt": "2026-03-10T01:02:40.069058Z",
+    "id": "dep-d6nmq394tr6s73enbk2g",
+    "startedAt": "2026-03-10T00:59:57.243845Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-10T01:06:23.153144Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T00:15:09Z",
+      "id": "ae7de85e58c41f14eca8bef6a22a552ee25a5e3f",
+      "message": "fix: stabilize e2e, db mode handling and deploy config"
+    },
+    "createdAt": "2026-03-10T00:15:34.244073Z",
+    "finishedAt": "2026-03-10T00:21:42.535702Z",
+    "id": "dep-d6nm597h7j1c73eo5ejg",
+    "startedAt": "2026-03-10T00:18:13.811255Z",
+    "status": "deactivated",
+    "trigger": "api",
+    "updatedAt": "2026-03-10T01:02:40.068004Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-10T00:15:09Z",
+      "id": "ae7de85e58c41f14eca8bef6a22a552ee25a5e3f",
+      "message": "fix: stabilize e2e, db mode handling and deploy config"
+    },
+    "createdAt": "2026-03-10T00:15:25.654089Z",
+    "finishedAt": "2026-03-10T00:18:13.47375Z",
+    "id": "dep-d6nm57cr85hc7388il90",
+    "startedAt": "2026-03-10T00:15:25.613838Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-10T00:21:42.534459Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T19:51:58Z",
+      "id": "9e6d91a8f9e5461bfdb3423d3cb260efb7f68f43",
+      "message": "fix: atualizar UI imediatamente apos ativar/desativar push"
+    },
+    "createdAt": "2026-03-10T00:06:39.745426Z",
+    "finishedAt": "2026-03-10T00:09:09.233909Z",
+    "id": "dep-d6nm13q4d50c738al05g",
+    "startedAt": "2026-03-10T00:06:39.703683Z",
+    "status": "deactivated",
+    "trigger": "api",
+    "updatedAt": "2026-03-10T00:18:13.472671Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T19:51:58Z",
+      "id": "9e6d91a8f9e5461bfdb3423d3cb260efb7f68f43",
+      "message": "fix: atualizar UI imediatamente apos ativar/desativar push"
+    },
+    "createdAt": "2026-03-09T19:59:31.980107Z",
+    "finishedAt": "2026-03-09T20:02:17.646511Z",
+    "id": "dep-d6nid8ua2pns738thcl0",
+    "startedAt": "2026-03-09T19:59:31.885822Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-10T00:09:09.23236Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T19:51:58Z",
+      "id": "9e6d91a8f9e5461bfdb3423d3cb260efb7f68f43",
+      "message": "fix: atualizar UI imediatamente apos ativar/desativar push"
+    },
+    "createdAt": "2026-03-09T19:52:06.960556Z",
+    "finishedAt": "2026-03-09T19:55:23.201502Z",
+    "id": "dep-d6ni9pndiees73e25s50",
+    "startedAt": "2026-03-09T19:52:06.923354Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-09T20:02:17.644255Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T19:06:24Z",
+      "id": "d57038e29c29301fb5f6f7e0e43ec1b5574a7c4c",
+      "message": "fix: compatibilidade de push ativo integer/boolean e stub de hora extra"
+    },
+    "createdAt": "2026-03-09T19:06:30.522414Z",
+    "finishedAt": "2026-03-09T19:09:34.087015Z",
+    "id": "dep-d6nhkdm3jp1c73d62l10",
+    "startedAt": "2026-03-09T19:06:30.47498Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-09T19:55:23.200187Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T18:37:43Z",
+      "id": "499cf5ed953382ed5d154e32411d7ebebf9a37f3",
+      "message": "feat: tornar horario de registro automatico no clique"
+    },
+    "createdAt": "2026-03-09T18:41:21.683567Z",
+    "finishedAt": "2026-03-09T18:43:28.622567Z",
+    "id": "dep-d6nh8kfgi27c739sk210",
+    "startedAt": "2026-03-09T18:41:21.628116Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-09T19:09:34.085955Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T18:37:43Z",
+      "id": "499cf5ed953382ed5d154e32411d7ebebf9a37f3",
+      "message": "feat: tornar horario de registro automatico no clique"
+    },
+    "createdAt": "2026-03-09T18:37:54.080522Z",
+    "finishedAt": "2026-03-09T18:40:32.841256Z",
+    "id": "dep-d6nh709r0fns73ei60hg",
+    "startedAt": "2026-03-09T18:37:54.042327Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-09T18:43:28.621541Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T18:21:25Z",
+      "id": "33784cc1a893ae56ee7eeac30a52b837c22e511e",
+      "message": "fix: incluir bcrypt nas dependencias de deploy e pyproject"
+    },
+    "createdAt": "2026-03-09T18:31:40.053481Z",
+    "finishedAt": "2026-03-09T18:36:12.063265Z",
+    "id": "dep-d6nh42vdiees73e1j870",
+    "startedAt": "2026-03-09T18:31:40.013438Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-09T18:40:32.840094Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T18:21:25Z",
+      "id": "33784cc1a893ae56ee7eeac30a52b837c22e511e",
+      "message": "fix: incluir bcrypt nas dependencias de deploy e pyproject"
+    },
+    "createdAt": "2026-03-09T18:24:19.536872Z",
+    "finishedAt": "2026-03-09T18:26:58.369451Z",
+    "id": "dep-d6nh0kma2pns738qdno0",
+    "startedAt": "2026-03-09T18:24:19.488149Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-09T18:36:12.062204Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T17:55:22Z",
+      "id": "4649aee9aaf53b1a83484c0c845846a2de9eb465",
+      "message": "fix: evitar UnboundLocalError com datetime_time no registrar_ponto_interface"
+    },
+    "createdAt": "2026-03-09T18:08:44.968242Z",
+    "finishedAt": "2026-03-09T18:12:32.072651Z",
+    "id": "dep-d6ngpb5m5p6s73emtpmg",
+    "startedAt": "2026-03-09T18:08:44.918199Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-09T18:26:58.368174Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-09T17:55:22Z",
+      "id": "4649aee9aaf53b1a83484c0c845846a2de9eb465",
+      "message": "fix: evitar UnboundLocalError com datetime_time no registrar_ponto_interface"
+    },
+    "createdAt": "2026-03-09T17:55:47.279001Z",
+    "finishedAt": "2026-03-09T17:58:33.462256Z",
+    "id": "dep-d6ngj8pr0fns73ehrjc0",
+    "startedAt": "2026-03-09T17:55:47.23848Z",
+    "status": "deactivated",
+    "trigger": "new_commit",
+    "updatedAt": "2026-03-09T18:12:32.071546Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-06T15:54:47Z",
+      "id": "340668f64536e9e39f96ab0d92bb496fb7983244",
+      "message": "fix: login robusto - null-check em password_utils + fallback SHA256 se bcrypt indispon├¡vel"
+    },
+    "createdAt": "2026-03-09T17:42:55.331011Z",
+    "finishedAt": "2026-03-09T17:48:20.022778Z",
+    "id": "dep-d6ngd7ua2pns738pvj40",
+    "startedAt": "2026-03-09T17:42:55.288467Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-09T17:58:33.461142Z"
+  },
+  {
+    "commit": {
+      "createdAt": "2026-03-06T15:54:47Z",
+      "id": "340668f64536e9e39f96ab0d92bb496fb7983244",
+      "message": "fix: login robusto - null-check em password_utils + fallback SHA256 se bcrypt indispon├¡vel"
+    },
+    "createdAt": "2026-03-07T16:08:21.513655Z",
+    "finishedAt": "2026-03-07T16:11:37.553189Z",
+    "id": "dep-d6m4qtdm5p6s73fl5t2g",
+    "startedAt": "2026-03-07T16:08:21.46241Z",
+    "status": "deactivated",
+    "trigger": "manual",
+    "updatedAt": "2026-03-09T17:48:20.021025Z"
+  }
+]
