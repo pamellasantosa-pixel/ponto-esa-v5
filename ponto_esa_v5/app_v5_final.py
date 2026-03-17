@@ -5612,11 +5612,26 @@ def corrigir_registros_interface():
     """, unsafe_allow_html=True)
 
     # Mostrar toda a fila de pendências para o gestor tratar todas de uma vez.
+    # Inclui schema novo (complemento_jornada) com fallback para schema legado.
     pendencias = []
-    if REFACTORING_ENABLED:
-        try:
-            pendencias = execute_query(
-                """
+    conn_pend = get_connection()
+    try:
+        cur_pend = conn_pend.cursor()
+        pendencias = _execute_select_with_legacy_fallback(
+            cur_pend,
+            """
+                SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                       c.justificativa, c.data_solicitacao, u.nome_completo,
+                       COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                       c.hora_inicio_solicitada, c.hora_saida_solicitada
+                FROM solicitacoes_correcao_registro c
+                LEFT JOIN usuarios u ON c.usuario = u.usuario
+                WHERE c.status = 'pendente'
+                ORDER BY c.data_solicitacao DESC
+                LIMIT 200
+            """,
+            (),
+            legacy_query="""
                 SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                        c.justificativa, c.data_solicitacao, u.nome_completo
                 FROM solicitacoes_correcao_registro c
@@ -5624,37 +5639,30 @@ def corrigir_registros_interface():
                 WHERE c.status = 'pendente'
                 ORDER BY c.data_solicitacao DESC
                 LIMIT 200
-                """
-            ) or []
-        except Exception as e:
-            logger.debug("Falha ao carregar pendências de correção: %s", e)
-    else:
-        conn_pend = get_connection()
-        try:
-            cur_pend = conn_pend.cursor()
-            cur_pend.execute("""
-                SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                       c.justificativa, c.data_solicitacao, u.nome_completo
-                FROM solicitacoes_correcao_registro c
-                LEFT JOIN usuarios u ON c.usuario = u.usuario
-                WHERE c.status = 'pendente'
-                ORDER BY c.data_solicitacao DESC
-                LIMIT 200
-            """)
-            pendencias = cur_pend.fetchall() or []
-        finally:
-            _return_conn(conn_pend)
+            """,
+            legacy_suffix=('ajuste_registro', None, None, None),
+        ) or []
+    except Exception as e:
+        logger.debug("Falha ao carregar pendências de correção: %s", e)
+    finally:
+        _return_conn(conn_pend)
 
     if pendencias:
         # Deduplicar pendências idênticas (mantém a mais recente por combinação lógica).
         dedup = {}
         for pend in pendencias:
-            pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
+            (pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova,
+             pend_just, pend_data_sol, pend_nome, pend_tipo_solicitacao,
+             pend_data_referencia, pend_hora_inicio, pend_hora_saida) = pend
             key = (
                 str(pend_usuario or "").strip().lower(),
                 int(pend_registro_id or 0),
                 str(pend_dt_orig or ""),
                 str(pend_dt_nova or ""),
+                str(pend_tipo_solicitacao or ""),
+                str(pend_data_referencia or ""),
+                str(pend_hora_inicio or ""),
+                str(pend_hora_saida or ""),
             )
             anterior = dedup.get(key)
             if not anterior or (safe_datetime_parse(pend_data_sol) or datetime.min) > (safe_datetime_parse(anterior[6]) or datetime.min):
@@ -5663,22 +5671,37 @@ def corrigir_registros_interface():
 
         st.markdown(f"### 📬 Pendências Abertas ({len(pendencias)})")
         for pend in pendencias:
-            pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova, pend_just, pend_data_sol, pend_nome = pend
-            titulo = f"⏳ {pend_nome or pend_usuario} - {format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}"
+            (pend_id, pend_registro_id, pend_usuario, pend_dt_orig, pend_dt_nova,
+             pend_just, pend_data_sol, pend_nome, pend_tipo_solicitacao,
+             pend_data_referencia, pend_hora_inicio, pend_hora_saida) = pend
+            if pend_tipo_solicitacao == 'complemento_jornada':
+                titulo = f"⏳ {pend_nome or pend_usuario} - {pend_data_referencia} (Entrada/Saida)"
+            else:
+                titulo = f"⏳ {pend_nome or pend_usuario} - {format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}"
             with st.expander(titulo):
                 st.markdown(f"**Solicitado em:** {format_datetime_safe(pend_data_sol, '%d/%m/%Y %H:%M')}")
-                st.markdown(
-                    f"**Alteração:** `{format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}` → `{format_datetime_safe(pend_dt_nova, '%d/%m/%Y %H:%M')}`"
-                )
+                if pend_tipo_solicitacao == 'complemento_jornada':
+                    st.markdown(f"**Tipo:** Complemento de jornada")
+                    st.markdown(f"**Data:** `{pend_data_referencia}`")
+                    st.markdown(f"**Entrada solicitada:** `{pend_hora_inicio or '-'}`")
+                    st.markdown(f"**Saida solicitada:** `{pend_hora_saida or '-'}`")
+                else:
+                    st.markdown(
+                        f"**Alteração:** `{format_datetime_safe(pend_dt_orig, '%d/%m/%Y %H:%M')}` → `{format_datetime_safe(pend_dt_nova, '%d/%m/%Y %H:%M')}`"
+                    )
                 st.markdown(f"**Justificativa:** {sanitize_ui_text(pend_just, default='Sem justificativa')}")
                 if st.button("Abrir para corrigir", key=f"abrir_pend_corr_{pend_id}"):
                     st.session_state.pendencia_usuario_prefill = pend_usuario
                     st.session_state.pendencia_correcao_id_prefill = pend_id
                     st.session_state.pendencia_registro_id_prefill = pend_registro_id
+                    st.session_state.pendencia_tipo_solicitacao_prefill = pend_tipo_solicitacao
+                    st.session_state.pendencia_data_referencia_prefill = str(pend_data_referencia) if pend_data_referencia else ""
+                    st.session_state.pendencia_hora_inicio_prefill = str(pend_hora_inicio) if pend_hora_inicio else ""
+                    st.session_state.pendencia_hora_saida_prefill = str(pend_hora_saida) if pend_hora_saida else ""
                     st.session_state.pendencia_datahora_original_prefill = str(pend_dt_orig) if pend_dt_orig else ""
                     st.session_state.pendencia_datahora_nova_prefill = str(pend_dt_nova) if pend_dt_nova else ""
                     st.session_state.pendencia_justificativa_prefill = sanitize_ui_text(pend_just, default="Sem justificativa")
-                    dt_pref = safe_datetime_parse(pend_dt_nova) or safe_datetime_parse(pend_dt_orig)
+                    dt_pref = safe_datetime_parse(pend_data_referencia) or safe_datetime_parse(pend_dt_nova) or safe_datetime_parse(pend_dt_orig)
                     if dt_pref:
                         st.session_state.pendencia_data_prefill = dt_pref.strftime("%Y-%m-%d")
                     st.rerun()
@@ -5695,6 +5718,10 @@ def corrigir_registros_interface():
     usuario_prefill = st.session_state.get("pendencia_usuario_prefill")
     data_prefill = st.session_state.get("pendencia_data_prefill")
     registro_id_prefill = st.session_state.get("pendencia_registro_id_prefill")
+    tipo_solicitacao_prefill = st.session_state.get("pendencia_tipo_solicitacao_prefill", "ajuste_registro")
+    data_referencia_prefill = st.session_state.get("pendencia_data_referencia_prefill", "")
+    hora_inicio_prefill = st.session_state.get("pendencia_hora_inicio_prefill", "")
+    hora_saida_prefill = st.session_state.get("pendencia_hora_saida_prefill", "")
     dt_orig_prefill_raw = st.session_state.get("pendencia_datahora_original_prefill", "")
     dt_nova_prefill_raw = st.session_state.get("pendencia_datahora_nova_prefill", "")
     justificativa_prefill = st.session_state.get("pendencia_justificativa_prefill", "")
@@ -5740,6 +5767,12 @@ def corrigir_registros_interface():
         if registros:
             st.subheader(
                 f"📋 Registros de {data_corrigir.strftime('%d/%m/%Y')}")
+
+            if tipo_solicitacao_prefill == 'complemento_jornada' and (hora_inicio_prefill or hora_saida_prefill):
+                st.info(
+                    "🧩 Solicitação de complemento selecionada: "
+                    f"entrada `{hora_inicio_prefill or '-'}` e saida `{hora_saida_prefill or '-'}` em `{data_referencia_prefill or data_corrigir.strftime('%Y-%m-%d')}`"
+                )
 
             # Exibir contexto da solicitação selecionada para o gestor localizar facilmente.
             if usuario_prefill_norm and usuario_norm == usuario_prefill_norm and (dt_orig_prefill_raw or dt_nova_prefill_raw):
@@ -5862,6 +5895,10 @@ def corrigir_registros_interface():
                                         for k in [
                                             "pendencia_correcao_id_prefill",
                                             "pendencia_registro_id_prefill",
+                                            "pendencia_tipo_solicitacao_prefill",
+                                            "pendencia_data_referencia_prefill",
+                                            "pendencia_hora_inicio_prefill",
+                                            "pendencia_hora_saida_prefill",
                                             "pendencia_datahora_original_prefill",
                                             "pendencia_datahora_nova_prefill",
                                             "pendencia_justificativa_prefill",
@@ -5891,6 +5928,10 @@ def corrigir_registros_interface():
                                         for k in [
                                             "pendencia_correcao_id_prefill",
                                             "pendencia_registro_id_prefill",
+                                            "pendencia_tipo_solicitacao_prefill",
+                                            "pendencia_data_referencia_prefill",
+                                            "pendencia_hora_inicio_prefill",
+                                            "pendencia_hora_saida_prefill",
                                             "pendencia_datahora_original_prefill",
                                             "pendencia_datahora_nova_prefill",
                                             "pendencia_justificativa_prefill",
@@ -5902,6 +5943,11 @@ def corrigir_registros_interface():
                                     else:
                                         st.error(f"❌ {resultado['message']}")
         else:
+            if tipo_solicitacao_prefill == 'complemento_jornada' and (hora_inicio_prefill or hora_saida_prefill):
+                st.warning(
+                    "⚠️ Esta solicitação pede entrada e saida (complemento de jornada), mas ainda não há registros no dia. "
+                    "Use a aprovação de correções abaixo para aplicar automaticamente os dois registros."
+                )
             st.info(
                 f"📋 Nenhum registro encontrado para {usuario} em {data_corrigir.strftime('%d/%m/%Y')}")
 
@@ -6276,7 +6322,7 @@ def tela_gestor():
                         # Redirecionar para a tela correta conforme tipo da notificação.
                         notif_type = str(notificacao.get('type', '')).lower()
                         if 'ajuste' in notif_type or 'correc' in notif_type:
-                            st.session_state.ir_para_corrigir_registros = True
+                            st.session_state.ir_para_notificacoes = True
                         elif 'atestado' in notif_type:
                             st.session_state['opcao_menu'] = "✅ Aprovar Atestados"
                         else:
@@ -6299,14 +6345,25 @@ def tela_gestor():
     # Widget de notificações persistentes para gestor
     exibir_widget_notificacoes(horas_extras_system)
 
-    # Verificar se há solicitações de hora extra pendentes
-    solicitacoes_pendentes_count = 0
+    # Contagem consolidada de pendências (usada no dashboard principal e na sidebar).
     try:
-        solicitacoes_pendentes_count = obter_solicitacoes_pendentes_count_cached(
+        he_aprovar, atestados_pendentes, correcoes_pendentes = obter_badges_gestor_cached(
             st.session_state.usuario
         )
     except Exception as e:
-        log_error("Erro ao verificar solicitações pendentes", e, {"usuario": st.session_state.usuario})
+        log_error("Erro ao contar pendências do gestor", e, {"usuario": st.session_state.usuario})
+        he_aprovar = atestados_pendentes = correcoes_pendentes = 0
+
+    total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
+    if total_notif > 0:
+        st.warning(
+            f"🔔 Você tem {total_notif} notificação(ões) pendente(s): "
+            f"{he_aprovar} hora(s) extra(s), {correcoes_pendentes} correção(ões) de registro e "
+            f"{atestados_pendentes} atestado(s)."
+        )
+
+    # Verificar se há solicitações de hora extra pendentes
+    solicitacoes_pendentes_count = he_aprovar
     
     # Se houver solicitações pendentes, exibir alerta destacado
     if solicitacoes_pendentes_count > 0:
@@ -6346,16 +6403,7 @@ def tela_gestor():
     with st.sidebar:
         st.markdown("### 🎛️ Menu do Gestor")
         
-        # Contar pendências para badges (consulta única + cache curto)
-        try:
-            he_aprovar, atestados_pendentes, correcoes_pendentes = obter_badges_gestor_cached(
-                st.session_state.usuario
-            )
-        except Exception as e:
-            log_error("Erro ao contar pendências do gestor", e, {"usuario": st.session_state.usuario})
-            he_aprovar = atestados_pendentes = correcoes_pendentes = 0
-        
-        total_notif = he_aprovar + atestados_pendentes + correcoes_pendentes
+        # Reusa a contagem consolidada já calculada no topo da tela.
         
         opcoes_menu = [
             "📊 Dashboard",
@@ -6390,6 +6438,31 @@ def tela_gestor():
                     st.session_state["menu_gestor_selectbox"] = opt
                     break
             del st.session_state.ir_para_corrigir_registros
+
+        # Redirecionamento forçado para Central de Notificações
+        if st.session_state.get('ir_para_notificacoes'):
+            for i, opt in enumerate(opcoes_menu):
+                if opt.startswith("🔔 Notificações"):
+                    st.session_state.menu_gestor_index = i
+                    st.session_state["menu_gestor_selectbox"] = opt
+                    break
+            del st.session_state.ir_para_notificacoes
+
+        if st.session_state.get('ir_para_aprovar_horas_extras'):
+            for i, opt in enumerate(opcoes_menu):
+                if opt.startswith("🕐 Aprovar Horas Extras"):
+                    st.session_state.menu_gestor_index = i
+                    st.session_state["menu_gestor_selectbox"] = opt
+                    break
+            del st.session_state.ir_para_aprovar_horas_extras
+
+        if st.session_state.get('ir_para_aprovar_atestados'):
+            for i, opt in enumerate(opcoes_menu):
+                if opt.startswith("✅ Aprovar Atestados"):
+                    st.session_state.menu_gestor_index = i
+                    st.session_state["menu_gestor_selectbox"] = opt
+                    break
+            del st.session_state.ir_para_aprovar_atestados
         
         # Encontrar índice da opção atual para manter a seleção após rerun
         opcao = st.selectbox(
@@ -6500,6 +6573,8 @@ def tela_gestor():
     elif opcao.startswith("📅 Configurar Jornada"):
         configurar_jornada_interface()
     elif opcao.startswith("🔧 Corrigir Registros"):
+        aprovar_correcoes_registros_interface()
+        st.markdown("---")
         corrigir_registros_interface()
     elif opcao.startswith("📁 Gerenciar Arquivos"):
         gerenciar_arquivos_interface(upload_system)
@@ -7337,6 +7412,9 @@ def aprovar_horas_extras_interface(horas_extras_system):
     </div>
     """, unsafe_allow_html=True)
 
+    foco_he_id = st.session_state.get("foco_he_aprovacao_id")
+    foco_he_encontrado = False
+
     # Buscar todas as solicitações pendentes
     solicitacoes = None
     
@@ -7377,7 +7455,11 @@ def aprovar_horas_extras_interface(horas_extras_system):
         for solicitacao_raw in solicitacoes:
             solicitacao = dict(zip(colunas, solicitacao_raw))
 
-            with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})"):
+            expandir_he = bool(foco_he_id) and str(solicitacao['id']) == str(foco_he_id)
+            if expandir_he:
+                foco_he_encontrado = True
+
+            with st.expander(f"⏳ {solicitacao['usuario']} - {solicitacao['data']} ({solicitacao['hora_inicio']} às {solicitacao['hora_fim']})", expanded=expandir_he):
                 col1, col2 = st.columns([2, 1])
 
                 with col1:
@@ -7433,6 +7515,9 @@ def aprovar_horas_extras_interface(horas_extras_system):
     else:
         st.info("📋 Nenhuma solicitação de horas extras aguardando aprovação")
 
+    if foco_he_id and foco_he_encontrado and "foco_he_aprovacao_id" in st.session_state:
+        del st.session_state["foco_he_aprovacao_id"]
+
 
 def aprovar_correcoes_registros_interface():
     """Interface para gestor aprovar correções de registros solicitadas por funcionários"""
@@ -7442,6 +7527,9 @@ def aprovar_correcoes_registros_interface():
         <p>Gerencie solicitações de correção de ponto dos funcionários</p>
     </div>
     """, unsafe_allow_html=True)
+
+    foco_correcao_id = st.session_state.get("foco_correcao_aprovacao_id")
+    foco_encontrado = False
 
     # Abas para diferentes status
     tab1, tab2, tab3 = st.tabs([
@@ -7503,7 +7591,11 @@ def aprovar_correcoes_registros_interface():
                     titulo_data = dt_base.strftime('%d/%m/%Y %H:%M') if dt_base else str(dt_original)
                     titulo = f"⏳ {nome_completo or usuario} - {titulo_data}"
 
-                with st.expander(titulo):
+                expandir = bool(foco_correcao_id) and str(correcao_id) == str(foco_correcao_id)
+                if expandir:
+                    foco_encontrado = True
+
+                with st.expander(titulo, expanded=expandir):
                     col1, col2 = st.columns([2, 1])
 
                     with col1:
@@ -7861,6 +7953,9 @@ def aprovar_correcoes_registros_interface():
         else:
             st.success("✅ Nenhuma correção aguardando aprovação!")
 
+        if foco_correcao_id and foco_encontrado and "foco_correcao_aprovacao_id" in st.session_state:
+            del st.session_state["foco_correcao_aprovacao_id"]
+
     with tab2:
         st.markdown("### ✅ Correções Aprovadas")
         
@@ -8089,7 +8184,8 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.info(sanitize_ui_text(justificativa, default="Sem justificativa"))
                     
                     if st.button("Ver detalhes completos", key=f"ver_he_{he_id}"):
-                        st.session_state['opcao_menu'] = "🕐 Aprovar Horas Extras"
+                        st.session_state.ir_para_aprovar_horas_extras = True
+                        st.session_state.foco_he_aprovacao_id = he_id
                         st.rerun()
         else:
             st.success("✅ Nenhuma solicitação de horas extras pendente")
@@ -8098,28 +8194,24 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
         st.markdown("### 🔧 Solicitações de Correção de Registro Pendentes")
         
         corr_pendentes = None
-        
-        if REFACTORING_ENABLED:
-            try:
-                query_corr = """
-                    SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
-                           c.justificativa, c.data_solicitacao, u.nome_completo
-                    FROM solicitacoes_correcao_registro c
-                    LEFT JOIN usuarios u ON c.usuario = u.usuario
-                    WHERE c.status = 'pendente'
-                    ORDER BY c.data_solicitacao DESC
-                    LIMIT 200
+        conn = get_connection()
+        try:
+            cursor = conn.cursor()
+            corr_pendentes = _execute_select_with_legacy_fallback(
+                cursor,
                 """
-                corr_pendentes = execute_query(query_corr)
-            except Exception as e:
-                log_error("Erro ao buscar correções de registros pendentes nas notificações", e, {"status": "pendente"})
-                corr_pendentes = []
-        else:
-            conn = get_connection()
-            try:
-                cursor = conn.cursor()
-
-                cursor.execute("""
+                    SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
+                           c.justificativa, c.data_solicitacao, u.nome_completo,
+                           COALESCE(c.tipo_solicitacao, 'ajuste_registro'), c.data_referencia,
+                           c.hora_inicio_solicitada, c.hora_saida_solicitada
+                    FROM solicitacoes_correcao_registro c
+                    LEFT JOIN usuarios u ON c.usuario = u.usuario
+                    WHERE c.status = 'pendente'
+                    ORDER BY c.data_solicitacao DESC
+                    LIMIT 200
+                """,
+                (),
+                legacy_query="""
                     SELECT c.id, c.registro_id, c.usuario, c.data_hora_original, c.data_hora_nova,
                            c.justificativa, c.data_solicitacao, u.nome_completo
                     FROM solicitacoes_correcao_registro c
@@ -8127,35 +8219,57 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     WHERE c.status = 'pendente'
                     ORDER BY c.data_solicitacao DESC
                     LIMIT 200
-                """)
-                corr_pendentes = cursor.fetchall()
-            finally:
-                _return_conn(conn)
+                """,
+                legacy_suffix=('ajuste_registro', None, None, None),
+            ) or []
+        except Exception as e:
+            log_error("Erro ao buscar correções de registros pendentes nas notificações", e, {"status": "pendente"})
+            corr_pendentes = []
+        finally:
+            _return_conn(conn)
         
         if corr_pendentes:
             st.info(f"📋 {len(corr_pendentes)} solicitação(ões) de correção")
             
             for correcao in corr_pendentes:
-                corr_id, registro_id, usuario, dt_orig, dt_nova, justificativa, data_solicitacao, nome_completo = correcao
-                
-                with st.expander(f"⏳ {nome_completo or usuario} - {format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')}"):
+                (corr_id, registro_id, usuario, dt_orig, dt_nova, justificativa,
+                 data_solicitacao, nome_completo, tipo_solicitacao, data_referencia,
+                 hora_inicio_sol, hora_saida_sol) = correcao
+
+                if tipo_solicitacao == 'complemento_jornada':
+                    titulo = f"⏳ {nome_completo or usuario} - {data_referencia} (Entrada/Saida)"
+                else:
+                    titulo = f"⏳ {nome_completo or usuario} - {format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')}"
+
+                with st.expander(titulo):
                     st.markdown(f"**Funcionário:** {nome_completo or usuario}")
-                    dt_orig_fmt = format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')
-                    dt_nova_fmt = format_datetime_safe(dt_nova, '%d/%m/%Y %H:%M')
-                    st.markdown(f"**Alteração:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
+                    if tipo_solicitacao == 'complemento_jornada':
+                        st.markdown("**Tipo:** Complemento de jornada")
+                        st.markdown(f"**Data:** `{data_referencia}`")
+                        st.markdown(f"**Entrada solicitada:** `{hora_inicio_sol or '-'}`")
+                        st.markdown(f"**Saida solicitada:** `{hora_saida_sol or '-'}`")
+                    else:
+                        dt_orig_fmt = format_datetime_safe(dt_orig, '%d/%m/%Y %H:%M')
+                        dt_nova_fmt = format_datetime_safe(dt_nova, '%d/%m/%Y %H:%M')
+                        st.markdown(f"**Alteração:** `{dt_orig_fmt}` → `{dt_nova_fmt}`")
                     st.markdown(f"**Solicitado em:** {format_datetime_safe(data_solicitacao, '%d/%m/%Y %H:%M')}")
                     st.markdown("**Justificativa:**")
                     st.info(sanitize_ui_text(justificativa, default="Sem justificativa"))
                     
                     if st.button("Ver detalhes completos", key=f"ver_corr_{corr_id}"):
                         st.session_state.ir_para_corrigir_registros = True
+                        st.session_state.foco_correcao_aprovacao_id = corr_id
                         st.session_state.pendencia_correcao_id_prefill = corr_id
                         st.session_state.pendencia_registro_id_prefill = registro_id
+                        st.session_state.pendencia_tipo_solicitacao_prefill = tipo_solicitacao
+                        st.session_state.pendencia_data_referencia_prefill = str(data_referencia) if data_referencia else ""
+                        st.session_state.pendencia_hora_inicio_prefill = str(hora_inicio_sol) if hora_inicio_sol else ""
+                        st.session_state.pendencia_hora_saida_prefill = str(hora_saida_sol) if hora_saida_sol else ""
                         st.session_state.pendencia_datahora_original_prefill = str(dt_orig) if dt_orig else ""
                         st.session_state.pendencia_datahora_nova_prefill = str(dt_nova) if dt_nova else ""
                         st.session_state.pendencia_justificativa_prefill = sanitize_ui_text(justificativa, default="Sem justificativa")
                         st.session_state.pendencia_usuario_prefill = usuario
-                        dt_pref = safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_orig)
+                        dt_pref = safe_datetime_parse(data_referencia) or safe_datetime_parse(dt_nova) or safe_datetime_parse(dt_orig)
                         if dt_pref:
                             st.session_state.pendencia_data_prefill = dt_pref.strftime("%Y-%m-%d")
                         st.rerun()
@@ -8216,7 +8330,8 @@ def notificacoes_gestor_interface(horas_extras_system, atestado_system):
                     st.info(motivo or "Sem motivo especificado")
                     
                     if st.button("Ver detalhes completos", key=f"ver_atestado_{atestado_id}"):
-                        st.session_state['opcao_menu'] = "✅ Aprovar Atestados"
+                        st.session_state.ir_para_aprovar_atestados = True
+                        st.session_state.foco_atestado_aprovacao_id = atestado_id
                         st.rerun()
         else:
             st.success("✅ Nenhum atestado pendente")
@@ -8424,6 +8539,9 @@ def aprovar_atestados_interface(atestado_system):
     </div>
     """, unsafe_allow_html=True)
 
+    foco_atestado_id = st.session_state.get("foco_atestado_aprovacao_id")
+    foco_atestado_encontrado = False
+
     # Abas para diferentes status
     tab1, tab2, tab3, tab4 = st.tabs([
         "⏳ Pendentes",
@@ -8479,7 +8597,11 @@ def aprovar_atestados_interface(atestado_system):
             for atestado in pendentes:
                 atestado_id, usuario, data, horas, justificativa, data_solicitacao, arquivo_id, nome_completo = atestado
 
-                with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}"):
+                expandir_atestado = bool(foco_atestado_id) and str(atestado_id) == str(foco_atestado_id)
+                if expandir_atestado:
+                    foco_atestado_encontrado = True
+
+                with st.expander(f"⏳ {nome_completo or usuario} - {data} - {format_time_duration(horas)}", expanded=expandir_atestado):
                     col1, col2 = st.columns([2, 1])
 
                     with col1:
@@ -8616,6 +8738,9 @@ def aprovar_atestados_interface(atestado_system):
                                     st.rerun()
         else:
             st.success("✅ Nenhuma solicitação aguardando aprovação!")
+
+        if foco_atestado_id and foco_atestado_encontrado and "foco_atestado_aprovacao_id" in st.session_state:
+            del st.session_state["foco_atestado_aprovacao_id"]
 
     with tab2:
         st.markdown("### ✅ Atestados Aprovados")

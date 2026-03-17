@@ -64,6 +64,8 @@ class PostgreSQLBackupManager:
             'jornada_semanal',
             'feriados',
             'solicitacoes_correcao_registro',
+            'auditoria_alteracoes_ponto',
+            'auditoria_correcoes',
             'uploads'
         ]
     
