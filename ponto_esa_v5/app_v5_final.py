@@ -6524,17 +6524,16 @@ def tela_gestor():
                     break
             del st.session_state.ir_para_aprovar_atestados
 
-        # Quando há redirecionamento via flags, remove o valor persistido do selectbox
-        # para permitir que o index programático seja aplicado no rerun atual.
-        if redirecionamento_forcado and 'menu_gestor_selectbox' in st.session_state:
-            del st.session_state['menu_gestor_selectbox']
+        # Quando há redirecionamento forçado, reaplica imediatamente o índice alvo.
+        # Como o selectbox abaixo não usa key explícita, o estado é determinado por menu_gestor_index.
+        if redirecionamento_forcado:
+            st.session_state.menu_gestor_index = max(0, min(st.session_state.menu_gestor_index, len(opcoes_menu) - 1))
         
         # Encontrar índice da opção atual para manter a seleção após rerun
         opcao = st.selectbox(
             "Escolha uma opção:", 
             opcoes_menu,
-            index=st.session_state.menu_gestor_index,
-            key="menu_gestor_selectbox"
+            index=st.session_state.menu_gestor_index
         )
         
         # Atualizar índice no session_state
