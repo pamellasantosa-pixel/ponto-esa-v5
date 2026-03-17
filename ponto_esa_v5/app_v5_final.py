@@ -1078,9 +1078,9 @@ def init_systems():
     return atestado_system, upload_system, horas_extras_system, banco_horas_system, calculo_horas_system
 
 
-@st.cache_data(ttl=30)
+@st.cache_data(ttl=60)  # Cache de 1 minuto para credenciais
 def _get_login_row_cached(usuario: str):
-    """Busca credenciais do usuário com cache curto para reduzir pressão no banco."""
+    """Busca credenciais do usuário com cache moderado para reduzir pressão no banco."""
     if not usuario:
         return None
 
@@ -1321,67 +1321,66 @@ def obter_usuarios_ativos():
             _return_conn(conn)
 
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=300)  # Cache de 5 minutos para reduzir reconexões
 def obter_badges_gestor_cached(usuario: str):
-    """Obtém contadores de badges do gestor em uma única consulta com cache curto."""
-    if REFACTORING_ENABLED:
-        row = execute_query(
-            f"""
-            SELECT
-                (SELECT COUNT(*) FROM solicitacoes_horas_extras
-                 WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
-                (SELECT COUNT(*) FROM atestado_horas
-                 WHERE status = 'pendente') AS atestados_pendentes,
-                (SELECT COUNT(*) FROM (
-                    SELECT DISTINCT
-                        COALESCE(CAST(registro_id AS TEXT), '0') || '|' ||
-                        COALESCE(usuario, '') || '|' ||
-                        COALESCE(CAST(data_hora_original AS TEXT), '') || '|' ||
-                        COALESCE(CAST(data_hora_nova AS TEXT), '')
-                    FROM solicitacoes_correcao_registro
-                    WHERE status = 'pendente'
-                ) x) AS correcoes_pendentes
-            """,
-            (usuario,),
-            fetch_one=True,
-        )
-        if not row:
-            return 0, 0, 0
-        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
-
-    conn = get_connection()
+    """Obtém contadores de badges do gestor em uma única consulta com cache otimizado (300s para reduzir reconexões).
+    
+    Com fallback automático para valores em cache de sessão se a consulta falhar.
+    """
     try:
-        cursor = conn.cursor()
-        cursor.execute(
-            f"""
-            SELECT
-                (SELECT COUNT(*) FROM solicitacoes_horas_extras
-                 WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
-                (SELECT COUNT(*) FROM atestado_horas
-                 WHERE status = 'pendente') AS atestados_pendentes,
-                (SELECT COUNT(*) FROM (
-                    SELECT DISTINCT
-                        COALESCE(CAST(registro_id AS TEXT), '0') || '|' ||
-                        COALESCE(usuario, '') || '|' ||
-                        COALESCE(CAST(data_hora_original AS TEXT), '') || '|' ||
-                        COALESCE(CAST(data_hora_nova AS TEXT), '')
-                    FROM solicitacoes_correcao_registro
-                    WHERE status = 'pendente'
-                ) x) AS correcoes_pendentes
-            """,
-            (usuario,),
-        )
-        row = cursor.fetchone()
+        if REFACTORING_ENABLED:
+            row = execute_query(
+                f"""
+                SELECT
+                    (SELECT COUNT(*) FROM solicitacoes_horas_extras
+                     WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
+                    (SELECT COUNT(*) FROM atestado_horas
+                     WHERE status = 'pendente') AS atestados_pendentes,
+                    (SELECT COUNT(DISTINCT id) FROM solicitacoes_correcao_registro
+                     WHERE status = 'pendente') AS correcoes_pendentes
+                """,
+                (usuario,),
+                fetch_one=True,
+            )
+        else:
+            conn = get_connection()
+            try:
+                cursor = conn.cursor()
+                cursor.execute(
+                    f"""
+                    SELECT
+                        (SELECT COUNT(*) FROM solicitacoes_horas_extras
+                         WHERE aprovador_solicitado = {SQL_PLACEHOLDER} AND status = 'pendente') AS he_aprovar,
+                        (SELECT COUNT(*) FROM atestado_horas
+                         WHERE status = 'pendente') AS atestados_pendentes,
+                        (SELECT COUNT(DISTINCT id) FROM solicitacoes_correcao_registro
+                         WHERE status = 'pendente') AS correcoes_pendentes
+                    """,
+                    (usuario,),
+                )
+                row = cursor.fetchone()
+            finally:
+                _return_conn(conn)
+        
         if not row:
             return 0, 0, 0
-        return int(row[0] or 0), int(row[1] or 0), int(row[2] or 0)
-    finally:
-        _return_conn(conn)
+        result = (int(row[0] or 0), int(row[1] or 0), int(row[2] or 0))
+        # Guardar último resultado bem-sucedido em session_state como fallback
+        if 'badges_cache_fallback' not in st.session_state:
+            st.session_state.badges_cache_fallback = {}
+        st.session_state.badges_cache_fallback[usuario] = result
+        return result
+    except Exception as e:
+        # Se falhar, tenta usar valor em cache da sessão (última sucesso conhecido)
+        logger.warning(f"Erro ao obter badges do gestor {usuario}: {e}")
+        if 'badges_cache_fallback' in st.session_state and usuario in st.session_state.badges_cache_fallback:
+            return st.session_state.badges_cache_fallback[usuario]
+        return 0, 0, 0
 
 
-@st.cache_data(ttl=15)
+@st.cache_data(ttl=120)  # Cache de 2 minutos
 def obter_solicitacoes_pendentes_count_cached(usuario: str) -> int:
-    """Conta solicitações de HE aguardando aprovação com cache curto."""
+    """Conta solicitações de HE aguardando aprovação com cache de 2 minutos para reduzir reconexões."""
     if REFACTORING_ENABLED:
         result = execute_query(
             f"SELECT COUNT(*) FROM horas_extras_ativas WHERE aprovador = {SQL_PLACEHOLDER} AND status = 'aguardando_aprovacao'",
@@ -1407,9 +1406,9 @@ def obter_solicitacoes_pendentes_count_cached(usuario: str) -> int:
         _return_conn(conn)
 
 
-@st.cache_data(ttl=20)
+@st.cache_data(ttl=120)  # Cache de 2 minutos
 def obter_mensagens_nao_lidas_count_cached(usuario: str) -> int:
-    """Conta mensagens diretas não lidas para o usuário com cache curto."""
+    """Conta mensagens diretas não lidas para o usuário com cache de 2 minutos para reduzir reconexões."""
     if not usuario:
         return 0
 

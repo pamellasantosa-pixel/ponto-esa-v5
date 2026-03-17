@@ -47,7 +47,7 @@ def hoje_br() -> date:
 # =============================================
 DB_POOL_MIN_CONN = 2
 DB_POOL_MAX_CONN = 15
-DB_CONNECT_TIMEOUT = 10  # segundos
+DB_CONNECT_TIMEOUT = 5  # reduzido para 5 segundos para fail-fast e evitar reconexões prolongadas
 
 # =============================================
 # UI / UX
